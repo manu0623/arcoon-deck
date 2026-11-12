@@ -395,7 +395,14 @@ class RomInfoService:
         """
         if not answer.directory:
             return answer
-        names = self._save_file_store.listdir(answer.directory)
+        # Regular files only: a member set is restored by extracting into ONE flat
+        # directory, so a nested entry is not a member this carry can place — listing it
+        # would make the upload fail on a directory instead of leaving it out.
+        names = [
+            name
+            for name in self._save_file_store.listdir(answer.directory)
+            if self._save_file_store.is_file(os.path.join(answer.directory, name))
+        ]
         filled = fill_directory_members(answer, names)
         if filled.syncable:
             self._logger.info(f"SaveService: {platform} save members named from the folder: {filled.synced_names}")

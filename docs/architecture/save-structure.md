@@ -296,18 +296,40 @@ string table names its ticket `01006bb00c6f00000000000000000008`; the first 16 h
 against the emulator's own statement rather than against a guess. Reading it costs one small read of the
 archive header — the string table carries the name, so no NCA parsing and no decryption is involved.
 
-**What is missing between these facts and a working sync**, in order:
+**How the manifest states it.** The provisioner adopts Eden's slot directory
+(`--adopt switch=…/user/save/<user>/<slot>`) and writes a `title-dir` entry whose `save_dir` ends in
+`<save_id>` and whose `needs` is `["save_id"]` — the id is a hole because it belongs to the game, not to
+the layout:
 
-1. a `title-dir` save unit in `layout_manifest`, answered by `manifest_answer` (which today answers only
-   `gci-set` and returns `None` for every other unit, by design);
-2. the title-id read, and the exact-match directory selection that turns `<root> + <title id>` into the
-   one directory a sync may touch;
-3. the carry itself — zip the matched directory on upload, extract into it on download, which the engine
-   does not do for any unit yet because every syncable platform so far has been a file set.
+```json
+"switch": {
+  "emulator": "Eden (Standalone)",
+  "launch": ["%EMULATOR_FLATPAK-SPAWN%", "--host", "/home/deck/Applications/Eden.AppImage", "-f", "-g", "%ROM%"],
+  "save_dir": "/home/deck/Emulation/storage/yuzu/nand/user/save/0000000000000000/<slot>/<save_id>",
+  "save_unit": "title-dir",
+  "needs": ["save_id"]
+}
+```
 
-Until all three land, Switch keeps its honest refusal. Shipping only the first two would move the answer
-from "this shape is not modelled" to "the shape is modelled and the engine cannot carry it", which is a
-worse message for the same outcome.
+The `launch` names the **host** binary rather than a RetroDECK placeholder: the `--host` form is baked as
+the binary itself, so the game inherits Steam's environment and its display. Measured failure that
+settled it: spawned through the sandbox, Eden booted and played audio with no picture while Steam's UI
+stayed up.
+
+**What carries it.** Three pieces, each measured rather than assumed:
+
+1. `domain/switch_title_id.py` reads the id from the `.nsp`'s PFS0 ticket name (one bounded 64 KiB read,
+   no decryption). A `.xci` is a different container and answers `None` — the three Switch ROMs on the
+   reference Deck are two `.nsp` and one `.xci`, so that refusal is exercised, not theoretical.
+2. `manifest_answer` answers a `title-dir` entry, and `fill_directory_members` names its members from the
+   directory's own listing — regular files only, because the restore places members into ONE flat
+   directory. Verified on the Deck against rom 7200: `01006BB00C6F0000` resolves and
+   `savedata0.bin, savedata1.bin, savedata3.bin, screenshot*.bin` become the member set.
+3. `restores_by_extraction("switch")` is true, so RomM's zip is extracted into the title directory
+   instead of being renamed into place — the same rule GameCube needed for its card entries.
+
+A title with no local folder yet stays refused (there is nothing to name), which is the honest state for
+a game that has never been saved on this device.
 
 ## Open questions this page does not settle
 
