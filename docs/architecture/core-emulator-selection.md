@@ -623,7 +623,7 @@ RetroArch `-L` form). The remaining lift ([#918](https://github.com/danielcopper
 non-RetroDECK launcher behind a `Frontend`-style port — is net-new work and is not built until a second launcher is
 concrete.
 
-The **core picker now lists standalone emulators alongside libretro cores** (#1210 / ADR-0020) — you _can_ choose
+The **core picker now lists standalone emulators alongside libretro cores** (#1210 / ADR-0020) — you *can* choose
 standalone PCSX2 vs the LRPS2 libretro core in the UI, at both per-game and per-platform scope. **BIOS** is no longer
 part of the follow-up: since #1821 a firmware answer is keyed on the emulator identity, so a standalone pick is asked
 and answered like any libretro core rather than reading `active_core = None` and degrading. **Save-sync** for a
