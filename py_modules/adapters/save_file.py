@@ -118,6 +118,27 @@ class SaveFileAdapter:
         with zipfile.ZipFile(archive_path, "r") as archive:
             return tuple(info.filename for info in archive.infolist() if not info.is_dir())
 
+    def create_archive(self, archive_path: str, directory: str, names: list[str]) -> None:
+        """Write *names* from *directory* into *archive_path*, members at the archive root.
+
+        The counterpart of :meth:`extract_archive`, and the reason a per-title folder can
+        be carried at all: RomM holds a Switch save as ONE zip named after the ROM, so the
+        emulator's folder has to become that archive before it is compared or uploaded.
+        Members go in flat, exactly as ``extract_archive`` places them back.
+
+        Written through a ``.tmp`` and renamed, so a sync never reads a half-written
+        archive, and created last-writer-wins: the folder is the truth and the archive is
+        derived from it on every sync.
+        """
+        if not names:
+            return
+        os.makedirs(os.path.dirname(archive_path) or ".", exist_ok=True)
+        tmp_path = archive_path + ".tmp"
+        with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as archive:
+            for name in names:
+                archive.write(os.path.join(directory, name), arcname=name)
+        os.replace(tmp_path, archive_path)
+
     def extract_archive(self, archive_path: str, dest_dir: str) -> tuple[str, ...]:
         """Extract *archive_path*'s regular files into *dest_dir*; return their names.
 

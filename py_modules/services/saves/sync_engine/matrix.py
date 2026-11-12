@@ -149,6 +149,10 @@ class RomDispatchContext:
     saves_dir: str
     system: str
     core_so: str | None
+    # Where a downloaded archive is extracted. Set only for a unit RomM carries as one
+    # archive (Eden's per-title folder): the zip is staged outside that folder, so the
+    # restore has to name the folder itself rather than the directory the zip sits in.
+    restore_dir: str | None = None
 
 
 class MatrixExecutor:
@@ -298,11 +302,17 @@ class MatrixExecutor:
         device_id: str | None,
         system: str,
         default_slot: str | None = None,
+        restore_dir: str | None = None,
     ) -> None:
         """Download a save file from server. Backs up existing local file first.
 
         Mutates *save_state* in memory (per-file baseline); the operation entry
         owns the surrounding write Unit of Work.
+
+        *restore_dir* is where an extracting restore puts its members, when it is not the
+        directory the download landed in. A unit RomM carries as one archive is staged
+        outside the folder it came from (a zip cannot live inside the folder it archives),
+        so its download has to name that folder explicitly.
         """
         local_path = os.path.join(saves_dir, filename)
         self._save_file_store.make_dirs(saves_dir)
@@ -318,7 +328,9 @@ class MatrixExecutor:
         )
 
         if restores_by_extraction(system):
-            self._restore_member_set(tmp_path, saves_dir, server_save, save_state, system, default_slot)
+            self._restore_member_set(
+                tmp_path, saves_dir, server_save, save_state, system, default_slot, restore_dir=restore_dir
+            )
             return
 
         # Back up the existing local save before the download overwrites it.
@@ -336,6 +348,7 @@ class MatrixExecutor:
         save_state: RomSaveSyncState,
         system: str,
         default_slot: str | None,
+        restore_dir: str | None = None,
     ) -> None:
         """Restore a save whose unit is a set of files, from the archive RomM holds.
 
@@ -351,6 +364,9 @@ class MatrixExecutor:
         recorded per restored file name, so the next sync compares the bytes
         the emulator will actually write against this download.
         """
+        # The folder the members belong in: the answer's own directory, or — for a unit
+        # staged as one archive outside it — the folder the archive was packed from.
+        target_dir = restore_dir or saves_dir
         try:
             members = self._save_file_store.list_archive(archive_path)
         except zipfile.BadZipFile:
@@ -358,16 +374,18 @@ class MatrixExecutor:
             # single card entry sends the ``.gci``, so its download is one member
             # with no container around it. Placing it under its own name is the
             # whole restore — and refusing here would throw away a save RomM holds.
-            self._restore_bare_member(archive_path, saves_dir, server_save, save_state, system, default_slot)
+            self._restore_bare_member(
+                archive_path, target_dir, server_save, save_state, system, default_slot
+            )
             return
         try:
             for member in members:
-                self.quarantine_local_file(saves_dir, os.path.basename(member))
-            restored = self._save_file_store.extract_archive(archive_path, saves_dir)
+                self.quarantine_local_file(target_dir, os.path.basename(member))
+            restored = self._save_file_store.extract_archive(archive_path, target_dir)
         finally:
             self._save_file_store.remove_file(archive_path)
         if not restored:
-            self._log_debug(f"Restored no card entries from an empty archive into {saves_dir}")
+            self._log_debug(f"Restored no card entries from an empty archive into {target_dir}")
             return
         for member in restored:
             name = os.path.basename(member)
@@ -375,11 +393,11 @@ class MatrixExecutor:
                 save_state,
                 name,
                 server_save,
-                os.path.join(saves_dir, name),
+                os.path.join(target_dir, name),
                 system,
                 default_slot=default_slot,
             )
-        self._log_debug(f"Restored {len(restored)} card entries into {saves_dir}")
+        self._log_debug(f"Restored {len(restored)} card entries into {target_dir}")
 
     def _restore_bare_member(
         self,
@@ -852,6 +870,7 @@ class MatrixExecutor:
                     ctx.device_id,
                     ctx.system,
                     options.default_slot,
+                    restore_dir=ctx.restore_dir,
                 )
                 return TransferDirection.DOWNLOAD
             if isinstance(action, Conflict):
@@ -1065,6 +1084,15 @@ class MatrixExecutor:
         if answer_dir is None:
             self._log_debug(f"do_sync_rom_saves({rom_id}): no per-game save set for this emulator, skipping")
             return 0, 0, [], []
+        # A unit RomM carries as ONE archive is packed here, so the rest of the run sees a
+        # single file exactly as it does for any other save: the folder stays the truth,
+        # the zip is derived from it now, and a download is extracted back into it.
+        packed = self._rom_info.prepare_packed_unit(info, answer)
+        restore_dir = None
+        if packed is not None:
+            save_names = (packed.archive_name,)
+            answer_dir = packed.archive_dir
+            restore_dir = packed.source_dir
         saves_dir = answer_dir
 
         t0 = self._clock.time()
@@ -1097,6 +1125,7 @@ class MatrixExecutor:
             saves_dir=saves_dir,
             system=system,
             core_so=core_so,
+            restore_dir=restore_dir,
         )
         uploaded = 0
         downloaded = 0

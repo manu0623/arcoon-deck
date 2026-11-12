@@ -497,3 +497,30 @@ class TestMakeTempPath:
             assert os.path.isfile(path)
         finally:
             os.remove(path)
+
+
+class TestCreateArchive:
+    """The folder becomes the one zip RomM carries, and its members come back flat."""
+
+    def test_it_round_trips_every_member(self, save_files, tmp_path):
+        source = tmp_path / "01006BB00C6F0000"
+        source.mkdir()
+        for name in ("savedata0.bin", "screenshot0.bin"):
+            (source / name).write_bytes(b"payload-" + name.encode())
+        archive = tmp_path / ".arcoon-archive" / "Link's Awakening.zip"
+
+        save_files.create_archive(str(archive), str(source), ["savedata0.bin", "screenshot0.bin"])
+
+        assert sorted(save_files.list_archive(str(archive))) == ["savedata0.bin", "screenshot0.bin"]
+        target = tmp_path / "restored"
+        target.mkdir()
+        assert sorted(save_files.extract_archive(str(archive), str(target))) == [
+            "savedata0.bin",
+            "screenshot0.bin",
+        ]
+        assert (target / "savedata0.bin").read_bytes() == b"payload-savedata0.bin"
+
+    def test_it_packs_nothing_for_an_empty_set(self, save_files, tmp_path):
+        archive = tmp_path / "empty.zip"
+        save_files.create_archive(str(archive), str(tmp_path), [])
+        assert not archive.exists()

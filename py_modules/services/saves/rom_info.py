@@ -61,6 +61,25 @@ if TYPE_CHECKING:
     )
 
 
+#: Where an archive-carried unit is staged: a dot directory beside the title folder. It
+#: cannot live inside the folder it archives, and a dot directory is one no emulator scans.
+PACKED_ARCHIVE_DIR_NAME = ".arcoon-archive"
+
+
+@dataclass(frozen=True)
+class PackedSaveUnit:
+    """A save RomM carries as ONE archive, packed from a folder that stays the truth.
+
+    ``archive_dir`` is where the zip is written and read from, ``archive_name`` is the
+    single filename the sync compares and uploads, and ``source_dir`` is the folder the
+    archive was packed from — where a download is extracted back into.
+    """
+
+    archive_dir: str
+    archive_name: str
+    source_dir: str
+
+
 @dataclass(frozen=True)
 class RomInfoServiceConfig:
     """Frozen wiring bundle handed to ``RomInfoService.__init__``.
@@ -472,6 +491,36 @@ class RomInfoService:
         if restores_by_extraction(info["system"]):
             return answer.directory
         return info["saves_dir"]
+
+    def prepare_packed_unit(self, info: dict[str, Any], answer: SaveAnswer) -> PackedSaveUnit | None:
+        """Pack a ``title-dir`` save into the ONE archive RomM carries, or return ``None``.
+
+        RomM's Switch saves are ``<rom name> [timestamp].zip`` — the server never holds the
+        folders members by name. Syncing the members one by one therefore mismatches every
+        server row: measured on the reference Deck, six uploads each met a 409 because a
+        save already sat in the slot under a name the conflict handler could not pair.
+
+        So the unit synced is the archive: the folder is the truth, the zip is derived from
+        it on each sync, and a download is extracted back into the folder (the restore half
+        already exists for member sets). The archive is staged in a dot-directory beside the
+        title folder — it cannot live inside the folder it archives — where no emulator
+        looks and the slot's own listing stays clean.
+
+        Nothing is packed unless the answer is a syncable ``title-dir`` with named members.
+        """
+        if answer.granularity != "title-dir" or not answer.syncable or not answer.directory:
+            return None
+        members = tuple(component.name for component in answer.synced_files)
+        if not members:
+            return None
+        source_dir = answer.directory
+        archive_dir = os.path.join(os.path.dirname(source_dir), PACKED_ARCHIVE_DIR_NAME)
+        archive_name = f"{info['rom_name']}.zip"
+        self._save_file_store.create_archive(os.path.join(archive_dir, archive_name), source_dir, list(members))
+        self._logger.info(
+            f"SaveService: packed {len(members)} file(s) from {source_dir} into {archive_name}"
+        )
+        return PackedSaveUnit(archive_dir=archive_dir, archive_name=archive_name, source_dir=source_dir)
 
     def find_save_files(self, rom_id: int, *, save_answer: SaveAnswer | None = None) -> list[dict[str, str]]:
         """Find local save files for a ROM.

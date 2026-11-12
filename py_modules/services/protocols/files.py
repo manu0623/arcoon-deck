@@ -615,6 +615,10 @@ class SaveFileStore(Protocol):
         """Return the regular-file member names of *archive_path*, in archive order."""
         ...
 
+    def create_archive(self, archive_path: str, directory: str, names: list[str]) -> None:
+        """Write *names* from *directory* into *archive_path*; members sit at the root."""
+        ...
+
     def extract_archive(self, archive_path: str, dest_dir: str) -> tuple[str, ...]:
         """Extract *archive_path*'s regular files into *dest_dir*; return their names.
 
