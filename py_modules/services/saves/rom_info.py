@@ -22,6 +22,7 @@ from domain.save_answer import (
     SAVE_ID_NEED,
     SAVE_REGION_NEED,
     UNESTABLISHED_NOT_ASKED,
+    fill_directory_members,
     fill_gci_set,
     fill_region,
     fill_save_id,
@@ -368,7 +369,37 @@ class RomInfoService:
         filled = fill_region(answer, identity.region) if wants_region else answer
         if wants_id:
             filled = fill_save_id(filled, save_id_text(identity))
-        return self._fill_gci_names(filled, identity=identity, platform=platform)
+        return self._fill_members(filled, identity=identity, platform=platform)
+
+    def _fill_members(self, answer: SaveAnswer, *, identity: ContentIdentity, platform: str) -> SaveAnswer:
+        """Name a member set's files from the directory the answer points at.
+
+        Two platforms carry a folder whose file names the emulator chooses, and each is read
+        from its own directory rather than from a table: a GameCube card holds
+        ``<maker>-<code>-<internal>.gci`` entries keyed by the disc's code, and an Eden title
+        folder holds files named ``0``, ``1``, … keyed by nothing at all. The listing is the
+        only honest source in both cases.
+        """
+        if canonical_platform(platform) == "gc":
+            return self._fill_gci_names(answer, identity=identity, platform=platform)
+        if answer.granularity == "title-dir":
+            return self._fill_directory_members(answer, platform=platform)
+        return answer
+
+    def _fill_directory_members(self, answer: SaveAnswer, *, platform: str) -> SaveAnswer:
+        """Name a managed title directory's files from the directory itself.
+
+        Only a provisioned ``title-dir`` answer reaches this, so the directory is one the
+        provisioner adopted (Eden's ``…/user/save/<slot>/<save_id>``) rather than something
+        inferred. A folder that does not exist yet lists nothing and keeps its refusal.
+        """
+        if not answer.directory:
+            return answer
+        names = self._save_file_store.listdir(answer.directory)
+        filled = fill_directory_members(answer, names)
+        if filled.syncable:
+            self._logger.info(f"SaveService: {platform} save members named from the folder: {filled.synced_names}")
+        return filled
 
     def _fill_gci_names(self, answer: SaveAnswer, *, identity: ContentIdentity, platform: str) -> SaveAnswer:
         """Name a GameCube card's entries from the card folder itself.

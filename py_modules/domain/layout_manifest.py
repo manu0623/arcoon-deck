@@ -40,8 +40,10 @@ ROOT_TOKEN = "{root}"
 #: What a save unit means for the answer this plugin builds from it.
 #: ``single-file`` is one file at ``save_dir/<name>``; ``gci-set`` is a folder whose entries
 #: are named by the emulator itself (GameCube's ``<maker>-<code>-<internal>.gci``);
-#: ``directory`` is a whole folder carried as a unit.
-KNOWN_SAVE_UNITS = frozenset({"single-file", "gci-set", "directory"})
+#: ``title-dir`` is the same member-set shape for a folder named after the game's own title
+#: id (Eden's ``…/user/save/<slot>/<save_id>``); ``directory`` is a whole folder carried as
+#: a unit.
+KNOWN_SAVE_UNITS = frozenset({"single-file", "gci-set", "title-dir", "directory"})
 
 _DEFAULT_SAVE_UNIT = "single-file"
 

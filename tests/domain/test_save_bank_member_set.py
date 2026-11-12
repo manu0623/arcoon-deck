@@ -23,9 +23,20 @@ class TestWhichPlatformsRestoreByExtraction:
         """RomM spells it ``ngc``; the bank must not care which name it is handed."""
         assert restores_by_extraction("ngc") is True
 
+    def test_a_switch_title_folder_is_a_member_set_too(self) -> None:
+        """Eden's per-title directory, which RomM also ships as one zip.
+
+        Measured on the reference Deck (2026-11-12): the folder is
+        ``<nand>/user/save/<user>/<slot>/<title id>/`` of files Eden names itself, and the
+        server's save for the same ROM is a zip. Restoring the zip into that folder — the
+        old behaviour for a non-GameCube system — would leave Eden reading none of it, the
+        same failure this rule was written for. It is flat, which is the condition.
+        """
+        assert restores_by_extraction("switch") is True
+
     @pytest.mark.parametrize(
         "platform",
-        ["gba", "snes", "genesis", "n64", "psx", "ps2", "psp", "ps3", "n3ds", "switch", "wii", "wiiu", "dreamcast"],
+        ["gba", "snes", "genesis", "n64", "psx", "ps2", "psp", "ps3", "n3ds", "wii", "wiiu", "dreamcast"],
     )
     def test_every_other_family_is_written_as_a_file(self, platform: str) -> None:
         """Only a flat member set restores by extraction; the rest keep their own rule."""

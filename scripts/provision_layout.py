@@ -46,6 +46,12 @@ MANIFEST_NAME = "layout.json"
 MANIFEST_VERSION = 1
 SUBDIRECTORIES = ("library", "cores", "saves", "bios", "art", "mods", "cache")
 GC_PLATFORMS = ("gc", "ngc")
+SWITCH_PLATFORMS = ("switch", "nsw")
+
+# Switch launches Eden as a HOST binary: the `--host` form is baked as the binary itself, so
+# Steam's own environment (and therefore its display) reaches it. Measured: going through
+# RetroDECK's sandbox instead produced audio with no picture.
+SWITCH_LAUNCH = ["%EMULATOR_FLATPAK-SPAWN%", "--host", "/home/deck/Applications/Eden.AppImage", "-f", "-g", "%ROM%"]
 
 # The launch this cut bakes for GameCube, with the save path it implies. The emulator token
 # and `%ROM%` stay placeholders: RetroDECK's launcher resolves them, exactly as it did before
@@ -56,16 +62,27 @@ GC_LAUNCH = ["%EMULATOR_DOLPHIN%", "-b", "-e", "%ROM%"]
 
 def build_manifest(root: Path, adopted: dict[str, str]) -> dict:
     """The manifest document this run would write, given what was adopted."""
-    platforms = {
-        platform: {
+    platforms = {}
+    for platform, directory in adopted.items():
+        if platform in SWITCH_PLATFORMS:
+            # Eden files a title's save under its own title id, so the adopted directory is
+            # the SLOT (…/user/save/<user>/<slot>) and the id is the last segment. The id is
+            # read off the ROM, which is why it is stated as a hole rather than a path part.
+            platforms[platform] = {
+                "emulator": "Eden (Standalone)",
+                "launch": list(SWITCH_LAUNCH),
+                "save_dir": f"{directory.rstrip('/')}/<save_id>",
+                "save_unit": "title-dir",
+                "needs": ["save_id"],
+            }
+            continue
+        platforms[platform] = {
             "emulator": "Dolphin (Standalone)",
             "launch": list(GC_LAUNCH),
             "save_dir": directory,
             "save_unit": "gci-set",
             "needs": ["region"],
         }
-        for platform, directory in adopted.items()
-    }
     return {"version": MANIFEST_VERSION, "root": str(root), "platforms": platforms}
 
 
@@ -96,10 +113,10 @@ def main(argv: list[str] | None = None) -> int:
         platform, _, directory = item.partition("=")
         if not platform or not directory:
             parser.error(f"--adopt wants PLATFORM=SAVE_DIR, got {item!r}")
-        if platform in GC_PLATFORMS:
+        if platform in GC_PLATFORMS or platform in SWITCH_PLATFORMS:
             adopted[platform] = directory
         else:
-            parser.error(f"this cut provisions GameCube only; {platform!r} has no entry to write")
+            parser.error(f"this cut provisions GameCube and Switch only; {platform!r} has no entry to write")
 
     if args.check:
         absent = missing_subdirectories(root)

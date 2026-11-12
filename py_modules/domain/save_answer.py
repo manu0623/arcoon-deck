@@ -294,15 +294,19 @@ def owned_dolphin_answer(user_dir: str, *, content_installed: bool) -> SaveAnswe
 def manifest_answer(entry: object, *, content_installed: bool) -> SaveAnswer | None:
     """The answer a managed entry states, or ``None`` when it states none this plugin carries.
 
-    Only a ``gci-set`` entry is answered today: the folder is one the provisioner named and
-    the entries are named by the emulator itself, which is the shape the GameCube fills
-    settle. Every other unit returns ``None`` — not a refusal — so the caller falls back to
-    the live catalogue answer it would have used anyway. Answering a half-modelled unit with
-    a directory this plugin cannot name files in would be worse than not managing it at all.
+    Two units are answered: ``gci-set`` (the GameCube card folder, whose entries the card's own
+    listing names) and ``title-dir`` (Eden's per-title directory, whose entries the directory's
+    own listing names). Both are folders the provisioner named and whose contents the emulator
+    named, so neither needs the resolver's file list — which is exactly why they can be stated
+    at all.
+
+    Every other unit returns ``None`` — not a refusal — so the caller falls back to the live
+    catalogue answer it would have used anyway. Answering a half-modelled unit with a directory
+    this plugin cannot name files in would be worse than not managing it at all.
     """
     save_unit = getattr(entry, "save_unit", None)
     save_dir = getattr(entry, "save_dir", None)
-    if entry is None or save_unit != "gci-set" or not isinstance(save_dir, str) or not save_dir:
+    if entry is None or save_unit not in {"gci-set", "title-dir"} or not isinstance(save_dir, str) or not save_dir:
         return None
     raw_needs = getattr(entry, "needs", ())
     needs = tuple(SAVE_REGION_NEED if need == "region" else need for need in raw_needs) or (SAVE_REGION_NEED,)
@@ -312,12 +316,42 @@ def manifest_answer(entry: object, *, content_installed: bool) -> SaveAnswer | N
         emulator=getattr(entry, "emulator", None) or "Dolphin",
         directory=save_dir,
         backing_directory=None,
-        granularity="gci-folder",
+        granularity="gci-folder" if save_unit == "gci-set" else "title-dir",
         needs=needs,
         components=(),
         caveats=("file-names-unestablished",),
         content_installed=content_installed,
     )
+
+
+def fill_directory_members(answer: SaveAnswer, names: Sequence[str]) -> SaveAnswer:
+    """Name a managed ``title-dir`` unit's members from the directory's own listing.
+
+    Eden keeps a title's save as a directory of files it names itself (``0``, ``1``, …), so
+    there is no name the resolver — or the provisioner — can state. The listing is the answer,
+    the same way a card folder's listing is for GameCube and for the same reason: the
+    emulator's own names follow from nothing in the content path.
+
+    Every plain file is carried. Subdirectories are not: a member set is restored by extracting
+    an archive into ONE flat directory, and a nested name placed there would rebuild no tree —
+    so a directory holding a subdirectory keeps its refusal rather than syncing half a save.
+
+    A directory with no files stays refused: there is nothing to carry yet, and the download
+    path places members by their own names.
+    """
+    if not answer.directory or _FILE_NAMES_UNESTABLISHED not in answer.caveats:
+        return answer
+    wanted = tuple(name for name in names if name and not name.startswith("."))
+    if not wanted:
+        return answer
+    components = tuple(
+        SaveComponent(name=name, directory=answer.directory, role="save", granularity=answer.granularity)
+        for name in wanted
+    )
+    caveats = tuple(caveat for caveat in answer.caveats if caveat != _FILE_NAMES_UNESTABLISHED)
+    filled = replace(answer, caveats=caveats, components=components)
+    state, shape = _state_after_fill(filled, remaining=answer.needs, components=components)
+    return replace(filled, state=state, unestablished=shape)
 
 
 def save_shape_message(answer: SaveAnswer) -> str:

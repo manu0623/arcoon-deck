@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 
 from domain.content_identity import (
     ContentIdentity,
+    IdentityKind,
     disc_serial,
     dreamcast_product_number,
     gamecube_game_code,
@@ -26,6 +27,7 @@ from domain.content_identity import (
     n3ds_title_id,
     rvz_gamecube_game_code,
 )
+from domain.switch_title_id import title_id_from_nsp
 
 if TYPE_CHECKING:
     import logging
@@ -45,6 +47,10 @@ _DISC_SERIAL_PLATFORMS = frozenset({"psx", "ps1", "ps2", "playstation", "playsta
 _GAMECUBE_PLATFORMS = frozenset({"gc", "ngc", "gamecube", "gcn"})
 _DREAMCAST_PLATFORMS = frozenset({"dreamcast", "dc"})
 _N3DS_PLATFORMS = frozenset({"n3ds", "3ds"})
+_SWITCH_PLATFORMS = frozenset({"switch", "nsw"})
+# An ``.nsp`` keeps its ticket list in the PFS0 header's string table, which sits in the
+# first few kilobytes; 64 KiB is margin, not a scan.
+_NSP_HEAD_BYTES = 0x10000
 
 
 class ContentIdentityAdapter:
@@ -68,6 +74,8 @@ class ContentIdentityAdapter:
         try:
             if slug in _N3DS_PLATFORMS:
                 return self._n3ds(path)
+            if slug in _SWITCH_PLATFORMS:
+                return self._switch(path)
             if slug in _DISC_SERIAL_PLATFORMS:
                 return disc_serial(self._read(path, 0, _DISC_HEAD_BYTES).decode("latin-1", errors="replace"))
             if slug in _DREAMCAST_PLATFORMS:
@@ -81,6 +89,20 @@ class ContentIdentityAdapter:
             self._logger.warning(f"content_identity: cannot read {os.path.basename(path)}: {exc}")
             return None
         return None
+
+    def _switch(self, path: str) -> ContentIdentity | None:
+        """One bounded read: a PFS0 head, whose ticket names carry the title id.
+
+        A ``.xci`` is a different container — its root is a partition table with no ticket
+        list — so it answers ``None`` rather than an id read from the wrong offset. Measured
+        on the reference Deck: the ``.nsp`` for Link's Awakening states ``01006BB00C6F0000``,
+        the same id Eden logged when it booted that file.
+        """
+        title = title_id_from_nsp(self._read(path, 0, _NSP_HEAD_BYTES))
+        if title is None:
+            self._logger.warning(f"content_identity: no Switch title id in {os.path.basename(path)}")
+            return None
+        return ContentIdentity(save_id=title, kind=IdentityKind.TITLE_ID, source="Switch NSP ticket")
 
     def _n3ds(self, path: str) -> ContentIdentity | None:
         """Two reads: the NCSD header, then the NCCH the first partition points at.

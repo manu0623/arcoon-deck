@@ -282,7 +282,7 @@ def restores_by_extraction(platform: str) -> bool:
     the restore places each member by its own name, and a nested family would
     need its tree rebuilt rather than its names restored.
     """
-    return layout_for(platform).family is SaveFamily.GCI_SET
+    return layout_for(platform).family in {SaveFamily.GCI_SET, SaveFamily.SWITCH_TITLE}
 
 
 def save_bank_root(data_dir: str) -> str:
