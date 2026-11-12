@@ -45,7 +45,7 @@ of two payloads:
   display variables name sockets that exist only in that namespace. Measured on the reference Deck with Eden, that is a
   game which boots and plays audio through PipeWire while no picture ever appears and Steam's UI stays up — the worst
   kind of failure, because every log says the launch worked. The plugin's launcher already runs on the host, so the hop
-  only moves the process out of Steam's session and away from the display Steam gave it. A spawn form that does *not*
+  only moves the process out of Steam's session and away from the display Steam gave it. A spawn form that does _not_
   ask for `--host` still rides the sandbox, and there the token is named `/usr/bin/flatpak-spawn` (the sandbox ships
   it). Either way the difference is an AppImage emulator (Eden, Cemu, Citron, DuckStation) launching from a shortcut
   versus never starting at all. Read the seam as
@@ -623,7 +623,7 @@ RetroArch `-L` form). The remaining lift ([#918](https://github.com/danielcopper
 non-RetroDECK launcher behind a `Frontend`-style port — is net-new work and is not built until a second launcher is
 concrete.
 
-The **core picker now lists standalone emulators alongside libretro cores** (#1210 / ADR-0020) — you *can* choose
+The **core picker now lists standalone emulators alongside libretro cores** (#1210 / ADR-0020) — you _can_ choose
 standalone PCSX2 vs the LRPS2 libretro core in the UI, at both per-game and per-platform scope. **BIOS** is no longer
 part of the follow-up: since #1821 a firmware answer is keyed on the emulator identity, so a standalone pick is asked
 and answered like any libretro core rather than reading `active_core = None` and degrading. **Save-sync** for a
