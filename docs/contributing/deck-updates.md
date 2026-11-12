@@ -4,11 +4,15 @@ The plugin is installed on the Deck by pulling this repository, not by building 
 installer. `dist/` is committed here for exactly that reason: the Deck has no Node
 toolchain, and a plugin without its built frontend cannot load.
 
+An update has two halves. The first pulls and stages, and runs as `deck` — the pull, the
+prune to the shipped subset, the launcher's mode. The second replaces the plugin directory,
+which is root-owned, and restarts the loader. Only that second half needs privilege.
+
 ## One-time setup
 
-A private repo needs credentials on the Deck. The Deck gets its own read-only deploy key,
-so no account token is ever written to disk in plain text and revoking it touches only this
-one machine:
+A private repo needs a credential on the Deck. The Deck gets its own read-only deploy key,
+so no account token is written to disk in plain text and revoking it touches only this one
+machine:
 
 ```sh
 ssh-keygen -t ed25519 -N "" -C "arcoon-deck-pull" -f ~/.ssh/arcoon_deploy
@@ -16,9 +20,22 @@ git clone git@github.com:manu0623/arcoon-deck.git ~/arcoon-src
 git -C ~/arcoon-src config core.sshCommand "ssh -i $HOME/.ssh/arcoon_deploy"
 ```
 
-Then run `bash ~/arcoon-src/scripts/deck-update.sh` once. It pulls, stages the shipped
-subset, backs up the current plugin and installs — asking for the password only for the
-install itself.
+### Allow-listing the privileged half
+
+Install the root-owned half once and let sudo run that one command without a password. It
+matters that the command takes **no arguments**: a passwordless root installer that accepted
+a path would be a passwordless root copy-anything command. This one reads exactly
+`~/arcoon-stage` and refuses anything else.
+
+```sh
+sudo install -m 755 -o root -g root ~/arcoon-src/scripts/deck-install-root.sh /usr/local/bin/arcoon-install
+echo 'deck ALL=(root) NOPASSWD: /usr/local/bin/arcoon-install' | sudo tee /etc/sudoers.d/arcoon-install
+sudo chmod 440 /etc/sudoers.d/arcoon-install
+```
+
+With that in place, `deck-update.sh` uses it and an update needs no password — which is what
+makes an update pushable over SSH from another machine. Without it, the script inlines the
+same work and asks for the password.
 
 ## Every update after that
 
@@ -26,13 +43,13 @@ install itself.
 bash ~/arcoon-src/scripts/deck-update.sh
 ```
 
-`--stage` stops after staging and prints the directory, for inspecting what would ship
-without touching the running plugin.
+`--stage` stops after staging and prints the version and commit it staged, for inspecting
+what would ship without touching the running plugin.
 
 ## What the script does and does not touch
 
 It installs from `git archive HEAD` — a committed tree, never a working copy — so an
 uncommitted edit in `~/arcoon-src` cannot reach the plugin. It replaces only the plugin
 directory; user data lives under `~/.local/share/romm-tender` and `~/.config/romm-tender`
-(ADR-0031) and is never part of the install. Each run also leaves a
+(ADR-0031) and is never part of the install. Each install leaves a
 `~/romm-tender-backup-<timestamp>.tgz` of the previous plugin directory.
