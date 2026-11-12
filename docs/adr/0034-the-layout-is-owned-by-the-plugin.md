@@ -112,7 +112,17 @@ A newer provisioner may write keys an older plugin does not read; an older provi
 could use. Both degrade to today's behaviour rather than failing, because the plugin is the component that is updated
 by an in-panel updater while a user's tree may have been laid out months earlier.
 
-**7. The first increment is GameCube, and its manifest is an adoption entry.**
+**7. An explicit choice outranks the manifest.**
+
+The per-game picker's label and the per-platform core are the user saying which emulator should run; the manifest says
+what the layout is when nobody has said. So a managed entry governs a ROM only while neither choice names an emulator,
+and both halves fall back together: once the pick wins the launch, the save path it implies is the catalogue's, not the
+entry's. Mixing them is the thing this rule exists to prevent — an entry's command and its directory are one sentence,
+and honouring one half over the other points the save layer at a folder the launch never writes. Measured on the
+reference Deck: a GameCube ROM pinned to the libretro core still baked the manifest's Dolphin command, which is how
+this was noticed.
+
+**8. The first increment is GameCube, and its manifest is an adoption entry.**
 
 One platform proves the contract end to end — bake, launch, answer, upload, restore — before a second one is added. The
 provisioner v0 writes that entry from an explicit `--adopt gc=<existing card folder>`, because a save that already

@@ -8,7 +8,12 @@ recorded so a consumer test can assert the seam was queried by ``rom_id``.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from domain.shortcut_data import EmulatorInvocation
+
+if TYPE_CHECKING:
+    from domain.layout_manifest import ManagedPlatform
 
 
 class FakeActiveCoreResolver:
@@ -38,6 +43,7 @@ class FakeActiveCoreResolver:
         self.default = default
         self.per_rom: dict[int, tuple[str | None, str | None]] = per_rom if per_rom is not None else {}
         self.default_emulator = default_emulator
+        self.per_rom_managed: dict[int, ManagedPlatform] = {}
         self.per_rom_emulator: dict[int, EmulatorInvocation | None] = (
             per_rom_emulator if per_rom_emulator is not None else {}
         )
@@ -47,6 +53,10 @@ class FakeActiveCoreResolver:
     def active_core_for_rom(self, rom_id: int) -> tuple[str | None, str | None]:
         self.calls.append(rom_id)
         return self.per_rom.get(rom_id, self.default)
+
+    def managed_entry(self, rom_id: int) -> ManagedPlatform | None:
+        """No provisioned entry unless a test says so: the default is unmanaged."""
+        return self.per_rom_managed.get(rom_id)
 
     def active_emulator_for_rom(self, rom_id: int) -> EmulatorInvocation | None:
         self.emulator_calls.append(rom_id)

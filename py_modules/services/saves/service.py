@@ -103,7 +103,6 @@ class SaveService:
                 logger=config.logger,
                 content_identity=config.content_identity,
                 save_bank_dir=config.save_bank_dir,
-                managed_layout=config.managed_layout,
             ),
         )
 

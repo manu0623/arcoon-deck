@@ -51,7 +51,6 @@ if TYPE_CHECKING:
         ActiveCoreReader,
         ContentIdentityFn,
         CoreNameProviderFn,
-        ManagedLayoutFn,
         RetroDeckPaths,
         SaveBankDirFn,
         SaveFileStore,
@@ -93,9 +92,6 @@ class RomInfoServiceConfig:
     # It answers the SAME directory the generated appendconfig redirects a launch into, so
     # the two cannot disagree. ``None`` keeps the RetroArch-shaped path math unchanged.
     save_bank_dir: SaveBankDirFn | None = None
-    # Optional: the provisioner's layout (ADR-0034). An entry for this platform states the
-    # launch AND the save path, so nothing about it is inferred from a catalogue.
-    managed_layout: ManagedLayoutFn | None = None
 
 
 class RomInfoService:
@@ -113,7 +109,6 @@ class RomInfoService:
         self._logger = config.logger
         self._content_identity = config.content_identity
         self._save_bank_dir = config.save_bank_dir
-        self._managed_layout = config.managed_layout
 
     def get_rom_save_info(self, rom_id: int) -> dict[str, Any] | None:
         """Get save-related info for an installed ROM.
@@ -326,7 +321,9 @@ class RomInfoService:
         (:meth:`_fill_save_id`) — the resolver cannot read a game's disc header, and the
         save of every id-keyed platform stays refused until somebody does.
         """
-        managed = self._managed_layout(platform) if self._managed_layout is not None else None
+        # Asked of the resolver, never of the manifest directly: whether a managed entry
+        # applies turns on the user's own emulator choice, and the launch decides that.
+        managed = self._active_core.managed_entry(int(rom_id))
         stated = manifest_answer(managed, content_installed=installed)
         if stated is not None:
             # The provisioner stated both the launch and the save path, so there is nothing

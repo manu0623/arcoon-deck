@@ -24,7 +24,6 @@ if TYPE_CHECKING:
         EventEmitter,
         HostnameReader,
         MachineIdReader,
-        ManagedLayoutFn,
         MigrationPendingFn,
         PluginMetadataReader,
         ResolveUploadConflictFn,
@@ -186,7 +185,3 @@ class SaveServiceConfig:
     # Optional: the plugin's own save directory per platform, when ``save_bank`` is on.
     # The save lookup reads the same directory the launch redirects into.
     save_bank_dir: SaveBankDirFn | None = None
-    # Optional: the provisioner's statement of a managed platform's launch and save path
-    # (ADR-0034). ``None`` means no manifest was read, and every platform keeps the live
-    # catalogue answer.
-    managed_layout: ManagedLayoutFn | None = None

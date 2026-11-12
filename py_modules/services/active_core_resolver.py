@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from domain.emulator_commands import EmulatorOption
+    from domain.layout_manifest import ManagedPlatform
     from domain.rom import Rom
     from domain.rom_install import RomInstall
     from services.protocols import (
@@ -140,7 +141,7 @@ class ActiveCoreResolver:
             self._logger.warning("active_core_resolver: no ROM for rom_id=%s; resolving to plain launch", rom_id)
             return None
 
-        managed = self._managed_layout(rom.platform_slug) if self._managed_layout is not None else None
+        managed = self._managed_entry(rom)
         if managed is not None:
             # The manifest states the emulator AND the command, so the catalogue is not
             # consulted at all for a managed platform: there is nothing left to resolve.
@@ -154,6 +155,35 @@ class ActiveCoreResolver:
         emulator = self._maybe_folder_boot_direct(emulator, install, rom_id)
         emulator = with_appendconfig(emulator, self._appendconfig_for(rom.platform_slug))
         return self._maybe_owned(emulator, rom.platform_slug)
+
+    def managed_entry(self, rom_id: int) -> ManagedPlatform | None:
+        """The manifest entry that governs ``rom_id``, or ``None`` when none does.
+
+        The save layer asks this rather than reading the manifest itself: whether a
+        managed entry applies is one question with one answer, and the launch and the
+        save path must never answer it differently — they are the same statement.
+        """
+        rom, _install = self._read_rom_and_install(rom_id)
+        return None if rom is None else self._managed_entry(rom)
+
+    def _managed_entry(self, rom: Rom) -> ManagedPlatform | None:
+        """Whether the provisioner's entry governs this ROM, given what the user chose.
+
+        **An explicit choice outranks the manifest.** ``emulator_override`` is the
+        per-game picker's answer and the per-platform core is the same statement one
+        level up; either one is the user saying which emulator should run, and the
+        manifest's job is to describe the layout when nobody has said. It cannot be
+        combined with them either: the entry's command and its save path are one
+        sentence, so honouring a different emulator while keeping the manifest's
+        directory would point the save layer at a place the launch never writes.
+        """
+        if self._managed_layout is None:
+            return None
+        if rom.emulator_override is not None:
+            return None
+        if self._platform_core_reader.get_platform_core(rom.platform_slug) is not None:
+            return None
+        return self._managed_layout(rom.platform_slug)
 
     def _maybe_owned(
         self, emulator: EmulatorInvocation | None, platform_slug: str | None = None

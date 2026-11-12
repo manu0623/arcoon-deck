@@ -22,6 +22,7 @@ from fakes.fake_core_info_provider import (
 )
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 
+from domain.layout_manifest import ManagedPlatform
 from domain.retroarch_runner import RetroArchRunner
 from domain.rom import Rom
 from domain.rom_install import RomInstall
@@ -119,6 +120,7 @@ def _make_resolver(
     appendconfig=None,
     launch_backend=None,
     runner=None,
+    managed_layout=None,
 ) -> tuple[ActiveCoreResolver, FakeSystemResolver]:
     resolver_fn = resolve_system if resolve_system is not None else FakeSystemResolver()
     platform_reader = platform_core_reader if platform_core_reader is not None else FakePlatformCoreReader()
@@ -133,6 +135,7 @@ def _make_resolver(
             retroarch_appendconfig=appendconfig,
             launch_backend=launch_backend,
             retroarch_runner=runner,
+            managed_layout=managed_layout,
         ),
     )
     return resolver, resolver_fn
@@ -812,3 +815,87 @@ def test_the_owned_launch_arrives_once_both_opt_ins_are_on() -> None:
     rendered = resolve_emulator_invocation({}, emulator)
     assert "retrodeck" not in rendered.lower()
     assert "--appendconfig=/data/retroarch/retroarch-gba.cfg" in rendered
+
+
+# --- the manifest and the picker: who outranks whom ---------------------------
+
+
+def _gc_entry() -> ManagedPlatform:
+    """The GameCube entry the provisioner writes, as the resolver would read it."""
+    return ManagedPlatform(
+        platform="gc",
+        emulator="Dolphin (Standalone)",
+        launch=("%EMULATOR_DOLPHIN%", "-b", "-e", "%ROM%"),
+        save_dir="/tmp/arcoon/saves/gc/GC/<region>/Card A",
+        save_unit="gci-set",
+        needs=("region",),
+    )
+
+
+def _gc_resolver(*, uow: FakeUnitOfWork, platform_cores: dict[str, str] | None = None):
+    core_info = FakeCoreInfoProvider(
+        options=[
+            libretro_option("/cores/dolphin_libretro.so", "Dolphin"),
+            standalone_option("%EMULATOR_DOLPHIN% -b -e %ROM%", "Dolphin (Standalone)"),
+        ],
+        active_core=("dolphin_libretro", "Dolphin"),
+    )
+    return _make_resolver(
+        uow=uow,
+        core_info=core_info,
+        platform_core_reader=FakePlatformCoreReader(platform_cores),
+        managed_layout=lambda slug: _gc_entry() if slug == "gc" else None,
+    )[0]
+
+
+def test_the_manifest_states_the_launch_when_nothing_has_been_chosen() -> None:
+    uow = FakeUnitOfWork()
+    _seed_rom(uow, rom_id=5319, platform_slug="gc")
+    _seed_install(uow, rom_id=5319, file_path="/roms/gc/zelda.rvz", rom_dir="/roms/gc")
+
+    resolver = _gc_resolver(uow=uow)
+
+    emulator = resolver.active_emulator_for_rom(5319)
+    assert emulator is not None
+    assert emulator.label == "Dolphin (Standalone)"
+    command = resolve_emulator_invocation({}, emulator)
+    assert "%EMULATOR_DOLPHIN%" in command and "-b" in command
+
+
+def test_the_per_game_pick_outranks_the_manifest() -> None:
+    """The picker is the user saying which emulator runs; the manifest is the default."""
+    uow = FakeUnitOfWork()
+    _seed_rom(uow, rom_id=5319, platform_slug="gc", emulator_override="Dolphin")
+    _seed_install(uow, rom_id=5319, file_path="/roms/gc/zelda.rvz", rom_dir="/roms/gc")
+
+    resolver = _gc_resolver(uow=uow)
+
+    emulator = resolver.active_emulator_for_rom(5319)
+    assert emulator is not None
+    assert emulator.label == "Dolphin"
+    assert resolver.managed_entry(5319) is None
+
+
+def test_the_per_platform_core_outranks_the_manifest() -> None:
+    uow = FakeUnitOfWork()
+    _seed_rom(uow, rom_id=5319, platform_slug="gc")
+    _seed_install(uow, rom_id=5319, file_path="/roms/gc/zelda.rvz", rom_dir="/roms/gc")
+
+    resolver = _gc_resolver(uow=uow, platform_cores={"gc": "Dolphin"})
+
+    emulator = resolver.active_emulator_for_rom(5319)
+    assert emulator is not None
+    assert emulator.label == "Dolphin"
+    assert resolver.managed_entry(5319) is None
+
+
+def test_the_save_layer_is_told_the_same_entry_the_launch_used() -> None:
+    uow = FakeUnitOfWork()
+    _seed_rom(uow, rom_id=5319, platform_slug="gc")
+    _seed_install(uow, rom_id=5319, file_path="/roms/gc/zelda.rvz", rom_dir="/roms/gc")
+
+    resolver = _gc_resolver(uow=uow)
+
+    entry = resolver.managed_entry(5319)
+    assert entry is not None
+    assert entry.save_dir.endswith("GC/<region>/Card A")

@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
     from domain.disc_selection import Disc
     from domain.emulator_commands import LaunchingEmulator
+    from domain.layout_manifest import ManagedPlatform
     from domain.rom_install import RomInstall
     from domain.save_answer import SaveAnswer
     from domain.save_layout import InSaveDir, SaveLayout
@@ -242,6 +243,8 @@ class ActiveCoreReader(Protocol):
     def active_core_for_rom(self, rom_id: int) -> tuple[str | None, str | None]: ...
 
     def active_emulator_for_rom(self, rom_id: int) -> EmulatorInvocation | None: ...
+
+    def managed_entry(self, rom_id: int) -> ManagedPlatform | None: ...
 
 
 class DiscResolver(Protocol):
