@@ -272,6 +272,43 @@ harvest exists to close.
 - **EmuDeck's tree is not a structure.** Symlinks plus CloudSync markers, failing on this machine.
   Detect its launchers; do not adopt its save layer.
 
+## Switch (Eden), measured 2026-11-12
+
+Eden is not a model this plugin carries yet: `savefile_location('switch', 'Eden (Standalone)')` returns
+`standalone-unsupported`, the sync returns `save_shape_unsupported`, and nothing is read or written. The
+measurements below are what a managed entry would have to state.
+
+**The server's unit is a zipped folder.** `/api/saves?rom_id=7200` returns
+`The Legend of Zelda_ Link's Awakening [2026-10-25_17-11-10].zip`, emulator `eden_duo`, slot `autosave` —
+RomM names a save after the ROM and zips whatever the emulator's save unit is. So a Switch save is carried
+as one archive of a directory, not as a file set.
+
+**The local unit is a per-title directory two levels down.** Eden's `nand_directory` (read from
+`~/.config/eden/qt-config.ini`) is `/home/deck/Emulation/storage/yuzu/nand`, and saves live at
+`<nand>/user/save/<user>/<slot>/<title id>/`. On the Deck measured here that is
+`…/user/save/0000000000000000/93543B1D30E2AEB87D0F28AE30D83730/<title id>/`, with a second, older slot
+(`00000000000000000000000000000000`) beside it holding one title. **The slot is not guessable and must not
+be guessed**: the rule is an exact match on `<title id>` under the root, one match or a decline.
+
+**The title id is in the ROM file, not inferred from the emulator.** A `.nsp` is a PFS0 archive whose
+string table names its ticket `01006bb00c6f00000000000000000008`; the first 16 hex digits are the title id
+(`01006BB00C6F0000`). Eden logged exactly that when it booted the same file, so the read is verifiable
+against the emulator's own statement rather than against a guess. Reading it costs one small read of the
+archive header — the string table carries the name, so no NCA parsing and no decryption is involved.
+
+**What is missing between these facts and a working sync**, in order:
+
+1. a `title-dir` save unit in `layout_manifest`, answered by `manifest_answer` (which today answers only
+   `gci-set` and returns `None` for every other unit, by design);
+2. the title-id read, and the exact-match directory selection that turns `<root> + <title id>` into the
+   one directory a sync may touch;
+3. the carry itself — zip the matched directory on upload, extract into it on download, which the engine
+   does not do for any unit yet because every syncable platform so far has been a file set.
+
+Until all three land, Switch keeps its honest refusal. Shipping only the first two would move the answer
+from "this shape is not modelled" to "the shape is modelled and the engine cannot carry it", which is a
+worse message for the same outcome.
+
 ## Open questions this page does not settle
 
 - Whether a shared PS2 card should sync as one library-level row or prompt for per-game cards.
