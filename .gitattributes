@@ -1,0 +1,11 @@
+# The Deck reads these files directly; a CRLF checkout would break every shebang and
+# the launcher's exec. Linux is the only place they run, so line endings are pinned.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.zip binary
+*.so binary
+*.woff2 binary
