@@ -331,6 +331,17 @@ stayed up.
 A title with no local folder yet stays refused (there is nothing to name), which is the honest state for
 a game that has never been saved on this device.
 
+**The unit synced is the archive, not the members.** Measured the hard way: with the answer naming six
+members, the sync uploaded six files and RomM answered 409 on each — the slot held eight saves, every one a
+ROM-named `.zip`, and the backstop could not pair a `savedata0.bin` with any of them. RomM's Switch unit is
+one archive named after the ROM, so the folder is packed into exactly that: `prepare_packed_unit` writes
+`.arcoon-archive/<rom name>.zip` beside the title folder (a zip cannot live inside the folder it archives,
+and a dot directory is one no emulator scans) and the matrix syncs that single file. Downloads come back as
+that zip and are extracted into the title folder, which is what `restore_dir` names on the download path. The
+folder stays the truth; the archive is derived from it on every sync, and repacking the same bytes yields the
+same content hash, so an unchanged save does not re-upload. Verified on the Deck: six members pack, repack
+byte-stable, source untouched.
+
 ## Open questions this page does not settle
 
 - Whether a shared PS2 card should sync as one library-level row or prompt for per-game cards.
