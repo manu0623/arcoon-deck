@@ -10842,19 +10842,32 @@ const ListDetail = ({ items, selectedId, onSelect, renderDetail, listHeader, sel
     const containerRef = SP_REACT.useRef(null);
     const [narrow, setNarrow] = SP_REACT.useState(false);
     const [drilled, setDrilled] = SP_REACT.useState(null);
+    const lastReport = SP_REACT.useRef("");
     SP_REACT.useEffect(() => {
         const node = containerRef.current;
         const view = node?.ownerDocument.defaultView;
         if (!node || !view) {
             return;
         }
+        const panel = node.closest('[id^="quickaccess_content_"]');
         const measure = () => {
             const width = node.clientWidth;
-            setNarrow(width > 0 && width < TWO_COLUMN_MIN_WIDTH);
+            const panelWidth = panel?.clientWidth ?? 0;
+            const available = panelWidth > 0 ? Math.min(width > 0 ? width : panelWidth, panelWidth) : width;
+            const nextNarrow = available > 0 && available < TWO_COLUMN_MIN_WIDTH;
+            setNarrow(nextNarrow);
+            const report = `${panelWidth}x${width}`;
+            if (report !== lastReport.current) {
+                lastReport.current = report;
+                void debugLog(`ListDetail: panel=${panelWidth} container=${width} narrow=${nextNarrow}`);
+            }
         };
         measure();
         const observer = new view.ResizeObserver(measure);
         observer.observe(node);
+        if (panel) {
+            observer.observe(panel);
+        }
         return () => observer.disconnect();
     }, []);
     const openRow = (id) => {
@@ -10871,7 +10884,7 @@ const ListDetail = ({ items, selectedId, onSelect, renderDetail, listHeader, sel
                             ...(selectOnActivate ? { onActivate: () => onSelect(item.id) } : {}),
                         }), children: item.render(item.id === selectedId) }) }, item.id)))] }));
     if (narrow) {
-        return (SP_JSX.jsx("div", { ref: containerRef, style: { height: "100%", minHeight: 0 }, children: drilled === null ? (rows()) : (SP_JSX.jsxs(DFL.Focusable, { "flow-children": "vertical", style: { height: "100%", overflowY: "auto" }, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => setDrilled(null), children: "\u2039 Back" }) }), SP_JSX.jsx(DFL.Focusable, { "flow-children": "vertical", children: renderDetail(drilled) })] })) }));
+        return (SP_JSX.jsx("div", { ref: containerRef, style: { height: "100%", minHeight: 0, overflowY: "auto" }, children: drilled === null ? (rows()) : (SP_JSX.jsxs(DFL.Focusable, { "flow-children": "vertical", style: { height: "100%", overflowY: "auto" }, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => setDrilled(null), children: "\u2039 Back" }) }), SP_JSX.jsx(DFL.Focusable, { "flow-children": "vertical", children: renderDetail(drilled) })] })) }));
     }
     return (SP_JSX.jsx("div", { ref: containerRef, style: { height: "100%", minHeight: 0 }, children: SP_JSX.jsx(Columns, { columns: [
                 {

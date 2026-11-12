@@ -44,6 +44,14 @@ Every page is either narrow (348 px, 300 px of content) or wide (854 px, 806 px 
 page: a page is wide or it is not, and no view inside a page changes it. Main and Downloads are narrow; Sync, Library,
 Settings and Data Management are wide.
 
+**A wide page can stop being visible while still measuring wide.** The expansion above is Steam's own and has no
+compatibility promise, so it can stop taking effect without the plugin's own boxes changing shape: the page still
+measures 806 px, but the panel clips it at 348 and paints the detail column outside itself. The reader's report of that
+is a section list with a section that has no content — the layout chose two columns from a width nobody can see.
+`ListDetail` therefore decides from the **narrower of its own box and the panel that clips it**, which is the same
+answer whenever the expansion works and the drill-down fallback in the one case where it does not. It logs both numbers
+whenever they change, so the next debug log says which of the two happened.
+
 **On the Deck, wide means full screen.** The Big Picture viewport is 854 × 534 CSS px at `devicePixelRatio` 1.5 (1280 ×
 800 physical), so the narrow panel covers 41 % of the width and the wide one covers all of it — there is no library left
 beside a wide page. A desktop Big Picture window is wider and shows one, which is why width judgements are made under

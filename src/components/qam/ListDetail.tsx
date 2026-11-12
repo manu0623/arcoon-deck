@@ -36,6 +36,7 @@
 
 import { useEffect, useRef, useState, type FC, type ReactNode } from "react";
 import { ButtonItem, Focusable, PanelSectionRow } from "@decky/ui";
+import { debugLog } from "../../api/backend";
 import { ENTRY_STOP_ATTR } from "../../utils/entryFocus";
 import { Columns } from "./Columns";
 
@@ -88,6 +89,7 @@ export const ListDetail: FC<ListDetailProps> = ({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [narrow, setNarrow] = useState(false);
   const [drilled, setDrilled] = useState<string | null>(null);
+  const lastReport = useRef("");
 
   // Measured from the container rather than the window: the panel is its own
   // box, and the widening this page asks for lands on an ancestor's `max-width`,
@@ -98,16 +100,39 @@ export const ListDetail: FC<ListDetailProps> = ({
     if (!node || !view) {
       return;
     }
+    // The panel is the box that CLIPS us, and it is the smaller of the two
+    // whenever the widening has stopped taking effect — Steam's QAM cap is
+    // Steam's, and it has changed under this plugin before. Our own width then
+    // still reads wide, two columns are chosen from it, and the detail column is
+    // painted outside the visible panel: the reader sees the section list and a
+    // section with no content in it. Deciding from the narrower of the two boxes
+    // keeps the fallback reachable in exactly that case, and answers the same as
+    // before whenever the widening works (both boxes wide) or the panel is
+    // genuinely wide.
+    const panel = node.closest<HTMLElement>('[id^="quickaccess_content_"]');
     // 0 means "not laid out yet" — the first frame before Steam sizes the panel,
     // and every jsdom render. Answering "narrow" there would flash the fallback
     // on a wide panel and would make the component untestable in its wide form.
     const measure = () => {
       const width = node.clientWidth;
-      setNarrow(width > 0 && width < TWO_COLUMN_MIN_WIDTH);
+      const panelWidth = panel?.clientWidth ?? 0;
+      const available = panelWidth > 0 ? Math.min(width > 0 ? width : panelWidth, panelWidth) : width;
+      const nextNarrow = available > 0 && available < TWO_COLUMN_MIN_WIDTH;
+      setNarrow(nextNarrow);
+      // Logged on change only: this runs per resize, and a debug log per frame
+      // would bury the thing the number is there to answer.
+      const report = `${panelWidth}x${width}`;
+      if (report !== lastReport.current) {
+        lastReport.current = report;
+        void debugLog(`ListDetail: panel=${panelWidth} container=${width} narrow=${nextNarrow}`);
+      }
     };
     measure();
     const observer = new view.ResizeObserver(measure);
     observer.observe(node);
+    if (panel) {
+      observer.observe(panel);
+    }
     return () => observer.disconnect();
   }, []);
 
@@ -152,7 +177,7 @@ export const ListDetail: FC<ListDetailProps> = ({
 
   if (narrow) {
     return (
-      <div ref={containerRef} style={{ height: "100%", minHeight: 0 }}>
+      <div ref={containerRef} style={{ height: "100%", minHeight: 0, overflowY: "auto" }}>
         {drilled === null ? (
           rows()
         ) : (
