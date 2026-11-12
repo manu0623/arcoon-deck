@@ -44,6 +44,7 @@ class FakeActiveCoreResolver:
         self.per_rom: dict[int, tuple[str | None, str | None]] = per_rom if per_rom is not None else {}
         self.default_emulator = default_emulator
         self.per_rom_managed: dict[int, ManagedPlatform] = {}
+        self.per_rom_save_entry: dict[int, ManagedPlatform] = {}
         self.per_rom_emulator: dict[int, EmulatorInvocation | None] = (
             per_rom_emulator if per_rom_emulator is not None else {}
         )
@@ -57,6 +58,10 @@ class FakeActiveCoreResolver:
     def managed_entry(self, rom_id: int) -> ManagedPlatform | None:
         """No provisioned entry unless a test says so: the default is unmanaged."""
         return self.per_rom_managed.get(rom_id)
+
+    def managed_save_entry(self, rom_id: int) -> ManagedPlatform | None:
+        """The save read defaults to the same entry: unmanaged unless a test says otherwise."""
+        return self.per_rom_save_entry.get(rom_id, self.per_rom_managed.get(rom_id))
 
     def active_emulator_for_rom(self, rom_id: int) -> EmulatorInvocation | None:
         self.emulator_calls.append(rom_id)

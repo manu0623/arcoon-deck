@@ -169,9 +169,11 @@ unnamed entries, so the two fills above settle it exactly as they settle a resol
 
 Where a platform is provisioned, none of that inference happens at all: `layout.json` (ADR-0034) states the launch and
 the save path together, and the plugin bakes one and answers the other from the same entry. A platform absent from the
-manifest keeps everything above, unchanged, and so does a platform whose emulator the user has picked: the picker's
-per-game label or the per-platform core outranks the entry, and both halves of the entry step aside together — the
-launch and the save path are one statement, so the plugin never takes one and not the other. The provisioner writes the file last, after the tree exists and every path
+manifest keeps everything above, unchanged. A platform whose emulator the user has picked is a narrower case: the pick
+owns the launch, and the entry still supplies the **save path**, because the picker chooses a program while the folder
+belongs to the platform. Measured on the reference Deck — RetroDECK runs the libretro Dolphin core inside Dolphin's own
+user tree, so both emulators write `saves/gc/User/GC/<region>/Card A`, and a pick that moved the save path made the sync
+look in `saves/gc` while the game wrote the card folder. The provisioner writes the file last, after the tree exists and every path
 has been checked, so a run that fails part-way leaves the plugin on the behaviour it had before the run; and the reader
 treats an unusable file as "nothing managed" rather than as an error, for the same reason.
 

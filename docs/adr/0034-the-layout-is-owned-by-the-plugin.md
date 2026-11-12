@@ -115,12 +115,16 @@ by an in-panel updater while a user's tree may have been laid out months earlier
 **7. An explicit choice outranks the manifest.**
 
 The per-game picker's label and the per-platform core are the user saying which emulator should run; the manifest says
-what the layout is when nobody has said. So a managed entry governs a ROM only while neither choice names an emulator,
-and both halves fall back together: once the pick wins the launch, the save path it implies is the catalogue's, not the
-entry's. Mixing them is the thing this rule exists to prevent — an entry's command and its directory are one sentence,
-and honouring one half over the other points the save layer at a folder the launch never writes. Measured on the
-reference Deck: a GameCube ROM pinned to the libretro core still baked the manifest's Dolphin command, which is how
-this was noticed.
+what the layout is when nobody has said. So the entry supplies the **command** only while neither choice names an
+emulator: a pick wins the launch.
+
+**It does not win the save path, and the first attempt at this rule got that wrong.** The pick chooses a program; where a
+platform keeps its saves is a property of the platform's own card and directory layout, not of which program opens it.
+Measured on the reference Deck: RetroDECK runs the libretro Dolphin core inside Dolphin's user tree, so the picker's
+`Dolphin` and the manifest's `Dolphin (Standalone)` both write `saves/gc/User/GC/<region>/Card A`. A pick that moved the
+save path to the catalogue's `saves/gc` therefore pointed the sync at a folder the launch never wrote — the ROM ran fine
+and uploaded nothing, with its card one directory away. So the launch and the save path are answered by two different
+reads of the same entry, and the divide is which question is being asked, not which emulator won.
 
 **8. The first increment is GameCube, and its manifest is an adoption entry.**
 

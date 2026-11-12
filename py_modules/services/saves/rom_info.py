@@ -321,9 +321,9 @@ class RomInfoService:
         (:meth:`_fill_save_id`) — the resolver cannot read a game's disc header, and the
         save of every id-keyed platform stays refused until somebody does.
         """
-        # Asked of the resolver, never of the manifest directly: whether a managed entry
-        # applies turns on the user's own emulator choice, and the launch decides that.
-        managed = self._active_core.managed_entry(int(rom_id))
+        # The SAVE path, asked of the resolver's pick-agnostic read: the picker chooses
+        # which program runs, never where the platform keeps its cards.
+        managed = self._active_core.managed_save_entry(int(rom_id))
         stated = manifest_answer(managed, content_installed=installed)
         if stated is not None:
             # The provisioner stated both the launch and the save path, so there is nothing

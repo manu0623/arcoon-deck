@@ -156,6 +156,22 @@ class ActiveCoreResolver:
         emulator = with_appendconfig(emulator, self._appendconfig_for(rom.platform_slug))
         return self._maybe_owned(emulator, rom.platform_slug)
 
+    def managed_save_entry(self, rom_id: int) -> ManagedPlatform | None:
+        """The entry that governs ``rom_id``'s SAVE PATH, which no pick changes.
+
+        Deliberately not :meth:`managed_entry`: that one answers "which program runs",
+        and the user's pick decides it. Where a platform's saves live is a property of
+        the platform's own card/tree layout, not of which program opens it — measured on
+        the reference Deck, RetroDECK runs the libretro Dolphin core inside Dolphin's user
+        tree, so both emulators write ``saves/gc/User/GC/<region>/Card A``. Letting the
+        pick move the save path is what made the save layer look in a folder the launch
+        never wrote.
+        """
+        rom, _install = self._read_rom_and_install(rom_id)
+        if rom is None or self._managed_layout is None:
+            return None
+        return self._managed_layout(rom.platform_slug)
+
     def managed_entry(self, rom_id: int) -> ManagedPlatform | None:
         """The manifest entry that governs ``rom_id``, or ``None`` when none does.
 

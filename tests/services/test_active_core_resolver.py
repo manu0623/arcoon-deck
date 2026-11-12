@@ -899,3 +899,24 @@ def test_the_save_layer_is_told_the_same_entry_the_launch_used() -> None:
     entry = resolver.managed_entry(5319)
     assert entry is not None
     assert entry.save_dir.endswith("GC/<region>/Card A")
+
+
+def test_the_save_path_does_not_step_aside_for_the_pick() -> None:
+    """The picker chooses the program; the platform owns where its cards live.
+
+    Measured on the reference Deck: RetroDECK runs the libretro Dolphin core inside
+    Dolphin's user tree, so both emulators write the same card folder. Letting the
+    pick move the save path is what pointed the sync at a folder the launch never
+    wrote — rom 5319 reported ``uploaded=0`` with the card one directory away.
+    """
+    uow = FakeUnitOfWork()
+    _seed_rom(uow, rom_id=5319, platform_slug="gc", emulator_override="Dolphin")
+    _seed_install(uow, rom_id=5319, file_path="/roms/gc/zelda.rvz", rom_dir="/roms/gc")
+
+    resolver = _gc_resolver(uow=uow)
+
+    assert resolver.managed_entry(5319) is None
+    entry = resolver.managed_save_entry(5319)
+    assert entry is not None
+    assert entry.save_unit == "gci-set"
+    assert entry.save_dir.endswith("GC/<region>/Card A")

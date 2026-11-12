@@ -246,6 +246,8 @@ class ActiveCoreReader(Protocol):
 
     def managed_entry(self, rom_id: int) -> ManagedPlatform | None: ...
 
+    def managed_save_entry(self, rom_id: int) -> ManagedPlatform | None: ...
+
 
 class DiscResolver(Protocol):
     """Per-ROM multi-disc launch-path resolution consumed by the bake sites.
