@@ -51,6 +51,17 @@ _RETROARCH_CORES_DIR = "/var/config/retroarch/cores"
 _SPAWN_TOKEN = "%EMULATOR_FLATPAK-SPAWN%"
 _SANDBOX_SPAWN = "/usr/bin/flatpak-spawn"
 
+# A command that asks to run a HOST binary — ``%EMULATOR_FLATPAK-SPAWN% --host <bin> …``
+# — is rendered as that binary outright, with no RetroDECK and no sandbox round-trip.
+#
+# The round-trip is not harmless: ``flatpak-spawn --host`` hands the child the
+# SANDBOX's environment, and inside a flatpak the display variables name sockets that
+# exist only in that namespace. Measured on the reference Deck with Eden: the game
+# booted, audio played through PipeWire, and no picture ever appeared — Steam's UI
+# stayed up. The plugin's launcher already runs on the host, so the hop only moves the
+# process away from Steam's session (and away from the display Steam gave it).
+_HOST_SPAWN_RE = re.compile(r"^%EMULATOR_FLATPAK-SPAWN%\s+--host\s+(.+)$")
+
 
 @dataclass(frozen=True)
 class EmulatorInvocation:
@@ -185,7 +196,11 @@ def resolve_emulator_invocation(rom: dict[str, Any], emulator: EmulatorInvocatio
         base = f"flatpak run --command={emulator.launcher} {RETRODECK_APP_ID}"
         return f"{base} {args}" if args else base
     if emulator.kind == "standalone" and emulator.command:
-        # The spawn helper is ours to name: run_game.sh leaves the placeholder literal.
+        # A host binary runs as itself: see _HOST_SPAWN_RE for why the sandbox hop goes.
+        host_argv = _host_argv(emulator.command)
+        if host_argv is not None:
+            return host_argv
+        # Otherwise the spawn helper is ours to name: run_game.sh leaves it literal.
         # An owned launch states the user directory, so the command carries the flag
         # and the save layer reads the same value instead of inferring one.
         command = emulator.command.replace(_SPAWN_TOKEN, _SANDBOX_SPAWN)
@@ -208,6 +223,22 @@ def resolve_emulator_invocation(rom: dict[str, Any], emulator: EmulatorInvocatio
         override = f"%EMULATOR_RETROARCH% -L {core_path}{appendconfig_flag(emulator.appendconfig)} %ROM%"
         return f'{RETRODECK_INVOCATION} -e "{override}"'
     return RETRODECK_INVOCATION
+
+
+def _host_argv(command: str) -> str | None:
+    """The bare argv for a command that asks to run a host binary, else ``None``.
+
+    ``%EMULATOR_FLATPAK-SPAWN% --host /home/deck/Applications/Eden.AppImage -f -g
+    %ROM%`` yields ``/home/deck/Applications/Eden.AppImage -f -g``, with the trailing
+    ``%ROM%`` dropped because nothing substitutes placeholders on this path any more:
+    :func:`build_launch_options` appends the real path as the last argument. The bake
+    rules guarantee a bakeable command ENDS in ``%ROM%`` (``no_rom_target`` otherwise),
+    so dropping it cannot strand an argument after the target.
+    """
+    match = _HOST_SPAWN_RE.match(command.strip())
+    if match is None:
+        return None
+    return " ".join(match.group(1).replace("%ROM%", "").split())
 
 
 def _direct_launch_args(command: str) -> str:

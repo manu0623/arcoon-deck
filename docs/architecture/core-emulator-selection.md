@@ -38,9 +38,17 @@ of two payloads:
   defines and substitutes `%ROM%` at launch, the same as the libretro form — but **only those it defines**, which is why
   the plugin resolves one token itself: `%EMULATOR_FLATPAK-SPAWN%` is ES-DE's spawn helper, not an emulator, so
   `run_game.sh` left it literal and the shell tried to exec a binary by that name. A Switch ROM's session lasted one
-  second that way, with RetroDECK's log printing the unexpanded token as the command line. The sandbox ships the helper
-  (`/usr/bin/flatpak-spawn`), so `domain/shortcut_data.py` names it in the bake — the difference between an AppImage
-  emulator (Eden, Cemu, Citron, DuckStation) launching from a shortcut and never starting at all. Read the seam as
+  second that way, with RetroDECK's log printing the unexpanded token as the command line.
+
+  The `--host` form is not baked into the sandbox at all: `%EMULATOR_FLATPAK-SPAWN% --host <bin> …` is rendered as
+  `<bin> …`, because `flatpak-spawn --host` hands the child the **sandbox's** environment, and inside a flatpak the
+  display variables name sockets that exist only in that namespace. Measured on the reference Deck with Eden, that is a
+  game which boots and plays audio through PipeWire while no picture ever appears and Steam's UI stays up — the worst
+  kind of failure, because every log says the launch worked. The plugin's launcher already runs on the host, so the hop
+  only moves the process out of Steam's session and away from the display Steam gave it. A spawn form that does *not*
+  ask for `--host` still rides the sandbox, and there the token is named `/usr/bin/flatpak-spawn` (the sandbox ships
+  it). Either way the difference is an AppImage emulator (Eden, Cemu, Citron, DuckStation) launching from a shortcut
+  versus never starting at all. Read the seam as
   **an unresolved placeholder is a launch that dies in a second, and nothing in the log says why unless RetroDECK's own
   log is read**. This is the standalone-emulator seam
   ([#129](https://github.com/danielcopper/decky-romm-sync/issues/129)): a system whose working ES-DE default is a

@@ -114,20 +114,31 @@ class TestResolveEmulatorInvocation:
         assert "%CORE_RETROARCH%" not in result
 
     def test_the_spawn_helper_is_named_rather_than_left_as_a_placeholder(self):
-        # RetroDECK substitutes %ROM% and leaves the ES-DE spawn token literal, so the
-        # baked -e tried to exec a binary named %EMULATOR_FLATPAK-SPAWN% and the
-        # Switch ROM's session lasted one second. The sandbox ships the helper
-        # (/usr/bin/flatpak-spawn answers command -v inside it), so the bake names it.
+        # RetroDECK substitutes %ROM% and leaves the ES-DE spawn token literal, so a
+        # baked -e carrying it tried to exec a binary named %EMULATOR_FLATPAK-SPAWN%.
+        # A form that does NOT ask for --host still rides the sandbox, so the token has
+        # to be named there: the sandbox ships /usr/bin/flatpak-spawn.
+        result = resolve_emulator_invocation(
+            {"id": 1}, EmulatorInvocation.standalone("%EMULATOR_FLATPAK-SPAWN% /opt/tool %ROM%")
+        )
+        assert "%EMULATOR_FLATPAK-SPAWN%" not in result
+        assert result == 'flatpak run net.retrodeck.retrodeck -e "/usr/bin/flatpak-spawn /opt/tool %ROM%"'
+
+    def test_a_host_binary_is_launched_as_itself_with_no_sandbox_hop(self):
+        # flatpak-spawn --host gives the child the SANDBOX's display variables, which
+        # name sockets that exist only inside the flatpak: Eden booted, audio played,
+        # and no picture appeared while Steam's UI stayed up. The launcher already runs
+        # on the host, so the command is the binary, and %ROM% goes away because
+        # build_launch_options appends the real path last.
         result = resolve_emulator_invocation(
             {"id": 1},
             EmulatorInvocation.standalone(
                 "%EMULATOR_FLATPAK-SPAWN% --host /home/deck/Applications/Eden.AppImage -f -g %ROM%"
             ),
         )
-        assert "%EMULATOR_FLATPAK-SPAWN%" not in result
-        assert result == (
-            'flatpak run net.retrodeck.retrodeck -e "/usr/bin/flatpak-spawn --host '
-            '/home/deck/Applications/Eden.AppImage -f -g %ROM%"'
+        assert result == "/home/deck/Applications/Eden.AppImage -f -g"
+        assert build_launch_options(result, "/roms/switch/a b.nsp") == (
+            '/home/deck/Applications/Eden.AppImage -f -g "/roms/switch/a b.nsp"'
         )
 
     def test_standalone_bakes_command_verbatim(self):
