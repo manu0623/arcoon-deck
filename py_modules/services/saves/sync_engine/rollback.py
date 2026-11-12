@@ -131,7 +131,16 @@ class RollbackOrchestrator:
         if not info:
             return {"success": False, "reason": "not_installed", "message": "ROM not installed"}
         system = info["system"]
-        saves_dir = info["saves_dir"]
+        # The directory the emulator actually reads, from the same answer the sync uses.
+        # Measured failure: this path took ``info["saves_dir"]``, the RetroArch root, so a
+        # resolved conflict's download unpacked six Switch members into
+        # ``/home/deck/retrodeck/saves/Game`` while Eden kept reading its title folder — the
+        # local save looked untouched, and the next sync uploaded it over the server's.
+        answer = await loop.run_in_executor(None, lambda: self._rom_info.save_answer(rom_id))
+        save_names, unit_dir, restore_dir = await loop.run_in_executor(
+            None, lambda: self._rom_info.save_unit(info, answer)
+        )
+        saves_dir = unit_dir or info["saves_dir"]
 
         save_state, device_id = await loop.run_in_executor(None, self._read_inputs, rom_id)
 
@@ -172,7 +181,6 @@ class RollbackOrchestrator:
             }
 
         core_so = await loop.run_in_executor(None, self._resolve_core, rom_id)
-        save_names = await loop.run_in_executor(None, lambda: self._rom_info.save_answer(rom_id).synced_names)
 
         try:
             if action == "use_server":
@@ -186,6 +194,7 @@ class RollbackOrchestrator:
                     system,
                     info["rom_name"],
                     save_names,
+                    restore_dir,
                 )
             else:
                 # keep_local — resolve on-disk name via the same canonical
@@ -264,6 +273,7 @@ class RollbackOrchestrator:
         system: str,
         rom_name: str,
         save_names: tuple[str, ...],
+        restore_dir: str | None = None,
     ) -> None:
         """Download *server* into the canonical local save file and update *save_state*.
 
@@ -274,7 +284,9 @@ class RollbackOrchestrator:
         """
         target = local_save_target(server, rom_name, known_names=save_names)
         default_slot = resolve_default_slot(self._settings)
-        self._matrix.do_download_save(server, saves_dir, target, save_state, device_id, system, default_slot)
+        self._matrix.do_download_save(
+            server, saves_dir, target, save_state, device_id, system, default_slot, restore_dir=restore_dir
+        )
 
     def _resolve_conflict_keep_local(
         self,

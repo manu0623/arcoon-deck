@@ -151,6 +151,7 @@ class StatusService:
         canonical target filename the slot resolves to (one per outcome), used
         to detect a multi-file save (#908 guard).
         """
+        unit_names, unit_dir, _restore_dir = self._rom_info.save_unit(info, save_answer)
         local_outcomes: list[MatrixOutcome] = []
         server_only_outcomes: list[MatrixOutcome] = []
         baseline_adopted = False
@@ -160,11 +161,12 @@ class StatusService:
             save_state=save_state,
             device_id=device_id,
             info=info,
-            save_names=save_answer.synced_names,
-            # The same directory the sync writes to, asked of the same method — a member
-            # set sits below the platform root, so the root would probe nothing and the
-            # tab would claim the ROM has no saves while its card folder holds one.
-            saves_dir=self._rom_info.member_set_dir(info, save_answer),
+            # The unit's names and directory exactly as the sync takes them: a member set
+            # sits below the platform root, and an archive-carried unit is the one zip RomM
+            # stores, so the tab pairs the server's rows and shows their state instead of
+            # listing only what happens to be on disk.
+            save_names=unit_names,
+            saves_dir=unit_dir,
         ):
             all_filenames.append(outcome.filename)
             if isinstance(outcome.action, Skip) and outcome.action.adopt_baseline and outcome.local_hash:

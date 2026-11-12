@@ -1076,7 +1076,10 @@ class MatrixExecutor:
         # run ends clean with nothing transferred. Measured on the reference Deck:
         # rom 5319 reported ``uploaded=0, downloaded=0, errors=0`` while its only
         # ``.gci`` sat in the card folder the answer names.
-        answer_dir = self._rom_info.member_set_dir(info, answer)
+        # One answer for the unit's names, directory and extraction target, so a sync and
+        # a restore cannot disagree: a unit RomM carries as ONE archive is packed here and
+        # synced as that single file, with downloads extracted into the folder it came from.
+        save_names, answer_dir, restore_dir = self._rom_info.save_unit(info, answer)
         # The backstop every sync path crosses. A refusing answer pairs its names
         # with a ``None`` directory, so nothing is probed and no state is written
         # — the sweep has no room in its one result to say which ROM was passed
@@ -1084,15 +1087,6 @@ class MatrixExecutor:
         if answer_dir is None:
             self._log_debug(f"do_sync_rom_saves({rom_id}): no per-game save set for this emulator, skipping")
             return 0, 0, [], []
-        # A unit RomM carries as ONE archive is packed here, so the rest of the run sees a
-        # single file exactly as it does for any other save: the folder stays the truth,
-        # the zip is derived from it now, and a download is extracted back into it.
-        packed = self._rom_info.prepare_packed_unit(info, answer)
-        restore_dir = None
-        if packed is not None:
-            save_names = (packed.archive_name,)
-            answer_dir = packed.archive_dir
-            restore_dir = packed.source_dir
         saves_dir = answer_dir
 
         t0 = self._clock.time()

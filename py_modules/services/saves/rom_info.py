@@ -492,6 +492,22 @@ class RomInfoService:
             return answer.directory
         return info["saves_dir"]
 
+    def save_unit(self, info: dict[str, Any], answer: SaveAnswer) -> tuple[tuple[str, ...], str | None, str | None]:
+        """Where a ROM's save actually lives, as ``(names, directory, extract_dir)``.
+
+        The one answer every reader needs, so a restore and a sync cannot disagree about
+        the directory — the split between them is what sent a resolved conflict's download
+        into the RetroArch root while the emulator read Eden's folder. *extract_dir* is set
+        only for a unit RomM carries as one archive: the zip is staged beside the folder it
+        archives, so a download has to name the folder to unpack into.
+
+        A refusing answer keeps its ``None`` directory, and nothing is packed for it.
+        """
+        unit = self.prepare_packed_unit(info, answer)
+        if unit is not None:
+            return (unit.archive_name,), unit.archive_dir, unit.source_dir
+        return answer.synced_names, self.member_set_dir(info, answer), None
+
     def prepare_packed_unit(self, info: dict[str, Any], answer: SaveAnswer) -> PackedSaveUnit | None:
         """Pack a ``title-dir`` save into the ONE archive RomM carries, or return ``None``.
 

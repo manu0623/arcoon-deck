@@ -178,10 +178,13 @@ class SaveCopyService:
         if target_save is None:
             return {"status": "version_deleted"}
 
-        saves_dir = info["saves_dir"]
+        # The directory the emulator reads, from the same answer the sync uses: the
+        # platform root is not it for a member set, and an archive-carried unit is staged
+        # beside the folder its download unpacks into.
+        save_names, unit_dir, restore_dir = self._rom_info.save_unit(info, self._rom_info.save_answer(rom_id))
+        saves_dir = unit_dir or info["saves_dir"]
         system = info["system"]
         rom_name = info["rom_name"]
-        save_names = self._rom_info.save_answer(rom_id).synced_names
         canonical = local_save_target(target_save, rom_name, known_names=save_names)
         local_path = os.path.join(saves_dir, canonical)
 
@@ -194,7 +197,14 @@ class SaveCopyService:
         # existing local file (the current slot's save) is quarantined into
         # ``.romm-backup`` first, so nothing that lives only on disk is lost.
         self._sync_engine.do_download_save(
-            target_save, saves_dir, canonical, save_state, device_id, system, default_slot
+            target_save,
+            saves_dir,
+            canonical,
+            save_state,
+            device_id,
+            system,
+            default_slot,
+            restore_dir=restore_dir,
         )
 
         try:

@@ -241,17 +241,26 @@ class VersionsService:
         if target_save is None:
             return {"status": "version_deleted"}
 
-        saves_dir = info["saves_dir"]
+        # The emulator's own directory, not the RetroArch root: a member set sits below
+        # the platform root, and a unit RomM carries as an archive is staged beside the
+        # folder it unpacks into.
+        save_names, unit_dir, restore_dir = self._rom_info.save_unit(info, self._rom_info.save_answer(rom_id))
+        saves_dir = unit_dir or info["saves_dir"]
         system = info["system"]
         rom_name = info["rom_name"]
         default_slot = resolve_default_slot(self._settings)
-        target_filename = local_save_target(
-            target_save, rom_name, known_names=self._rom_info.save_answer(rom_id).synced_names
-        )
+        target_filename = local_save_target(target_save, rom_name, known_names=save_names)
         local_path = os.path.join(saves_dir, target_filename)
 
         self._sync_engine.do_download_save(
-            target_save, saves_dir, target_filename, save_state, device_id, system, default_slot
+            target_save,
+            saves_dir,
+            target_filename,
+            save_state,
+            device_id,
+            system,
+            default_slot,
+            restore_dir=restore_dir,
         )
 
         try:

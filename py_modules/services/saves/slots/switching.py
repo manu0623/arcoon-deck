@@ -201,7 +201,11 @@ class SlotSwitcher:
                 "message": SAVE_SYNC_IN_CONTENT_DIR,
             }
 
-        saves_dir = info["saves_dir"]
+        # The emulator's own directory, not the RetroArch root: a member set sits below the
+        # platform root, and an archive-carried unit is staged beside the folder its
+        # download unpacks into.
+        unit_names, unit_dir, restore_dir = self._rom_info.save_unit(info, self._rom_info.save_answer(rom_id))
+        saves_dir = unit_dir or info["saves_dir"]
         system = info["system"]
 
         # The read→mutate→write of the RomSaveSyncState aggregate must serialise
@@ -262,11 +266,18 @@ class SlotSwitcher:
 
             # 7. Make the saves dir + tracking coherent with the new slot:
             default_slot = resolve_default_slot(self._settings)
-            targets = newest_server_saves_by_target(
-                slot_saves, info["rom_name"], known_names=self._rom_info.save_answer(rom_id).synced_names
-            )
+            targets = newest_server_saves_by_target(slot_saves, info["rom_name"], known_names=unit_names)
             switch_errors = await self._loop.run_in_executor(
-                None, self._apply_slot_switch, rom_id, saves_dir, system, save_state, device_id, targets, default_slot
+                None,
+                self._apply_slot_switch,
+                rom_id,
+                saves_dir,
+                system,
+                save_state,
+                device_id,
+                targets,
+                default_slot,
+                restore_dir,
             )
 
             # 8. Persist the coherent state regardless of partial download failures.
@@ -294,6 +305,7 @@ class SlotSwitcher:
         device_id: str | None,
         targets: dict[str, dict[str, Any]],
         default_slot: str | None,
+        restore_dir: str | None = None,
     ) -> list[str]:
         """Make the local saves dir + tracking match the new slot.
 
@@ -333,7 +345,14 @@ class SlotSwitcher:
             )
             try:
                 self._sync_engine.do_download_save(
-                    server_save, saves_dir, target_name, save_state, device_id, system, default_slot
+                    server_save,
+                    saves_dir,
+                    target_name,
+                    save_state,
+                    device_id,
+                    system,
+                    default_slot,
+                    restore_dir=restore_dir,
                 )
             except Exception as e:
                 self._log_debug(f"switch_slot: failed to download {target_name}: {e}")
