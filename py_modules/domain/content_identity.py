@@ -84,6 +84,12 @@ class IdentityKind(StrEnum):
 
     DISC_SERIAL = "disc_serial"
     TITLE_ID = "title_id"
+    # A Switch title id is the same 16 hex digits as a 3DS one and is NOT filed the same
+    # way: a 3DS save lives under ``title/<high 8>/<low 8>``, while Eden keeps one folder
+    # named with all 16. Measured on the reference Deck: filling a Switch answer through
+    # the 3DS formatting produced ``…/01006BB0/0C6F0000``, a directory no emulator writes,
+    # and the sync then found nothing to carry. Two kinds, so no caller has to sniff.
+    SWITCH_TITLE_ID = "switch_title_id"
     GAME_CODE = "game_code"
     PRODUCT_NUMBER = "product_number"
 
@@ -254,6 +260,7 @@ def save_id_text(identity: ContentIdentity) -> str:
     """
     if identity.kind is IdentityKind.TITLE_ID:
         return f"{identity.save_id[:8]}/{identity.save_id[8:]}"
+    # A Switch id rides whole: one 16-character directory name, no split.
     return identity.save_id
 
 

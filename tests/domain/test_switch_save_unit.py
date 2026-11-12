@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import struct
 
+from domain.content_identity import ContentIdentity, IdentityKind, save_id_text
 from domain.layout_manifest import ManagedPlatform, parse_layout_manifest
 from domain.save_answer import (
     SAVE_STATE_HOLE,
@@ -59,6 +60,23 @@ def _json(value: object) -> str:
     import json
 
     return json.dumps(value)
+
+
+class TestTheIdIsNotSplitLikeA3dsOne:
+    """Measured failure: the 3DS split produced a directory no emulator writes.
+
+    The live log showed ``…/93543B1D30E2AEB87D0F28AE30D83730/01006BB0/0C6F0000`` while Eden's
+    folder is ``…/01006BB00C6F0000`` — the sync then found nothing, and the tab said the
+    shape was unavailable.
+    """
+
+    def test_a_switch_id_rides_whole(self) -> None:
+        identity = ContentIdentity(_TITLE_ID, IdentityKind.SWITCH_TITLE_ID, "Switch NSP ticket")
+        assert save_id_text(identity) == _TITLE_ID
+
+    def test_a_3ds_id_still_splits(self) -> None:
+        identity = ContentIdentity("0004000000123400", IdentityKind.TITLE_ID, "3DS NCCH program id")
+        assert save_id_text(identity) == "00040000/00123400"
 
 
 class TestTheTitleIdComesFromTheArchive:

@@ -102,7 +102,7 @@ class ContentIdentityAdapter:
         if title is None:
             self._logger.warning(f"content_identity: no Switch title id in {os.path.basename(path)}")
             return None
-        return ContentIdentity(save_id=title, kind=IdentityKind.TITLE_ID, source="Switch NSP ticket")
+        return ContentIdentity(save_id=title, kind=IdentityKind.SWITCH_TITLE_ID, source="Switch NSP ticket")
 
     def _n3ds(self, path: str) -> ContentIdentity | None:
         """Two reads: the NCSD header, then the NCCH the first partition points at.
