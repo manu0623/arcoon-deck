@@ -31,9 +31,15 @@ a path would be a passwordless root copy-anything command. This one reads exactl
 sudo mkdir -p /var/lib/arcoon
 sudo cp ~/arcoon-src/scripts/deck-install-root.sh /var/lib/arcoon/arcoon-install
 sudo chmod 755 /var/lib/arcoon/arcoon-install
-echo 'deck ALL=(root) NOPASSWD: /var/lib/arcoon/arcoon-install' | sudo tee /etc/sudoers.d/arcoon-install
-sudo chmod 440 /etc/sudoers.d/arcoon-install
+echo 'deck ALL=(root) NOPASSWD: /var/lib/arcoon/arcoon-install' | sudo tee /etc/sudoers.d/zz-arcoon-install
+sudo chmod 440 /etc/sudoers.d/zz-arcoon-install
 ```
+
+**The `zz-` prefix is load-bearing.** SteamOS ships `/etc/sudoers.d/wheel` holding
+`%wheel ALL=(ALL) ALL`, and sudo resolves a repeated match by the **last** rule rather than
+the most specific one. A file named `arcoon-install` sorts before `wheel`, so wheel's
+passworded rule is read afterwards and wins — the allow-list parses correctly, shows up in
+`sudo -l`, and still asks for a password. Read last is the whole requirement.
 
 **It cannot live in `/usr/local/bin`.** SteamOS mounts its root image read-only, so that
 path answers `Read-only file system`, and writing there would mean disabling the immutable
