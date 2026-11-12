@@ -24,7 +24,7 @@ SHIPPED=(plugin.json main.py package.json LICENSE README.md dist defaults bin as
 
 export GIT_SSH_COMMAND="ssh -i $KEY -o StrictHostKeyChecking=accept-new"
 
-if [ ! -x "$KEY" ]; then
+if [ ! -f "$KEY" ]; then
   echo "no deploy key at $KEY — generate one with: ssh-keygen -t ed25519 -N '' -f $KEY" >&2
   exit 1
 fi
