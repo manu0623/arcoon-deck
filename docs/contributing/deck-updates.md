@@ -28,10 +28,19 @@ a path would be a passwordless root copy-anything command. This one reads exactl
 `~/arcoon-stage` and refuses anything else.
 
 ```sh
-sudo install -m 755 -o root -g root ~/arcoon-src/scripts/deck-install-root.sh /usr/local/bin/arcoon-install
-echo 'deck ALL=(root) NOPASSWD: /usr/local/bin/arcoon-install' | sudo tee /etc/sudoers.d/arcoon-install
+sudo mkdir -p /var/lib/arcoon
+sudo cp ~/arcoon-src/scripts/deck-install-root.sh /var/lib/arcoon/arcoon-install
+sudo chmod 755 /var/lib/arcoon/arcoon-install
+echo 'deck ALL=(root) NOPASSWD: /var/lib/arcoon/arcoon-install' | sudo tee /etc/sudoers.d/arcoon-install
 sudo chmod 440 /etc/sudoers.d/arcoon-install
 ```
+
+**It cannot live in `/usr/local/bin`.** SteamOS mounts its root image read-only, so that
+path answers `Read-only file system`, and writing there would mean disabling the immutable
+filesystem for the whole machine — which a SteamOS update then overwrites. `/var` is the
+writable partition, and the directory is root-owned, which is the property that matters: the
+installer must not be a file the `deck` user can edit, or the allow-list would be a
+passwordless root shell in disguise.
 
 With that in place, `deck-update.sh` uses it and an update needs no password — which is what
 makes an update pushable over SSH from another machine. Without it, the script inlines the

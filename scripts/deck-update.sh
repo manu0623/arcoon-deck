@@ -60,10 +60,23 @@ if [ "${1:-}" = "--stage" ]; then
   exit 0
 fi
 
-if [ -x /usr/local/bin/arcoon-install ]; then
+# Where the allow-listed installer can live. `/usr/local` is on SteamOS's read-only
+# root image — installing there means disabling the immutable filesystem for the whole
+# machine, which its own updates then trample — so the writable partition's
+# `/var/lib/arcoon` is the real location and `/usr/local/bin` is only a courtesy for
+# other systems.
+INSTALLER=""
+for candidate in "${ARCOON_INSTALLER:-}" /var/lib/arcoon/arcoon-install /usr/local/bin/arcoon-install; do
+  if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+    INSTALLER="$candidate"
+    break
+  fi
+done
+
+if [ -n "$INSTALLER" ]; then
   # Allow-listed, so no password and no terminal on the Deck: this is the path that
   # makes an update pushable from another machine.
-  sudo -n /usr/local/bin/arcoon-install
+  sudo -n "$INSTALLER"
 else
   echo "installing (this is the step that needs the password)"
   sudo rm -rf "$PLUGIN_DIR"
