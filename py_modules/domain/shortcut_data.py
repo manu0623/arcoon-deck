@@ -38,6 +38,19 @@ _EMULATOR_TOKEN_RE = re.compile(r"%EMULATOR_[A-Z0-9_-]+%")
 # placeholders (run_game.sh resolves and quotes them at launch).
 _RETROARCH_CORES_DIR = "/var/config/retroarch/cores"
 
+# ES-DE's ``%EMULATOR_FLATPAK-SPAWN%`` is a SPAWN helper, not an emulator token, and
+# RetroDECK's ``run_game.sh`` defines no such placeholder: it substitutes ``%ROM%``
+# and leaves this one literal, so a baked ``-e`` carrying it tries to exec a binary
+# named ``%EMULATOR_FLATPAK-SPAWN%`` and dies within a second (measured on the
+# reference Deck: a Switch ROM's session lasted 1s and RetroDECK's own log printed
+# the unexpanded token as the command line). The sandbox does ship the helper —
+# ``/usr/bin/flatpak-spawn`` answers ``command -v`` inside the flatpak — so the bake
+# names it outright. This is what lets an AppImage emulator (Eden, Cemu, Citron,
+# DuckStation) launch from a shortcut at all; it is an ES-DE-flavoured token that
+# has to be resolved by whoever writes the command, and that is us.
+_SPAWN_TOKEN = "%EMULATOR_FLATPAK-SPAWN%"
+_SANDBOX_SPAWN = "/usr/bin/flatpak-spawn"
+
 
 @dataclass(frozen=True)
 class EmulatorInvocation:
@@ -53,8 +66,10 @@ class EmulatorInvocation:
       through ``-e``).
     - ``kind == "standalone"`` → ``command`` is the full ES-DE ``<command>`` text
       (already ending in ``%ROM%``, e.g. ``%EMULATOR_RPCS3% --no-gui %ROM%``),
-      baked verbatim into ``-e``. RetroDECK's ``run_game.sh`` resolves
-      ``%EMULATOR_*%`` and substitutes ``%ROM%`` with the trailing rom path.
+      baked verbatim into ``-e``. RetroDECK's ``run_game.sh`` resolves the
+      ``%EMULATOR_*%`` tokens IT defines and substitutes ``%ROM%`` with the trailing
+      rom path; the ES-DE *spawn* helper is not one of them and is resolved here
+      instead (see ``_SPAWN_TOKEN``).
     - ``kind == "direct"`` → the folder-boot form (ADR-0019): ``command`` is the
       same full ES-DE standalone command AND ``launcher`` is the emulator's
       sandbox launcher path (e.g.
@@ -170,9 +185,10 @@ def resolve_emulator_invocation(rom: dict[str, Any], emulator: EmulatorInvocatio
         base = f"flatpak run --command={emulator.launcher} {RETRODECK_APP_ID}"
         return f"{base} {args}" if args else base
     if emulator.kind == "standalone" and emulator.command:
+        # The spawn helper is ours to name: run_game.sh leaves the placeholder literal.
         # An owned launch states the user directory, so the command carries the flag
         # and the save layer reads the same value instead of inferring one.
-        command = emulator.command
+        command = emulator.command.replace(_SPAWN_TOKEN, _SANDBOX_SPAWN)
         if emulator.user_dir is not None:
             # A pin this command cannot carry degrades to the bare command rather than to
             # the plain launch: the game still runs on the emulator that was chosen.

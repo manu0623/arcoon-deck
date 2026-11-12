@@ -113,6 +113,23 @@ class TestResolveEmulatorInvocation:
         # The cores dir is baked literally; %CORE_RETROARCH% is NOT used.
         assert "%CORE_RETROARCH%" not in result
 
+    def test_the_spawn_helper_is_named_rather_than_left_as_a_placeholder(self):
+        # RetroDECK substitutes %ROM% and leaves the ES-DE spawn token literal, so the
+        # baked -e tried to exec a binary named %EMULATOR_FLATPAK-SPAWN% and the
+        # Switch ROM's session lasted one second. The sandbox ships the helper
+        # (/usr/bin/flatpak-spawn answers command -v inside it), so the bake names it.
+        result = resolve_emulator_invocation(
+            {"id": 1},
+            EmulatorInvocation.standalone(
+                "%EMULATOR_FLATPAK-SPAWN% --host /home/deck/Applications/Eden.AppImage -f -g %ROM%"
+            ),
+        )
+        assert "%EMULATOR_FLATPAK-SPAWN%" not in result
+        assert result == (
+            'flatpak run net.retrodeck.retrodeck -e "/usr/bin/flatpak-spawn --host '
+            '/home/deck/Applications/Eden.AppImage -f -g %ROM%"'
+        )
+
     def test_standalone_bakes_command_verbatim(self):
         # A standalone emulator's full ES-DE <command> (already ending in %ROM%) is
         # baked verbatim into -e; RetroDECK expands %EMULATOR_*% and %ROM% at launch.

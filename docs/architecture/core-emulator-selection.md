@@ -34,8 +34,15 @@ of two payloads:
 - **`kind == "libretro"`** — a RetroArch core, identified by its bare `.so` name (`core_so`). Rendered as the
   `-e "%EMULATOR_RETROARCH% -L <coresdir>/<so>.so %ROM%"` form. This is the overwhelming-majority path.
 - **`kind == "standalone"`** — a standalone emulator, identified by its full ES-DE `<command>` text (already ending in
-  `%ROM%`, e.g. `%EMULATOR_RPCS3% --no-gui %ROM%`). Baked verbatim into `-e`. RetroDECK resolves `%EMULATOR_*%` and
-  substitutes `%ROM%` at launch, the same as the libretro form. This is the standalone-emulator seam
+  `%ROM%`, e.g. `%EMULATOR_RPCS3% --no-gui %ROM%`). Baked into `-e`. RetroDECK resolves the `%EMULATOR_*%` tokens it
+  defines and substitutes `%ROM%` at launch, the same as the libretro form — but **only those it defines**, which is why
+  the plugin resolves one token itself: `%EMULATOR_FLATPAK-SPAWN%` is ES-DE's spawn helper, not an emulator, so
+  `run_game.sh` left it literal and the shell tried to exec a binary by that name. A Switch ROM's session lasted one
+  second that way, with RetroDECK's log printing the unexpanded token as the command line. The sandbox ships the helper
+  (`/usr/bin/flatpak-spawn`), so `domain/shortcut_data.py` names it in the bake — the difference between an AppImage
+  emulator (Eden, Cemu, Citron, DuckStation) launching from a shortcut and never starting at all. Read the seam as
+  **an unresolved placeholder is a launch that dies in a second, and nothing in the log says why unless RetroDECK's own
+  log is read**. This is the standalone-emulator seam
   ([#129](https://github.com/danielcopper/decky-romm-sync/issues/129)): a system whose working ES-DE default is a
   standalone emulator (PS2 → PCSX2, PS3 → RPCS3, GameCube/Wii → Dolphin, PSP → PPSSPP, …) launches on that emulator
   instead of a deprecated/absent libretro core.
