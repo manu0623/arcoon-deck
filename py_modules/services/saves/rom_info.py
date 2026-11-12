@@ -325,6 +325,7 @@ class RomInfoService:
         # The SAVE path, asked of the resolver's pick-agnostic read: the picker chooses
         # which program runs, never where the platform keeps its cards.
         managed = self._active_core.managed_save_entry(int(rom_id))
+        self._logger.info(f"SaveService: {platform} managed save entry: {'yes' if managed is not None else 'no'}")
         stated = manifest_answer(managed, content_installed=installed)
         if stated is not None:
             # The provisioner stated both the launch and the save path, so there is nothing
@@ -380,6 +381,10 @@ class RomInfoService:
         folder holds files named ``0``, ``1``, … keyed by nothing at all. The listing is the
         only honest source in both cases.
         """
+        self._logger.info(
+            f"SaveService: {platform} save fill: granularity={answer.granularity} "
+            f"needs={answer.needs} dir={answer.directory}"
+        )
         if canonical_platform(platform) == "gc":
             return self._fill_gci_names(answer, identity=identity, platform=platform)
         if answer.granularity == "title-dir":
