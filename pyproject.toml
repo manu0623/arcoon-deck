@@ -1,0 +1,102 @@
+[tool.basedpyright]
+pythonVersion = "3.11"
+extraPaths = ["py_modules"]
+stubPath = "typings"
+typeCheckingMode = "basic"
+exclude = ["py_modules/_vendor", "node_modules", "scripts", ".venv", ".claude", ".worktrees"]
+reportMissingModuleSource = "none"
+reportMissingImports = "warning"
+reportPrivateUsage = "error"
+reportRedeclaration = "none"
+reportUnusedParameter = "none"
+reportUnusedVariable = "warning"
+reportArgumentType = "error"
+reportUnnecessaryComparison = "error"
+reportUnnecessaryIsInstance = "error"
+reportMissingTypeArgument = "error"
+
+# Tests inspect and rebind private state of the system under test —
+# white-box testing is a deliberate, accepted pattern here. The
+# reportPrivateUsage guardrail targets production encapsulation, not
+# test setup, so it's disabled under tests/. extraPaths is repeated
+# because execution environments do not inherit the top-level value;
+# the repo root "." is added on top so test files can resolve the
+# top-level `main` module and sibling `tests.*` packages (without it,
+# those imports are unresolved and `main.*` symbols degrade to Unknown,
+# a blind spot on the callable surface the tests exercise).
+[[tool.basedpyright.executionEnvironments]]
+root = "tests"
+extraPaths = ["py_modules", "."]
+reportPrivateUsage = "none"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+# `.claude/worktrees` is where this repo's git worktrees live, and `.worktrees` is
+# the convention they were kept under before; both hold whole checkouts of this
+# repo. The gate runs `ruff check .` from the repo root, which walks into them
+# and reports another branch's findings against this one.
+extend-exclude = ["py_modules/_vendor", "./scripts", ".claude", ".worktrees"]
+# Ruff applies extend-exclude to a directory walk but ignores it for a path passed
+# explicitly, unless this is set. .githooks/pre-commit passes staged paths explicitly,
+# so without it the hook reformats the vendored copies it is excluding and breaks the
+# byte-identity that scripts/check_vendored_trees.py exists to prove. Upstream runs no
+# Python formatter at all, so no line-length here rescues it — measured against atlas
+# 0.10.0 (39 modules), `ruff format` rewrites 29 of them at 120, 22 at 100 and 37 at
+# 88, and both of vdf's at every one of the three. Re-measure before trusting those
+# counts: they describe the trees vendored today, not the setting.
+# This covers the whole extend-exclude list, so it also stops the hook formatting and
+# linting ./scripts. That is what the exclude already asked for and CI already did —
+# ruff's walk never reached scripts/ — but the hook was the only thing still checking
+# those files, so they now have no ruff coverage from anywhere.
+force-exclude = true
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "W",    # pycodestyle warnings
+    "I",    # isort
+    "B",    # bugbear — common pitfalls
+    "SIM",  # simplify — unnecessary complexity
+    "UP",   # pyupgrade — modern Python syntax
+    "RUF",   # ruff-specific rules
+    "ARG",   # unused arguments
+    "ASYNC", # flake8-async — blocking I/O in async functions
+    "RET",   # flake8-return
+    "C4",    # flake8-comprehensions
+    "PIE",   # flake8-pie
+    "PERF",  # perflint
+    "TC",   # flake8-type-checking
+    "TID251", # banned-api — the table below is the whole of what this enables
+]
+
+[tool.ruff.lint.per-file-ignores]
+"main.py" = ["E402"]
+# pytest-asyncio test bodies legitimately do blocking setup I/O (open,
+# os.path) — ASYNC's event-loop concern is a production-only worry, not
+# a test one, so the group is disabled under tests/ (same rationale as ARG).
+"tests/**" = ["ARG", "ASYNC"]
+# TID251 is deliberately absent from every entry above: the ban below carries no
+# per-file-ignore, in tests least of all — tests are where the banned call lived.
+# That is the whole of the claim. The ban reaches only what ruff walks, so the
+# trees `extend-exclude` drops — `py_modules/_vendor`, `./scripts`, `.claude`,
+# `.worktrees` — never see it; no tracked call site in them spells it today (the one
+# tracked file that names it at all is `.claude/rules/testing-backend.md`, which
+# states the ban in prose and which ruff would not read either way), and
+# `./scripts` has no ruff coverage from anywhere (see the force-exclude note
+# above).
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+# TID251 flags the attribute call, not only an import of the name, so this reaches
+# every spelling the repo used. ``asyncio.get_event_loop()`` answered with the
+# thread's default loop, which is how a synchronous pytest fixture got hold of the
+# loop its test would run on; pytest-asyncio 1.4.0 stopped creating that implicit
+# loop and the call raised instead (#806). Code already inside the loop asks for
+# the running loop; a sync fixture hands the service ``tests/fakes/running_loop.py``,
+# which resolves one at the moment the service uses it.
+"asyncio.get_event_loop".msg = "Use asyncio.get_running_loop() — get_event_loop() has no implicit loop left to answer with (#806)."
+
+[tool.ruff.lint.isort]
+known-first-party = ["lib", "domain", "services", "adapters"]
+known-third-party = ["_vendor", "decky"]

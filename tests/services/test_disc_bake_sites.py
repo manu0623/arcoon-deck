@@ -1,0 +1,191 @@
+"""The disc resolver is honored at all three launch-bake sites.
+
+Each site re-bakes ``launch_options`` from a per-ROM path. With a multi-disc ROM
+pinned to disc 2, the baked path must be disc 2's path — proving the resolver is
+threaded through. A non-multi-disc ROM (the FakeDiscResolver with no discs
+seeded for its directory) resolves to its own ``file_path`` unchanged, which the
+existing per-site happy-path tests already assert; here we pin the disc-aware
+behavior.
+
+Bake sites covered:
+  * ``services.library.shortcut_launch_resolver`` — the ``installed_paths`` map
+    both the preview scan and the per-unit apply read hand to the bake.
+  * ``services.rom_install_recorder`` — ``do_resolve_launch_bake``, which both a
+    completed download and an adoption re-bake through.
+
+The migration relaunch path (``services.migration.service._build_relaunch_items``) and
+the startup reconcile both bake through the shared ``RelaunchOptionsResolver``;
+its disc-pin behavior is pinned in ``test_relaunch_options_resolver.py``.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+
+import pytest
+from fakes.fake_active_core_resolver import FakeActiveCoreResolver
+from fakes.fake_disc_resolver import FakeDiscResolver
+from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
+from fakes.system_time import FakeClock
+
+from domain.disc_selection import Disc
+from domain.rom import Rom
+from domain.rom_install import RomInstall
+
+_ROM_DIR = "/roms/psx/game-1"
+_DISC1 = "Game (Disc 1).cue"
+_DISC2 = "Game (Disc 2).cue"
+_DISC1_PATH = f"{_ROM_DIR}/{_DISC1}"
+_DISC2_PATH = f"{_ROM_DIR}/{_DISC2}"
+
+
+def _discs() -> list[Disc]:
+    return [
+        Disc(filename=_DISC1, path=_DISC1_PATH, label="Disc 1", index=1),
+        Disc(filename=_DISC2, path=_DISC2_PATH, label="Disc 2", index=2),
+    ]
+
+
+def _seed_multi_disc(
+    uow: FakeUnitOfWork,
+    *,
+    rom_id: int,
+    selected_disc: str | None,
+    app_id: int | None = 99,
+    launchable: bool = True,
+) -> None:
+    with uow:
+        uow.roms.save(
+            Rom(
+                rom_id=rom_id,
+                platform_slug="psx",
+                name=f"rom-{rom_id}",
+                fs_name=f"rom-{rom_id}",
+                shortcut_app_id=app_id,
+                last_synced_at="2026-01-01T00:00:00+00:00",
+            )
+        )
+        uow.rom_installs.save(
+            RomInstall(
+                rom_id=rom_id,
+                file_path=_DISC1_PATH,
+                rom_dir=_ROM_DIR,
+                platform_slug="psx",
+                system="psx",
+                installed_at="2026-01-01T00:00:00+00:00",
+                launchable=launchable,
+            )
+        )
+        if selected_disc is not None:
+            uow.roms.set_selected_disc(rom_id, selected_disc)
+
+
+@pytest.fixture
+def event_loop():
+    loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
+
+
+@pytest.fixture
+def disc_resolver() -> FakeDiscResolver:
+    resolver = FakeDiscResolver()
+    resolver.set_discs(_ROM_DIR, _discs())
+    return resolver
+
+
+# ── library-sync bake site ───────────────────────────────────────────────
+
+
+class TestLibrarySyncBakeSite:
+    def _launch_resolver(self, uow_factory, disc_resolver):
+        from services.library.shortcut_launch_resolver import ShortcutLaunchResolver, ShortcutLaunchResolverConfig
+
+        return ShortcutLaunchResolver(
+            config=ShortcutLaunchResolverConfig(
+                uow_factory=uow_factory,
+                active_core=FakeActiveCoreResolver(default=(None, None)),
+                disc_resolver=disc_resolver,
+            )
+        )
+
+    def test_scan_installed_paths_honors_pin(self, disc_resolver):
+        uow = FakeUnitOfWork()
+        _seed_multi_disc(uow, rom_id=1, selected_disc=_DISC2)
+        resolver = self._launch_resolver(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
+        assert resolver.do_scan_installed_paths() == {1: _DISC2_PATH}
+
+    def test_read_installed_paths_honors_pin(self, disc_resolver):
+        uow = FakeUnitOfWork()
+        _seed_multi_disc(uow, rom_id=1, selected_disc=_DISC2)
+        resolver = self._launch_resolver(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
+        assert resolver.do_read_installed_paths({1}) == {1: _DISC2_PATH}
+
+    def test_scan_installed_paths_unpinned_defaults_to_disc_1(self, disc_resolver):
+        uow = FakeUnitOfWork()
+        _seed_multi_disc(uow, rom_id=1, selected_disc=None)
+        resolver = self._launch_resolver(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
+        # file_path is disc 1 (not an m3u) → default resolves to disc 1.
+        assert resolver.do_scan_installed_paths() == {1: _DISC1_PATH}
+
+    def test_scan_installed_paths_maps_an_unlaunchable_install_to_the_empty_path(self, disc_resolver):
+        # The ROM stays IN the map — it IS downloaded, and collapse_sibling_groups
+        # reads the key set to pick a group's representative — but carries no
+        # launch path, so build_shortcuts_data emits the empty launch command (#1652).
+        uow = FakeUnitOfWork()
+        _seed_multi_disc(uow, rom_id=1, selected_disc=_DISC2, launchable=False)
+        resolver = self._launch_resolver(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
+        assert resolver.do_scan_installed_paths() == {1: ""}
+
+    def test_read_installed_paths_maps_an_unlaunchable_install_to_the_empty_path(self, disc_resolver):
+        uow = FakeUnitOfWork()
+        _seed_multi_disc(uow, rom_id=1, selected_disc=_DISC2, launchable=False)
+        resolver = self._launch_resolver(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
+        assert resolver.do_read_installed_paths({1}) == {1: ""}
+
+
+# ── install-recorder bake site ───────────────────────────────────────────
+
+
+class TestInstallRecorderBakeSite:
+    """The bake both a completed download and an adoption resolve through."""
+
+    def _recorder(self, uow_factory, disc_resolver):
+        from services.rom_install_recorder import RomInstallRecorder, RomInstallRecorderConfig
+
+        return RomInstallRecorder(
+            config=RomInstallRecorderConfig(
+                logger=logging.getLogger("test_disc_bake"),
+                clock=FakeClock(),
+                uow_factory=uow_factory,
+                system_extensions=lambda system_name: frozenset(),
+                active_core=FakeActiveCoreResolver(default=(None, None)),
+                disc_resolver=disc_resolver,
+            )
+        )
+
+    def test_resolve_launch_bake_bakes_the_pinned_disc(self, disc_resolver):
+        uow = FakeUnitOfWork()
+        _seed_multi_disc(uow, rom_id=1, selected_disc=_DISC2, app_id=1234)
+        recorder = self._recorder(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
+        app_id, launch_options = recorder.do_resolve_launch_bake(1, {}, _DISC1_PATH)
+        assert app_id == 1234
+        assert launch_options.endswith(f'"{_DISC2_PATH}"')
+
+    def test_resolve_launch_bake_unpinned_defaults_to_disc_1(self, disc_resolver):
+        uow = FakeUnitOfWork()
+        _seed_multi_disc(uow, rom_id=1, selected_disc=None, app_id=1234)
+        recorder = self._recorder(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
+        _app_id, launch_options = recorder.do_resolve_launch_bake(1, {}, _DISC1_PATH)
+        assert launch_options.endswith(f'"{_DISC1_PATH}"')
+
+    def test_resolve_launch_bake_returns_the_empty_command_for_an_unlaunchable_install(self, disc_resolver):
+        # download_complete's re-bake reads through the same seam, so the freshly
+        # downloaded ROM's shortcut gets no launch command either (#1652).
+        uow = FakeUnitOfWork()
+        _seed_multi_disc(uow, rom_id=1, selected_disc=_DISC2, app_id=1234, launchable=False)
+        recorder = self._recorder(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
+        app_id, launch_options = recorder.do_resolve_launch_bake(1, {}, _DISC1_PATH)
+        assert app_id == 1234
+        assert launch_options == ""

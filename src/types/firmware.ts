@@ -1,0 +1,453 @@
+/**
+ * Firmware and BIOS types — server-side firmware inventory, local BIOS
+ * file status, and the available-cores selection presented in the UI.
+ */
+
+/**
+ * What the machine answers about one firmware file, in the four values the
+ * resolver's per-file answer and the reading's completeness together produce.
+ * `not_needed` is a finished answer — every emulator the platform offers was
+ * read and none asks for the file — while `unknown` is the absence of one. They
+ * are never folded together: the collapse is what made a file the plugin could
+ * not ask about look like a file nothing wanted.
+ */
+export type FirmwareWanted = "needed" | "optional" | "not_needed" | "unknown";
+
+/**
+ * What the emulator opens a firmware declaration AT — a file it reads, or a
+ * folder it lists. A property of the DECLARATION, so it survives an empty
+ * destination: a folder that is not there is still a folder to create, never a
+ * file to fetch, which is why no download affordance may offer such a row.
+ */
+export type FirmwareDeclaredKind = "file" | "directory";
+
+/**
+ * How the emulator that supplied a row's `description` stated what it wants, in
+ * the resolver's own vocabulary and carried verbatim.
+ *
+ * `"read"` is a libretro core's own `.info`, read off the machine beside it, and
+ * its description is the packager's LABEL for the file — `"(PS1 JP BIOS)"` on a
+ * row named `scph5500.bin`, which is a region the name does not state.
+ * `"packaged"` is the card atlas keeps for an emulator
+ * shipping no declaration of its own, and its description is atlas explaining
+ * the REQUIREMENT in whole sentences — "a PlayStation BIOS image — the console
+ * runs it before any disc, and DuckStation starts nothing without one". The two
+ * are the same field and are not the same kind of prose, which is the whole
+ * reason this value travels.
+ *
+ * The resolver states three further words (`absent`, `unreadable`,
+ * `unsupported`), and none of them can reach a row here: an entry in one of
+ * those states carries no requirement, so it declares no file and puts no
+ * description on one. They are in the type because the value is the resolver's
+ * and narrowing it to the two we see would be our own claim about its
+ * vocabulary.
+ */
+export type FirmwareDeclarationState = "read" | "packaged" | "absent" | "unreadable" | "unsupported";
+
+/**
+ * What became of a row's BYTES, in the resolver's own stable vocabulary, carried
+ * verbatim like {@link FirmwareDeclarationState}.
+ *
+ * Eight values and they are not one axis. Three say a comparison HAPPENED and
+ * differ in what it found — `verified` (the bytes are the pinned ones),
+ * `mismatch` (they are not), `unrecognised` (they were read and no table the
+ * emulator keeps knows them, which DuckStation boots anyway with a warning) —
+ * while `unread` says the bytes were asked for and did not come back, and
+ * `unchecked` that nothing asked. `refused` is the emulator declining to open
+ * the file at all on its size, before reading a byte.
+ *
+ * It is not a second verdict and never read as one: `satisfied` says whether the
+ * requirement is met, this says what was done to establish it. What it exists
+ * for is that `satisfied: null` alone cannot tell "the file was read and is
+ * unknown to the emulator" from "its bytes could not be read", and the surfaces
+ * worded both as the second. Absent for a payload from before the field existed
+ * and `null` wherever the reading asked no content question at all, which is the
+ * ordinary answer for a file that is simply not there.
+ */
+export type FirmwareChecked =
+  "verified" | "mismatch" | "unchecked" | "unknown" | "not-comparable" | "unrecognised" | "refused" | "unread";
+
+/**
+ * The reading's answer about one row, carried on both row shapes.
+ *
+ * `satisfied` is the verdict and the axis the REQUIRED counts key off: the
+ * requirement is met, is not met, or nothing established which. It is not
+ * `downloaded` — for a folder declaration the two come apart completely, since
+ * what satisfies the core is a file *inside* the folder and RetroDECK links
+ * LRPS2's `pcsx2/bios` onto the BIOS root, so the folder is always there. The
+ * library's held/offered ratio is a third axis and keys off neither.
+ *
+ * `caveats` are the resolver's own stable codes for what it found, and `images`
+ * names what a satisfied folder holds, in the resolver's own words. A surface
+ * takes the CAUSE of a verdict from those, because `satisfied` is deliberately
+ * the verdict alone and carries none of it.
+ *
+ * `declaration` is not a verdict but rides with them because it is the same
+ * kind of fact — the resolver's own word, carried verbatim, for a row nobody
+ * here re-derives. See {@link FirmwareDeclarationState}.
+ */
+interface FirmwareVerdict {
+  satisfied?: boolean | null;
+  declared_kind?: FirmwareDeclaredKind;
+  /** Which register this row's `description` is written in — see
+   *  {@link FirmwareDeclarationState}. Absent for a row nothing declared, and
+   *  for a payload from before the field existed. */
+  declaration?: FirmwareDeclarationState;
+  /** What became of this row's bytes — see {@link FirmwareChecked}. */
+  checked?: FirmwareChecked | null;
+  caveats?: string[];
+  images?: string[];
+}
+
+interface FirmwareFile extends FirmwareVerdict {
+  /** `null` for a file an installed emulator asks for that the RomM library does
+   *  not hold — there is no server record to name. Nothing reads it: what the
+   *  page filters the download buttons and its progress totals on is
+   *  `on_server`. */
+  id: number | null;
+  file_name: string;
+  size: number;
+  md5: string;
+  local_path: string;
+  /** Where the emulator said the file goes, relative to the firmware root —
+   *  `dc/dc_boot.bin` where a subdirectory was declared, the bare name
+   *  otherwise. `file_name` is its basename and `local_path` is it joined under
+   *  a root this side does not know, so this is the only field that can answer
+   *  which folder a file placed by hand belongs in. Optional because a payload
+   *  from before the field existed carries none. */
+  declared_path?: string;
+  downloaded: boolean;
+  description: string;
+  wanted: FirmwareWanted;
+  /** Whether the platform's launching core is the one that requires it — the
+   *  axis the "BIOS needed" badge and the required counts key off, distinct
+   *  from `wanted`, which is about every installed emulator. */
+  required_by_active: boolean;
+  /** Whether this row is one of the images that would answer the platform's
+   *  launching core CONSOLE on its own — see {@link SystemImage}. Set only where
+   *  that core marks nothing required, which is the only shape in which "one of
+   *  these" is the whole of what the core says; a core that does state required
+   *  files carries the same demand on those rows as `required_by_active`.
+   *  Absent claims nothing. */
+  system_image_candidate?: boolean;
+  on_server: boolean;
+  supplied_by?: string | null;
+  /** How many of the plugin's own downloads a delete on THIS row would remove:
+   *  1 for a declared file a download record names and still holds, and for a
+   *  declared FOLDER the number of recorded files written underneath it — the
+   *  emulator lists the folder, but whatever we downloaded into it is ours.
+   *  Having placed a file is the whole authority to remove it.
+   *
+   *  **Never substitute `downloaded` for this.** That is `os.path.exists` at the
+   *  row's recomputed destination, equally true of firmware the emulator shipped
+   *  with (`dolphin-emu/Sys/codehandler.bin`) and of a file the user placed by
+   *  hand — neither of which any RomM library can hand back. Absent means the
+   *  payload never spoke about it, which offers no delete rather than guessing. */
+  deletable_count?: number;
+}
+
+/**
+ * One platform as the `get_firmware_status` overview names it — and the whole of
+ * what that call says about it.
+ *
+ * The overview answers WHICH platforms the page can speak for; what each one's
+ * BIOS state IS costs a live per-system reading (64-350 ms on the reference
+ * machine), asked for one platform at a time through
+ * `get_platform_firmware_status`. So there is deliberately no level, no count
+ * and no file list here: every field a surface could colour a dot or word a
+ * sentence from belongs to the answer that did the reading, and one that leaked
+ * onto this payload would be rendered over a platform nobody has asked about
+ * yet.
+ */
+export interface FirmwarePlatformNamed {
+  platform_slug: string;
+  has_games?: boolean;
+}
+
+/**
+ * One ES-DE `<command>` classified for launch-bakeability (#1210), the shape the
+ * backend `get_emulator_options` / picker payloads carry. `kind` is `"libretro"`
+ * (`core_so` set to the bare core name) or `"standalone"` (`core_so` null).
+ * `bakeable` is false for the `needs_setup` (`reason: "inject"`) and un-bakeable
+ * forms; `reason` names why the frontend can't offer it as a clickable pick.
+ *
+ * `emulator` is the resolver's identity for the emulator behind the row and the
+ * only field that names one for BOTH kinds — `dolphin_libretro.so` for a
+ * libretro entry, `DUCKSTATION` for a standalone one. It is what a firmware
+ * row's per-emulator entries (`BiosFileStatus.cores`) are keyed on, so it is the
+ * join between a picker row and a BIOS answer; `core_so` carries no extension
+ * and is null for every standalone emulator, and `label` identifies a ROW rather
+ * than an emulator — ES-DE lists one `pcsx2_libretro.so` as both `LRPS2` and
+ * `PCSX2`. `null` is an emulator the resolver could not identify, which nothing
+ * may be keyed on.
+ */
+export interface EmulatorOption {
+  label: string;
+  kind: "libretro" | "standalone";
+  core_so: string | null;
+  emulator: string | null;
+  is_default: boolean;
+  bakeable: boolean;
+  reason: string | null;
+}
+
+/**
+ * Response shape of the `get_platform_core_info` callable — the dedicated
+ * single-platform emulator-info path, decoupled from the per-game BIOS payload
+ * (#923). The per-game detail page (`RomMPlaySection` / `RomMGameInfoPanel`)
+ * reads emulator data from here; the platform-keyed twin for a caller with no
+ * ROM to layer is {@link SystemCoreInfo}. `emulator_data_available` is false
+ * when `es_systems.xml` cannot be read (RetroDECK not detected), so the picker
+ * can say so instead of an empty list.
+ */
+export interface CoreInfo {
+  emulators: EmulatorOption[];
+  emulator_data_available: boolean;
+  /** The IDENTITY of the emulator this ROM launches with — the same spelling the
+   *  picker rows carry in {@link EmulatorOption.emulator} and the same one a
+   *  firmware row's `cores` map is keyed on, so the BIOS tab can highlight the
+   *  line its answer was scoped to. Never the bare `core_so`: that names no
+   *  standalone emulator and is a second spelling of a libretro one. */
+  active_core: string | null;
+  active_core_label: string | null;
+  platform_core_label: string | null;
+  has_game_override: boolean;
+}
+
+/**
+ * Response shape of the `get_system_core_info` callable — the platform-keyed
+ * core read the Library page's Platforms detail issues once per selected
+ * platform (#1815). Carries what the core picker needs and nothing else: no
+ * per-game layer (there is no ROM), and no BIOS data (the detail's table reads
+ * that off `get_firmware_status`).
+ *
+ * `active_core_label` is the platform-layer resolution — the per-platform
+ * override when it still resolves to a bakeable emulator, else the es_systems
+ * default — so in both ordinary cases it IS the emulator's name. `null` means
+ * no option is BAKEABLE, which is not the same as there being none: a menu of
+ * uninstalled standalone emulators answers `null` with `emulators.length >= 1`.
+ * RetroDECK then resolves the emulator itself at launch, and the Library page
+ * says that rather than printing a name or claiming a failure.
+ *
+ * There is no `success`, for the reason its sibling has none: the callable has
+ * no in-band failure to report. What can go wrong — an unreadable
+ * `es_systems.xml` — is already `emulator_data_available: false`, and anything
+ * else raises, which reaches the caller as a rejected promise.
+ */
+export interface SystemCoreInfo {
+  emulators: EmulatorOption[];
+  emulator_data_available: boolean;
+  active_core_label: string | null;
+}
+
+/**
+ * One platform's whole BIOS state — the answer `get_platform_firmware_status`
+ * gives for the platform it was asked about, and what the Platforms detail
+ * renders.
+ *
+ * The library-wide path, distinct from the per-game `check_platform_bios`
+ * payload, which no longer carries any core fields (#923). Its core fields are
+ * a second answer to {@link SystemCoreInfo}'s question, kept because they cost
+ * nothing extra once this platform's catalogue has been read; a platform the
+ * backend has nothing to say about answers with no entry at all, which is why
+ * the Platforms detail asks the core read directly rather than joining onto
+ * this one.
+ *
+ * `files` is the union of what the RomM library offers for the platform and what
+ * the platform's emulators ask for, so a row can be present with `on_server`
+ * false — wanted, possibly missing, and not downloadable from here.
+ */
+export interface FirmwarePlatformExt extends FirmwarePlatformNamed {
+  files: FirmwareFile[];
+  all_downloaded?: boolean;
+  /** The platform pick's IDENTITY — the same space as {@link CoreInfo.active_core}
+   *  and as a row's `cores` keys. Its label is the field below, and both are
+   *  projections of ONE backend resolution. */
+  active_core?: string;
+  active_core_label?: string;
+  emulators?: EmulatorOption[];
+  emulator_data_available?: boolean;
+  // Per-platform BIOS aggregates computed by the backend from the same
+  // core-aware classified files (`compute_bios_level`), so the platform detail
+  // reads the unknown/ok/partial/missing decision and display counts off the
+  // payload instead of re-deriving the threshold logic. The optional-missing
+  // breakdown stays a local file-level computation (a richer axis the level
+  // doesn't model).
+  bios_level?: BiosLevel | null;
+  required_count?: number;
+  required_downloaded?: number;
+  /** How many of `required_count` nothing could judge — see `BiosStatus`. Above
+   *  zero it is why `bios_level` is `"unknown"`, and it is what separates that
+   *  from a platform nothing could speak for: here the rows have answers and
+   *  only the one-line verdict declines, so the downloads stay. */
+  required_withheld?: number;
+  /** The console's own firmware demand on the launching core — see
+   *  {@link SystemImage}. Absent on a payload from before the field existed,
+   *  which reads as the neutral answer. */
+  system_image?: SystemImage;
+  server_count?: number;
+  local_count?: number;
+  known_count?: number;
+  unknown_count?: number;
+  /** How many files Delete BIOS would remove: download records this plugin
+   *  wrote whose file is still on disk. Deliberately not `local_count` — that is
+   *  the library's progress ratio, which counts files nothing here put on disk
+   *  and drops our own downloads once RomM stops listing them. */
+  deletable_count?: number;
+}
+
+export interface FirmwareStatus {
+  success: boolean;
+  message?: string;
+  server_offline?: boolean;
+  platforms: FirmwarePlatformNamed[];
+}
+
+/**
+ * One platform's answer from `get_platform_firmware_status`.
+ *
+ * `platform` is `null` where the backend has nothing to say — a platform the
+ * RomM library holds no firmware for, whose reading finished and found its
+ * emulators want none either. That is a FINISHED answer and not a failure: a
+ * read that never came back is a rejected promise, and the page words the two
+ * differently.
+ */
+export interface PlatformFirmwareStatus {
+  success: boolean;
+  message?: string;
+  platform: FirmwarePlatformExt | null;
+}
+
+export interface BiosFileStatus extends FirmwareVerdict {
+  file_name: string;
+  downloaded: boolean;
+  local_path: string;
+  /** Where the emulator said the file goes, relative to the firmware root —
+   *  `dc/dc_boot.bin` where a subdirectory was declared, the bare name
+   *  otherwise. `file_name` is its basename and `local_path` is it joined under
+   *  a root this side does not know, so this is the only field that can answer
+   *  which folder a file placed by hand belongs in. Optional because a payload
+   *  from before the field existed carries none. */
+  declared_path?: string;
+  description: string;
+  wanted: FirmwareWanted;
+  /** Whether the core THIS game launches with requires the file. `wanted` is the
+   *  machine's answer about the file; this one is the launch's. */
+  required_by_active: boolean;
+  /** Per emulator that declares the file, keyed on its IDENTITY
+   *  ({@link EmulatorOption.emulator}) — the one spelling that names a
+   *  standalone emulator as well as a libretro core: what that emulator's own
+   *  `.info` says about it (`required`), and — where its CONSOLE needs an image
+   *  and it marks nothing required — how many files that one demand is spread
+   *  over (`needs_one_of`). Two speakers, so the pair `optional` + `needs_one_of` is
+   *  not a contradiction: it is a core saying "any one of my five will do", and
+   *  it is the case a surface has to be able to word. `needs_one_of` is null or
+   *  absent for every other core, including one whose console demands an image
+   *  and that marks files required — there the demand reaches the reader as
+   *  those rows' own `required`. */
+  cores?: Record<string, { required: boolean; needs_one_of?: number | null }>;
+  /** Whether this row is one of the images that would answer the launching
+   *  core's CONSOLE on its own — the row-level read of the same `needs_one_of`
+   *  answer. Absent claims nothing. */
+  system_image_candidate?: boolean;
+  used_by_active?: boolean;
+  /** False for a file an emulator asks for that the RomM library does not hold.
+   *  It still counts as missing — it just cannot be fetched from the plugin. */
+  on_server?: boolean;
+  /** The distribution whose own copy is sitting at the destination, as the
+   *  resolver writes that distribution's name — printed verbatim, never mapped
+   *  to a display form of ours. Absent claims nothing: the resolver states it
+   *  only where it established the provenance. */
+  supplied_by?: string | null;
+}
+
+/**
+ * The backend's readiness decision for a platform's BIOS. `"unknown"` means no
+ * readiness claim could be established, in one of three shapes: the server holds
+ * firmware and not one file of it could be answered for; the platform holds no
+ * file at all and its reading was not complete, which is already the case when a
+ * single core the system offers went unread; or the launching core requires a
+ * row nothing could judge (`required_withheld`) — a declared folder the resolver
+ * could not read, say. A neutral state, never a green all-clear — and in the
+ * third shape not a red one either, which is why the count comes with it.
+ */
+export type BiosLevel = "ok" | "partial" | "missing" | "unknown";
+
+/**
+ * Whether the core this platform launches with has the image its CONSOLE cannot
+ * start without — the backend's `classify_system_image`, and a value rather than
+ * a count because the requirement is a DISJUNCTION: the console asks for one of
+ * the images the core declares, not for each of them. A libretro `.info` has no
+ * way to say that, so such a core marks every image optional and the file counts
+ * alone read "nothing required" over a system that will not boot.
+ *
+ * `"not_demanded"` is the neutral answer and covers four recordings that all
+ * leave the file rows to speak for themselves — including "nothing is recorded
+ * about this console", which is an unasked question and never an all-clear. Every
+ * surface renders it as no sentence at all rather than as a green one.
+ */
+export type SystemImage = "not_demanded" | "held" | "absent" | "unsettled";
+
+export interface BiosStatus {
+  needs_bios: boolean;
+  server_count?: number;
+  local_count?: number;
+  all_downloaded?: boolean;
+  required_count?: number;
+  required_downloaded?: number;
+  /** How many of `required_count` nothing could judge — rows whose `satisfied`
+   *  is null, such as a declared folder the resolver could not read. Nothing
+   *  about the requirement was established, so such a row raises neither
+   *  `required_downloaded` nor the count of files known to be absent — subtract
+   *  it from `required_count` for that. Above zero, the readiness verdict
+   *  declines (`bios_level` `"unknown"`) while the file rows keep their own
+   *  answers. A row answered `false` is NOT here: that is a requirement shown to
+   *  be unmet, and it reads red like any other. */
+  required_withheld?: number;
+  /** The console's own firmware demand on the launching core — see
+   *  {@link SystemImage}. It is deliberately NOT in `required_count`: that count
+   *  is files each individually required, and this one is "one of these". */
+  system_image?: SystemImage;
+  /** The NAME of the emulator every answer here was scoped to — the label half
+   *  of the one pick the backend filtered these counts by, taken off that same
+   *  resolution rather than resolved again, so a sentence over them cannot name
+   *  one emulator while the counts under it are about another. Not the picker's
+   *  data: which emulators a platform offers, and the identity this one is keyed
+   *  on, reach the frontend through `get_platform_core_info` and not from here.
+   *  `null` or absent where no pick could be made or it carries no label, and a
+   *  surface then words its sentence without a name rather than inventing one. */
+  active_core_label?: string | null;
+  // Server files an installed emulator asks for, and files nothing could answer
+  // about. A `not_needed` file is in neither — it is answered for, and wanted by
+  // nothing — which is what keeps "nothing here is needed" apart from "nothing
+  // could be established".
+  known_count?: number;
+  unknown_count?: number;
+  files?: BiosFileStatus[];
+  // unknown/ok/partial/missing state computed by the backend (compute_bios_level)
+  // so the frontend reads the decision off the payload instead of re-deriving the
+  // threshold logic. Present only when needs_bios is true.
+  bios_level?: BiosLevel | null;
+  // The compact token for that level (compute_bios_label), derived beside it so
+  // the two can never disagree. Present only when needs_bios is true.
+  bios_label?: string;
+  // Set when the check could not determine the requirement — it found no file
+  // to speak for AND its reading of the platform's emulators was not complete,
+  // which one unread core is already enough for, so it cannot say that nothing
+  // is wanted. A failed firmware fetch alone does not raise it: the listing is
+  // caught and the file list simply comes back empty, which the machine's own
+  // answer can still fill. The `needs_bios: false` it rides on is
+  // ignorance, not an answer, so no consumer may clear a shown requirement on it
+  // (#1693) — and the panel renders it as its own state rather than hiding the
+  // BIOS tab, which would say the same thing (#1660).
+  bios_status_unknown?: boolean;
+}
+
+export interface FirmwareDownloadResult {
+  success: boolean;
+  message?: string;
+  file_path?: string;
+  md5_match?: boolean | null;
+  downloaded?: number;
+  blocked_by_migration?: boolean;
+}

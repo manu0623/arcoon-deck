@@ -1,0 +1,350 @@
+"""Classify ES-DE ``<command>`` strings into safely-bakeable emulator options.
+
+Given the label + command text of one ES-DE ``<command>``, decide whether the
+plugin can bake it into a Steam shortcut's ``-e`` override — a real emulator
+invocation ending in ``%ROM%`` — and whether it is a RetroArch libretro core or
+a standalone emulator. The system-layer default is the first *safely-bakeable*
+command in document order; the emulator picker offers every command annotated
+with its bakeability and, when it cannot be baked, the reason.
+
+Pure compute only — takes the ``(label, text)`` pairs of one catalogue entry,
+which :mod:`adapters.atlas_catalogue` reads off ``es_systems.xml``, and returns
+value objects. The launch-bake itself (``EmulatorInvocation`` → the ``-e``
+string) lives in :mod:`domain.shortcut_data`; this module only decides *which*
+command becomes that invocation.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, replace
+from typing import Any, Protocol
+
+from domain.shortcut_data import EmulatorInvocation
+
+# A RetroArch libretro command in the exact shape the plugin bakes: the
+# RetroArch launcher, ``-L`` the core ``.so``, then ``%ROM%``. The captured
+# group is the bare libretro core name (no ``.so``).
+_LIBRETRO_RE = re.compile(r"^%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/([\w-]+_libretro)\.so %ROM%$")
+
+_PLACEHOLDER_RE = re.compile(r"%[^%]+%")
+
+# Placeholders ES-DE's ``run_game.sh`` resolves that a baked ``-e`` override can
+# safely carry verbatim. ``%EMULATOR_*%`` (any emulator binary token, e.g.
+# ``%EMULATOR_RPCS3%``) is accepted by prefix, not listed here. ``%STARTDIR%``
+# is "known" (so it is not flagged as an unknown placeholder) but is rejected on
+# its own by the dedicated startdir rule — run_game.sh parses-but-drops it, so a
+# baked command that relies on it would launch from the wrong directory.
+_KNOWN_PLACEHOLDERS = frozenset(
+    {
+        "%ROM%",
+        "%CORE_RETROARCH%",
+        "%GAMEDIR%",
+        "%GAMEDIRRAW%",
+        "%ROMPATH%",
+        "%BASENAME%",
+        "%FILENAME%",
+        "%ROMRAW%",
+        "%STARTDIR%",
+    }
+)
+
+
+@dataclass(frozen=True)
+class EmulatorOption:
+    """One ES-DE ``<command>`` classified for launch-bakeability.
+
+    ``label`` is ES-DE's display label — the pick key the per-game/per-platform
+    override stores. ``kind`` is ``"libretro"`` (a RetroArch core; ``core_so``
+    is its bare name) or ``"standalone"`` (``core_so`` is ``None``).
+    ``command`` is the raw ES-DE command text, retained so a standalone option
+    can be rendered into an ``EmulatorInvocation`` (a libretro option rebuilds
+    from ``core_so``); it is not exposed on the frontend payload.
+
+    ``status`` is the bake verdict:
+
+    - ``"bakeable"`` — a real emulator invocation ending in ``%ROM%`` the plugin
+      can bake into a shortcut ``-e`` override (``reason`` is ``None``).
+    - ``"needs_setup"`` — a command that is well-formed but not yet launchable
+      from Steam as-is: a ``%INJECT%`` form that needs ES-DE to generate a
+      sidecar first (reason ``"inject"``), or a standalone emulator that is not
+      installed in RetroDECK (reason ``"not_installed"``, applied post-hoc by
+      :func:`downgrade_if_not_installed` from the adapter's on-disk probe).
+    - ``"unbakeable"`` — cannot be baked; ``reason`` says why.
+
+    ``reason`` is ``None`` when bakeable, else one of ``"inject"``,
+    ``"not_installed"``, ``"shortcut_script"``, ``"no_rom_target"``,
+    ``"quoting"``, ``"startdir"``, ``"unknown_placeholder"``.
+
+    ``emulator`` is the resolver's identity for the emulator behind this row, and
+    it is what a firmware answer is joined and scoped on — the one field that
+    names a standalone emulator, which ``core_so`` cannot. It is not derivable
+    from ``label``: ES-DE lists one ``pcsx2_libretro.so`` as both ``LRPS2`` and
+    ``PCSX2``, so two labels can be one emulator. ``None`` is an emulator the
+    resolver could not identify, and nothing may be scoped to it.
+    """
+
+    label: str
+    kind: str
+    core_so: str | None
+    command: str
+    status: str
+    reason: str | None
+    emulator: str | None
+
+
+class LaunchingEmulator(Protocol):
+    """The one emulator a set of firmware answers is about, carried as ONE value.
+
+    Both projections a surface needs come off it: ``emulator`` is the identity
+    every firmware answer is joined and scoped on, ``label`` the name a sentence
+    prints. They travel together so that no caller can hand the filter one
+    emulator's identity and the sentence beside it another's name — the pane
+    that displayed a just-picked PCSX ReARMed while judging the platform by the
+    libretro default was two calls agreeing by coincidence until an override was
+    set. There is no pair here to get wrong: the pick IS the value, and each
+    projection is read off it.
+
+    A structural type rather than a class of its own, because both resolutions
+    that answer this question already state both fields — :class:`EmulatorOption`
+    for a platform's pick, :class:`~domain.shortcut_data.EmulatorInvocation` for
+    a ROM's — and a wrapper would be a third spelling of what they already are.
+
+    **Those two answer two different questions**, and this type does not merge
+    them: it carries the pick the CALLER's question is about — a platform's, for
+    a question about a platform; a ROM's, for a question about a ROM — never "the
+    platform's pick" as such. A parameter typed with it therefore takes its
+    caller's question and chooses nothing itself; where the caller has no pick to
+    state, ``None`` says so and the callee falls back in its own terms. The
+    distinction is the one ``ActiveCoreResolver`` exists to make (a per-game pin
+    over the per-platform override over the es_systems default), and a common
+    type is exactly where it would go quiet: a ROM's pick handed to a
+    platform-scoped answer, or the reverse, is well typed and wrong.
+
+    ``label`` is presentation, and a resolution may carry none. ``emulator`` is
+    ``None`` for an emulator the resolver could not identify, and nothing may be
+    scoped to it.
+    """
+
+    @property
+    def emulator(self) -> str | None: ...
+
+    @property
+    def label(self) -> str | None: ...
+
+
+def classify_command(label: str, text: str, *, emulator: str | None = None) -> EmulatorOption:
+    """Classify a single ES-DE ``<command>`` (``label`` + ``text``).
+
+    Applies the bake-verdict rules in order (the first that matches wins) and
+    determines the emulator kind, returning a fully-populated
+    :class:`EmulatorOption`. Pure — no I/O, deterministic in its inputs.
+
+    *emulator* is the resolver's identity for the row, carried through
+    unexamined: this function classifies what a command DOES, and who the
+    emulator is is read off the catalogue entry beside it rather than parsed out
+    of the command text.
+    """
+    status, reason = _bake_verdict(text)
+    kind, core_so = _emulator_kind(text)
+    return EmulatorOption(
+        label=label,
+        kind=kind,
+        core_so=core_so,
+        command=text.strip(),
+        status=status,
+        reason=reason,
+        emulator=emulator,
+    )
+
+
+def downgrade_if_not_installed(option: EmulatorOption, emulator_installed: bool) -> EmulatorOption:
+    """Downgrade a bakeable **standalone** option whose emulator is not installed.
+
+    The pure half of ADR-0020's binary-existence probe: the adapter performs the
+    on-disk / ``es_find_rules.xml`` I/O to decide whether a standalone emulator is
+    installed in RetroDECK and passes the verdict in as *emulator_installed*; this
+    rule turns a bakeable standalone whose emulator is absent into a
+    ``needs_setup`` option with reason ``"not_installed"`` so it drops out of the
+    default selection (:func:`select_default_option`) and shows disabled in the
+    picker — a system whose only bakeable command is a missing standalone then
+    plain-launches, restoring the pre-standalone behavior. Libretro options
+    (RetroArch ships with RetroDECK, so it is always installed) and options that
+    are already non-bakeable are returned unchanged.
+    """
+    if emulator_installed or option.status != "bakeable" or option.kind != "standalone":
+        return option
+    return replace(option, status="needs_setup", reason="not_installed")
+
+
+def _bake_verdict(text: str) -> tuple[str, str | None]:
+    """Return ``(status, reason)`` for a command, first matching rule wins.
+
+    Order matters: an ``%INJECT%`` command is *needs-setup* even though it also
+    lacks a ``%ROM%`` target, and a ``.desktop``/OS-shell form is flagged as a
+    script before the ``%ROM%``-ending check. ``%STARTDIR%`` is deliberately
+    checked *after* the unknown-placeholder sweep (it is a known placeholder)
+    so it surfaces its own ``startdir`` reason rather than being lumped in.
+    """
+    t = text.strip()
+    if "%INJECT%" in t:
+        return ("needs_setup", "inject")
+    if "%ENABLESHORTCUTS%" in t or "%EMULATOR_OS-SHELL%" in t:
+        return ("unbakeable", "shortcut_script")
+    if not t.endswith("%ROM%"):
+        return ("unbakeable", "no_rom_target")
+    if '"' in t or "\\;" in t:
+        return ("unbakeable", "quoting")
+    for token in _PLACEHOLDER_RE.findall(t):
+        if token not in _KNOWN_PLACEHOLDERS and not token.startswith("%EMULATOR_"):
+            return ("unbakeable", "unknown_placeholder")
+    if "%STARTDIR%" in t:
+        return ("unbakeable", "startdir")
+    return ("bakeable", None)
+
+
+def _emulator_kind(text: str) -> tuple[str, str | None]:
+    """Return ``("libretro", core_so)`` for the RetroArch shape, else ``("standalone", None)``.
+
+    A leading ``env VAR=val …`` prefix (the gc/wii Dolphin form) is a standalone
+    invocation — it does not match the strict libretro pattern — and is left as
+    ``standalone`` with no core.
+    """
+    match = _LIBRETRO_RE.match(text.strip())
+    if match:
+        return ("libretro", match.group(1))
+    return ("standalone", None)
+
+
+def select_default_option(options: list[EmulatorOption]) -> EmulatorOption | None:
+    """Return the first *bakeable* option in document order, or ``None``.
+
+    ES-DE lists a system's emulators in preference order; the first one the
+    plugin can bake is the system-layer default. Skips ``needs_setup`` and
+    ``unbakeable`` options (the ``%INJECT%`` / shortcut / quoting forms). When
+    nothing is bakeable the caller bakes the plain RetroDECK launch and lets
+    RetroDECK resolve the emulator itself.
+    """
+    for option in options:
+        if option.status == "bakeable":
+            return option
+    return None
+
+
+def option_to_invocation(option: EmulatorOption | None) -> EmulatorInvocation | None:
+    """Render a *bakeable* option into an :class:`EmulatorInvocation`, else ``None``.
+
+    A libretro option yields a libretro invocation keyed on its ``core_so``; a
+    standalone option bakes its full command text verbatim. A ``None`` option,
+    or one that is not bakeable, resolves to ``None`` (the plain-launch signal).
+    """
+    if option is None or option.status != "bakeable":
+        return None
+    if option.kind == "libretro" and option.core_so:
+        return EmulatorInvocation.libretro(option.core_so, option.label, option.emulator)
+    if option.kind == "standalone" and option.command:
+        return EmulatorInvocation.standalone(option.command, option.label, option.emulator)
+    return None
+
+
+def _pinned_option(options: list[EmulatorOption], label: str) -> EmulatorOption | None:
+    """The option a pinned *label* still names, or ``None`` where it no longer does.
+
+    The first option carrying *label*, and only while that option can be baked —
+    a label no option carries and one whose option is not bakeable both answer
+    ``None``, and a caller treats both as "this pin no longer resolves". The
+    search stops at the first label match rather than looking past it for a
+    bakeable namesake: two
+    commands sharing a display label are one emulator to the user, and picking the
+    second because the first is un-bakeable would resolve a pin to something the
+    picker never offered under that name.
+    """
+    for option in options:
+        if option.label == label:
+            return option if option_to_invocation(option) is not None else None
+    return None
+
+
+def label_to_invocation(options: list[EmulatorOption], label: str) -> EmulatorInvocation | None:
+    """Resolve a picked *label* to its :class:`EmulatorInvocation`, else ``None``.
+
+    Finds the option carrying *label* and renders it via
+    :func:`option_to_invocation`. Returns ``None`` when no option matches the
+    label OR the matched option is not bakeable — the caller treats both as
+    "this pin no longer resolves" and degrades to the next layer.
+    """
+    return option_to_invocation(_pinned_option(options, label))
+
+
+def resolve_platform_option(options: list[EmulatorOption], override: str | None) -> EmulatorOption | None:
+    """Return the emulator a platform resolves to, or ``None``.
+
+    The platform-level projection of the read-path precedence
+    (``ActiveCoreResolver`` without the per-game layer): the per-platform
+    override (``settings.json`` ``platform_cores``) when its label is set and
+    still names a bakeable emulator, else the es_systems default (the first
+    bakeable command). A stale / no-longer-installed override degrades to the
+    default — never fatal — mirroring the launch-bake resolver so what a surface
+    shows and what actually launches agree. ``None`` when the platform has no
+    BAKEABLE option — which is not the same as having none, and not a failure:
+    an empty menu, an unreadable ``es_systems.xml``, and a menu whose only
+    entries are ``needs_setup`` or uninstalled standalone emulators all answer
+    ``None`` alike. What follows is written at :func:`select_default_option`:
+    the caller bakes the plain RetroDECK launch and RetroDECK resolves the
+    emulator itself, so the games still start.
+
+    **One pick, because a platform's surfaces must not be able to answer for two
+    emulators.** The option is returned rather than one projection of it so that
+    the name a pane displays (:func:`resolve_platform_label`) and the identity
+    its BIOS answers are joined and scoped on (``EmulatorOption.emulator``, the
+    one field that names a standalone emulator, where ``core_so`` is ``None`` for
+    every standalone pick) come off the same choice. Resolving them separately is
+    what let a pane name PCSX ReARMed and judge the platform by the system
+    default beside it.
+    """
+    pinned = _pinned_option(options, override) if override is not None else None
+    return pinned if pinned is not None else select_default_option(options)
+
+
+def resolve_platform_label(options: list[EmulatorOption], override: str | None) -> str | None:
+    """Return the platform-layer active-emulator display label, or ``None``.
+
+    The name half of :func:`resolve_platform_option`. ``None`` where the platform
+    resolves to no bakeable emulator at all — a surface states THAT; it is never
+    a name, and least of all "Default", which says the plugin picked one.
+    """
+    option = resolve_platform_option(options, override)
+    return option.label if option is not None else None
+
+
+def options_to_payload(options: list[EmulatorOption]) -> list[dict[str, Any]]:
+    """Project options into the frontend emulator-picker payload.
+
+    Each entry is ``{label, kind, core_so, emulator, is_default, bakeable,
+    reason}``. ``is_default`` marks the single option
+    :func:`select_default_option` picks (the first bakeable one); ``bakeable`` is
+    ``True`` only for a fully bakeable option (``needs_setup`` reads as
+    ``bakeable: False`` with its ``reason`` — ``"inject"`` or ``"not_installed"``
+    — so the picker can disable it with a distinct message). The raw ``command``
+    text is intentionally dropped from the wire payload.
+
+    ``emulator`` is the identity, and it travels beside ``core_so`` rather than
+    replacing it because the two answer different questions: ``core_so`` is the
+    libretro core a surface may still need to name, the identity is what a
+    firmware row's per-emulator entries are keyed on. Without it on the wire a
+    surface holding both answers has nothing to join them by for a standalone
+    emulator, and two labels of one emulator look like two emulators.
+    """
+    default = select_default_option(options)
+    return [
+        {
+            "label": option.label,
+            "kind": option.kind,
+            "core_so": option.core_so,
+            "emulator": option.emulator,
+            "is_default": option is default,
+            "bakeable": option.status == "bakeable",
+            "reason": option.reason,
+        }
+        for option in options
+    ]

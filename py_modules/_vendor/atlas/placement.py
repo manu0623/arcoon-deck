@@ -1,0 +1,2241 @@
+"""Placements — resolved directories, honest file sets, and provenance.
+
+A :class:`SavefilePlacement` answers "where does this emulator, configured as it is,
+keep the save for this content?"; a :class:`SavestatePlacement` answers the same
+question for its savestates. Their shape follows the research findings
+(``docs/research/retrodeck-save-placement.md`` §16):
+
+- **Directory and file set are different kinds of knowledge.** The directory
+  follows from RetroArch's central path rule and is always resolvable; the file
+  set is per-core behaviour with no metadata source. For existing saves atlas
+  *observes* the set (``glob("<rom_stem>.*")``); otherwise it is honestly
+  ``unknown`` — never guessed. An observation in the ROM's own directory says so
+  (``content-dir-observation``): there the content shares the name and no source
+  tells the two apart. The old fixed ``<rom_stem>.srm`` filename is
+  gone: ``.srm`` is only what RetroArch itself writes, and cores like Beetle
+  Saturn write ``.bcr``/``.bkr``/``.smpc`` on their own.
+- **A hole is not an unknown.** ``needs`` lists holes the caller fills from the
+  content at hand (``content_dir``, ``library_name``, ``save_id``); *unknown*
+  means atlas cannot state the value and refuses to guess. Distinct states,
+  kept distinct. A hole is not confined to the directory: where a rule card
+  names the save's files through the content's platform-native id, the file
+  set is a template too and the same hole vocabulary carries it.
+- **The root varies** — ``savefile_directory`` (explicit, or the RetroArch
+  platform default when unset/reset), the system directory (Flycast VMUs), or
+  the ROM's own directory (``savefiles_in_content_dir``). Sorting stages apply
+  after root selection regardless of which root was chosen
+  (``runloop.c:8785-8841``). The system directory is the one *the core is
+  handed*, not the cfg key's value: ``systemfiles_in_content_dir`` — or a key
+  cleared to nothing — sends the core to the content's own directory
+  (``runloop.c:1958-1999``), so a card rooted there answers
+  ``content_directory`` on those machines.
+- **Filesystem state is part of the answer** — RetroArch silently reverts to the
+  unsorted root when a sorted directory cannot be created (``runloop.c:8844``,
+  and its savestate twin ``:8878-8887``); ``caveats`` carries that and every
+  other stated degradation.
+
+**Why savestates get their own type.** The directory math is shared to the line
+— one upstream function resolves both families side by side
+(``runloop.c:8752-8979``) — so the resolution is parameterized rather than
+copied. What is *not* shared is the field set, and the reason is structural: the
+libretro API hands a core no savestate directory at all (``libretro.h`` defines
+``GET_SYSTEM_DIRECTORY``, ``GET_SAVE_DIRECTORY``, ``GET_CONTENT_DIRECTORY``,
+``GET_PLAYLIST_DIRECTORY`` and ``GET_FILE_BROWSER_START_DIRECTORY``, and nothing
+for states), and RetroArch serializes the state itself. A core therefore cannot
+deviate from state placement, no rule card for it can ever exist, and
+``granularity`` — which is a card's word about how a *core* groups the data it
+writes — has an empty domain here. Carrying it as a permanent ``None`` would be
+the blank field this grammar refuses, and it could not even be rescued by a
+caveat: there is nothing to report. So :class:`SavestatePlacement` is
+:class:`SavefilePlacement` minus that one field, the way :class:`RomPlacement`
+already carries the fields its own question has and no others.
+
+Pure compute. No I/O — the installation handles observe the machine and pass
+the results in.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+from types import MappingProxyType
+from typing import Iterable, Literal, Mapping, Sequence, TypeAlias, TypeVar
+
+from .retroarch_cfg import CFG_LAYER_KINDS, RetroArchCfg
+from .system_firmware import CAVEAT_SYSTEM_FIRMWARE_WORLD_KNOWLEDGE, STATED_EVIDENCE_WORDS
+from .yaml_scalars import REFUSAL_CODES
+
+# Root kinds — where the placement's directory is anchored. The closed
+# vocabularies are Literal types so an invalid state is a type error first
+# and a constructor error second (REVIEW M10). Each question has its own set,
+# because a vocabulary is closed only if it is closed around one question: a
+# savefile is never anchored at savestate_directory, and a savestate is never
+# anchored at a core's system directory (no card can move it — see the module
+# docstring), so a shared union would hand every client values its own branch
+# can never see.
+RootKind = Literal[
+    "savefile_directory",
+    "content_directory",
+    "system_directory",
+    "working_directory",
+    "emulator_directory",
+]
+StateRootKind = Literal[
+    "savestate_directory", "content_directory", "emulator_directory", "working_directory"
+]
+FileSetState = Literal["observed", "declared", "unknown"]
+
+# The three states a file set can be in, as values. Every other closed
+# vocabulary in the contract ships both its type and its constants; a client
+# branches on `file_set.state`, and a literal in that branch is a typo away
+# from silently never matching.
+FILE_SET_OBSERVED: FileSetState = "observed"
+FILE_SET_DECLARED: FileSetState = "declared"
+FILE_SET_UNKNOWN: FileSetState = "unknown"
+
+ROOT_SAVEFILE_DIRECTORY: RootKind = "savefile_directory"
+"""The configured save root — the directory RetroArch would write this game's save below, read
+off the arrangement rather than assumed. It is the anchor and not the whole answer: what the
+core builds below it is the rest of the placement.
+"""
+ROOT_CONTENT_DIRECTORY: RootKind = "content_directory"
+"""The content's own directory: the save lands beside the ROM. A core whose card roots its saves
+in the system directory is anchored here once RetroArch's ``systemfiles_in_content_dir`` is set,
+and where ``system_directory`` is blank or the literal ``default`` — the system directory the
+core is _handed_ decides, not the key's value. A blank ``savefile_directory`` does the opposite
+and keeps the standing root.
+"""
+ROOT_SYSTEM_DIRECTORY: RootKind = "system_directory"
+"""The core's system directory, the tree it reads firmware from, for the cores whose card roots
+their saves in it. A card does not settle it alone: RetroArch's ``systemfiles_in_content_dir``,
+or a ``system_directory`` left blank or set to the literal ``default``, moves such a core to
+``content_directory``.
+"""
+# The root that is a property of the launch rather than of the machine: the
+# working directory of the process that loads the core. DeSmuME 2015 composes
+# its .dsv path from a variable its libretro build never fills, so the file
+# lands relative to wherever RetroArch was started — knowable to whoever did
+# the starting, which is why the answer is a ``<cwd>`` template with a hole
+# rather than a refusal: a hole is something the caller fills, and the caller
+# often IS the launcher.
+ROOT_WORKING_DIRECTORY: RootKind = "working_directory"
+"""The working directory of the launching process — a property of the launch rather than of the
+machine, which is why the answer is a ``<cwd>`` template with a hole rather than a refusal: a
+hole is something the caller fills, and the caller often is the launcher.
+"""
+# The root a standalone emulator owns: its user tree below the XDG base the
+# arrangement pins. No frontend hands these emulators a save directory — the
+# tree is the emulator's own, its shape read from the emulator's configuration
+# the way the emulator reads it, and where an arrangement routes pieces of it
+# elsewhere it does so with symlinks the answer walks, not with settings.
+ROOT_EMULATOR_DIRECTORY: RootKind = "emulator_directory"
+"""The tree a standalone emulator owns. No frontend hands such an emulator a save directory, so
+this root is what the emulator's own configuration names, read the way that emulator reads it: a
+default below the XDG base the arrangement pins, or the absolute path a setting states.
+"""
+
+# The screenshot question's own two-word vocabulary, closed around its own
+# question like the savestate one is: a screenshot is never anchored at a
+# save root or a core's system directory — RetroArch writes it itself, into
+# its screenshot directory or the content's own (task_screenshot.c:488-550
+# at a79435a).
+ScreenshotRootKind = Literal["screenshot_directory", "content_directory"]
+SCREENSHOT_ROOT_DIRECTORY: ScreenshotRootKind = "screenshot_directory"
+SCREENSHOT_ROOT_CONTENT_DIRECTORY: ScreenshotRootKind = "content_directory"
+SCREENSHOT_ROOT_KINDS = ("screenshot_directory", "content_directory")
+
+ROOT_SAVESTATE_DIRECTORY: StateRootKind = "savestate_directory"
+# The content root is the one value both questions share, and it is the same
+# fact on both: the ROM's own directory, reached either by the family's
+# in-content-dir flag or by a root that resolved to nothing.
+STATE_ROOT_CONTENT_DIRECTORY: StateRootKind = "content_directory"
+# The savefile family's words, joined here when the standalone savestate cards
+# landed (#225), and they are the same facts on both questions: the tree a
+# standalone emulator owns below the XDG base the arrangement pins, and the
+# working directory of the launching process, which is where melonDS anchors a
+# relative SavestatePath exactly as it anchors a relative SaveFilePath.
+# RetroArch's four cfg keys never anchor at either — only a standalone entry's
+# answer does — so the vocabulary stays closed around the question: a savestate
+# is still never anchored at a save root or a core's system directory.
+STATE_ROOT_EMULATOR_DIRECTORY: StateRootKind = "emulator_directory"
+STATE_ROOT_WORKING_DIRECTORY: StateRootKind = "working_directory"
+
+ROOT_KINDS = (
+    "savefile_directory",
+    "content_directory",
+    "system_directory",
+    "working_directory",
+    "emulator_directory",
+)
+STATE_ROOT_KINDS = (
+    "savestate_directory",
+    "content_directory",
+    "emulator_directory",
+    "working_directory",
+)
+_FILE_SET_STATES = ("observed", "declared", "unknown")
+
+# How a texture pack tree is keyed below its root — the values
+# :attr:`TexturePlacement.keying` may take, and therefore the values a texture
+# card may state. World knowledge with the same standing as a granularity: no
+# read of the machine recovers it, so it is stated only where a citation backs
+# it and left absent otherwise. Closed like every other vocabulary here, and
+# named per value so a client branches on a constant rather than a literal.
+KEYING_GAME_ID: Keying = "game-id"
+"""The level below the root is one per game, named by the emulator's own game ID for the content
+— the identifier that emulator states for it, never the content file's name.
+"""
+KEYING_SERIAL: Keying = "serial"
+"""The level below the root is one per game, named by the serial the medium carries — the disc's
+own product code, read by the emulator rather than derived from the content path. That level is
+a file name where a card keys a flat directory, not always a directory of its own.
+"""
+KEYING_TITLE_ID: Keying = "title-id"
+"""The level below the root is one per game, named by the platform's own title ID — the
+hexadecimal identifier the title carries, not a name a person would recognise.
+"""
+KEYING_ROM_NAME: Keying = "rom-name"
+"""The level below the root is one per game, named after the content file itself — the ROM's own
+name, taken from the content path. It names a file as readily as a directory; which one is the
+card's to say.
+"""
+KEYING_PACK: Keying = "pack"
+"""The level below the root is one per **pack** rather than per game: it carries the pack's own
+name, and which games it applies to is the pack's business, so a caller cannot compose this path
+from a game.
+"""
+# The game's *title* rather than any identifier of it: the name an emulator's
+# own database gives the disc, which a user may have overridden in that
+# emulator's list. Distinct from ``rom-name`` on purpose — the content file's
+# name is one of the things such a title falls back to, never the thing it is —
+# and a caller filling it reads it off the emulator, not off the content path.
+KEYING_TITLE: Keying = "title"
+"""The level below the root is one per game, named by the game's *title* — the name the
+emulator's own list gives it, which a user may have overridden, and a file name of that name
+where the card keys a flat directory. Deliberately not ``rom-name``: the content file's stem is
+one of the things such a title falls back to, never the thing it is.
+"""
+KEYINGS = (
+    KEYING_GAME_ID,
+    KEYING_SERIAL,
+    KEYING_TITLE_ID,
+    KEYING_ROM_NAME,
+    KEYING_PACK,
+    KEYING_TITLE,
+)
+Keying = Literal["game-id", "serial", "title-id", "rom-name", "pack", "title"]
+
+# The patch formats RetroArch looks for beside the content, **in the order it
+# tries them** (``task_patch.c:1071-1075`` at RetroArch a79435a). The order is
+# compiled in, not configured, which is why it is a constant here rather than a
+# card's word: nothing on a machine can reorder it. Closed like every other
+# vocabulary in this module, and named per value so a client branches on a
+# constant.
+PATCH_FORMAT_IPS: PatchFormat = "ips"
+"""The IPS patch beside the content, and the first name RetroArch tries. The value names the
+candidate's format and the extension its file carries, never that such a file is there.
+"""
+PATCH_FORMAT_BPS: PatchFormat = "bps"
+"""The BPS patch beside the content, tried after ``ips``."""
+PATCH_FORMAT_UPS: PatchFormat = "ups"
+"""The UPS patch beside the content, tried after ``bps``."""
+PATCH_FORMAT_XDELTA: PatchFormat = "xdelta"
+"""The xdelta patch beside the content, the last of the four names RetroArch tries."""
+PATCH_FORMATS = (PATCH_FORMAT_IPS, PATCH_FORMAT_BPS, PATCH_FORMAT_UPS, PATCH_FORMAT_XDELTA)
+PatchFormat = Literal["ips", "bps", "ups", "xdelta"]
+
+# The indexed continuations a patch chain may carry: one digit appended to the
+# whole file name, 1 through 9 (``task_patch.c:1121-1147``). Nine and not more
+# is the upstream implementation's own bound — it writes a single character into
+# the byte behind the name and says so in a comment — so the list a candidate
+# carries is exactly as long as the emulator's own loop.
+PATCH_CONTINUATION_INDICES = tuple(range(1, 10))
+
+# How a save is grouped — the values :attr:`Granularity.value` may take, and
+# therefore the values a rule card may select. Contractual: clients branch on
+# them and vectors assert them, so the packaged cards are validated against
+# this tuple at load rather than against a card author's spelling. Named per
+# value like every other closed set here, and the tuple is built from the names
+# so the vocabulary has one source rather than two that can drift.
+GRANULARITY_SHARED_CARD = "shared-card"
+GRANULARITY_SHARED_FILE = "shared-file"
+GRANULARITY_PER_GAME_FILE = "per-game-file"
+GRANULARITY_PER_GAME_FILES = "per-game-files"
+# One *directory* per game, and the directory is the unit: everything below it
+# belongs to that one game, so a sync client packs and moves the tree whole
+# rather than tracking files inside it. Distinct from per-game-files, which
+# says several of this game's files sit in a directory *shared* with other
+# games' — there the file is the unit and the directory is not safe to move.
+GRANULARITY_PER_GAME_DIRECTORY = "per-game-directory"
+GRANULARITIES = (
+    GRANULARITY_SHARED_CARD,
+    GRANULARITY_SHARED_FILE,
+    GRANULARITY_PER_GAME_FILE,
+    GRANULARITY_PER_GAME_FILES,
+    GRANULARITY_PER_GAME_DIRECTORY,
+)
+# The one value outside the tuple above, deliberately: it is what
+# :attr:`Granularity.value` says for a mode that keeps no save data at all
+# (write protection on — the writes are discarded), so no *group* may ever
+# carry it — a group is a place save data lives, and this value says none
+# does. The card loader validates groups against GRANULARITIES and never
+# sees this word; the contract's granularity.value vocabulary includes it.
+GRANULARITY_NONE = "none"
+
+# What a group of files *is*, as against whom it belongs to. The two questions
+# are deliberately separate fields: a granularity says whether a file is this
+# game's or every game's, and a role says what kind of data it holds, so the
+# same fact is never spelled twice and the two can never contradict each other.
+# MAME writes its per-machine dip switches to ``<machine>.cfg`` and its
+# emulator-wide input defaults to ``default.cfg`` in one directory — same role,
+# different granularity — and that pair is why neither field can carry the
+# other's meaning.
+#
+# Closed and named per value like every other vocabulary here. A client syncing
+# save data takes every role but :data:`ROLE_SETTINGS`, and decides for itself
+# about :data:`ROLE_UNKNOWN` below; see ``docs/how-to-use.md``.
+#
+# :data:`ROLE_UNKNOWN` is the one value no evidence states — it is what a group
+# carries where a file is on the machine and no declaration covering that
+# directory says what kind of data it holds. Not knowing the *name* is not the
+# same as not knowing the kind: a card that states a directory's role and
+# refuses its file names has said what lies there, and a file found there takes
+# that role rather than this one. It is a value rather than an absence on
+# purpose, and the reason is a consumer that lost data: a save sync that skips
+# :data:`ROLE_SETTINGS` read "no role stated" as "ordinary progress" and copied
+# a console's settings file over the other device's. Absence is what misled it,
+# so the answer says *there is nothing to say about this file* in a word a
+# caller has to branch on. A card may never declare it (the card loader refuses
+# the spelling): it is the resolver's word for what no declaration named.
+#
+# :data:`ROLE_HIGH_SCORE` is the arcade family's, and it is a separate value
+# rather than a battery because the *merge* differs, which is the one thing a
+# role exists to tell a client. Two devices that both played a game hold two
+# saves and the newer one wins; they hold two score tables and neither wins —
+# the higher entries do. A machine keeps one table for everyone who ever played
+# it, so it is not one player's progress the way a battery save is. Folding it
+# into :data:`ROLE_BATTERY` would state something true (it is save data, back it
+# up) while losing the only part a client could act on.
+# :data:`ROLE_NOTES` is the user's own words about a game — MAME 2010 keeps
+# the debugger's per-machine comment files under its save tree — and it is a
+# separate value for the same reason the score table is: what a client does
+# with it. Notes are neither progress a newer copy overwrites nor settings a
+# save sync skips; a client lifts them deliberately (into RomM's per-game
+# notes, say) or leaves them, and either needs the word to decide by.
+ROLE_BATTERY = "battery"
+ROLE_MEMORY_CARD = "memory-card"
+ROLE_DISK_DIFF = "disk-diff"
+ROLE_HIGH_SCORE = "high-score"
+ROLE_SETTINGS = "settings"
+ROLE_NOTES = "notes"
+ROLE_UNKNOWN = "unknown"
+ROLES = (
+    ROLE_BATTERY,
+    ROLE_MEMORY_CARD,
+    ROLE_DISK_DIFF,
+    ROLE_HIGH_SCORE,
+    ROLE_SETTINGS,
+    ROLE_NOTES,
+    ROLE_UNKNOWN,
+)
+
+
+_FrozenValue = TypeVar("_FrozenValue")
+
+
+def _freeze(mapping: Mapping[str, _FrozenValue]) -> Mapping[str, _FrozenValue]:
+    """A read-only copy — frozen dataclasses stay deeply immutable."""
+    return MappingProxyType(dict(mapping))
+
+
+# What one key of a ``Caveat``'s or ``Unresolved``'s ``data`` may hold, as a
+# caller writes it: one value, several values, or one value said about each of
+# several subjects. The three serialize as the three JSON shapes a client
+# already knows — a string, an array, an object
+# (:func:`atlas.contract.data_contract`) — and the sequence is the one this
+# vocabulary insists on: a list of file names, keys or regions is a list,
+# never a string a client has to split on ``", "``. Order inside a sequence is
+# contractual, because it is the emitter's stated order. The mapping is what a
+# list cannot be read out of step with: where two facts are said about each of
+# several files, each is keyed by the file rather than indexed beside it.
+DataValue: TypeAlias = "str | Sequence[str] | Mapping[str, str]"
+# The same values once a frozen dataclass holds them: sequences are tuples and
+# mappings are read-only.
+FrozenDataValue: TypeAlias = "str | tuple[str, ...] | Mapping[str, str]"
+
+
+def _frozen_value(value: "str | Sequence[str] | Mapping[str, str]") -> "FrozenDataValue":
+    """One data value in the shape a frozen dataclass keeps it in.
+
+    ``str`` is tested first and deliberately: a string *is* a sequence of
+    strings, and reading one as a sequence would turn every message-sized
+    value into a list of characters.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Mapping):
+        return _freeze(value)
+    return tuple(value)
+
+# Caveat codes — the stable, machine-readable identifiers clients branch on.
+# Part of the API contract; messages are for humans and may change freely.
+CAVEAT_NO_CORE = "no-core"
+CAVEAT_CORE_UNQUERYABLE = "core-unqueryable"
+CAVEAT_SORTED_DIR_MISSING = "sorted-dir-missing"
+# No "health" code lives here: an installation's health findings are caveats
+# already, with their own stable codes (atlas.installations.HEALTH_ISSUE_*), and
+# they ride in an answer's caveat list as themselves. A category code wrapping
+# them would put the real condition in data for a client to unpack.
+CAVEAT_FILENAMES_UNVERIFIED = "filenames-unverified"
+CAVEAT_FILENAMES_CONTENT_CONDITIONAL = "filenames-content-conditional"
+# Which class of content a declared file list was established for, under
+# ``data["files_established_for"]``. A closed vocabulary because a client picks
+# a branch on it — "does this answer hold for the content I am holding?" — and
+# a paragraph is not something a branch can be taken on. What the paragraph
+# said is not lost: the card keeps it as prose and it rides in ``message``.
+ESTABLISHED_FOR_CONSOLE = "console"
+# The emulator names the file after the driver (or romset) it identified, not
+# after the file the player passed — MAME's family and FB Alpha.
+ESTABLISHED_FOR_DRIVER_NAMED_CONTENT = "driver-named-content"
+# One disk image opened as the one disk, as against a playlist, an archive
+# member, a tape, a snapshot or a cartridge.
+ESTABLISHED_FOR_SINGLE_DISK_IMAGE = "single-disk-image"
+# An unpacked game directory, as against an archive the emulator cannot write
+# into and therefore saves beside.
+ESTABLISHED_FOR_UNPACKED_GAME_DIRECTORY = "unpacked-game-directory"
+# A raw image read as the cartridge dump it usually is, as against the same
+# extension carrying a disc header and booting as a disc.
+ESTABLISHED_FOR_RAW_CARTRIDGE_IMAGE = "raw-cartridge-image"
+# The saves the emulator's own menu writes, through its own slots.
+ESTABLISHED_FOR_MENU_SLOT_SAVES = "menu-slot-saves"
+# Content that does not rename the save: no redirect file, no legacy spelling,
+# no patch that replaces the savegame base.
+ESTABLISHED_FOR_DEFAULT_SAVE_NAME = "default-save-name"
+FILES_ESTABLISHED_FOR_TOKENS = (
+    ESTABLISHED_FOR_CONSOLE,
+    ESTABLISHED_FOR_DRIVER_NAMED_CONTENT,
+    ESTABLISHED_FOR_SINGLE_DISK_IMAGE,
+    ESTABLISHED_FOR_UNPACKED_GAME_DIRECTORY,
+    ESTABLISHED_FOR_RAW_CARTRIDGE_IMAGE,
+    ESTABLISHED_FOR_MENU_SLOT_SAVES,
+    ESTABLISHED_FOR_DEFAULT_SAVE_NAME,
+)
+CAVEAT_FILE_SET_SPANS_ROOTS = "file-set-spans-roots"
+# A directory this configuration writes save data into whose file names do not
+# follow from anything atlas reads. MAME's differencing images for CHD hard
+# disks are the case it was added for: the name is the disk image's own, taken
+# from the machine's ROM table inside the binary, and upstream says on the line
+# that builds it that the scheme "doesn't scale". The directory is named because
+# it is knowable and because a backup that skips it loses the player's progress
+# on every machine with a hard disk; the names are not, because guessing them
+# would be the failure this project exists to avoid. `data` carries `dir` and a
+# `citation` for the reading behind it.
+CAVEAT_FILE_NAMES_UNESTABLISHED = "file-names-unestablished"
+# A directory under this answer's own root that the card states and the
+# observation did not read. An observed set's groups describe the one directory
+# that was read, so a mode whose parts lie in sibling subdirectories — Kronos's
+# `kronos/stv` beside `kronos/saturn`, MAME 2010's seven trees beside its
+# `nvram` — drops them the moment a file turns up in the directory the answer
+# is about. One caveat per such directory, resolved the way the declared
+# answer's group resolves it. `data` carries `core`, `mode` and `dir`, and no
+# file names: one directory can hold two groups naming different files, and the
+# declared answer already states every one of them. The parts under *another*
+# root are `file-set-spans-roots`, and a directory whose names follow from
+# nothing atlas reads is `file-names-unestablished` as well as this — the two
+# say different things about the same place.
+CAVEAT_FILE_SET_DIRECTORIES_UNREAD = "file-set-directories-unread"
+# The caller named no system, and the answer holds anyway because every system
+# the core's record covers writes the same files. The claim is scoped to those
+# systems — `data["systems"]` lists them — because a core run for a system its
+# record never names has established nothing here. It is the honest answer on
+# an arrangement with no frontend catalogue, where no system is ever named.
+CAVEAT_FILE_SET_ACROSS_SYSTEMS = "file-set-across-systems"
+CAVEAT_UNKNOWN_OPTION_VALUE = "unknown-option-value"
+# Set to blank or the literal "default". Not the same as absent — an absent
+# key resolves to RetroArch's platform default on every route — and the
+# distinction is the whole reason this code is spelled 'cleared': the setting
+# is present and empty, and what a core is handed then depends on the run.
+CAVEAT_SYSTEM_DIRECTORY_CLEARED = "system-directory-cleared"
+CAVEAT_PER_GAME_OVERRIDES_PRESENT = "per-game-overrides-present"
+# The frontend's statement, split off the code above (#311): some games of this
+# system select a different emulator in their gamelist entry, so a system-level
+# entry order may be wrong for exactly those games. Its own code because a
+# caveat code is the thing a client switches on — the two facts were riding one
+# code told apart only by the shape of ``data``, and both can ride one answer
+# at once. ``per-game-overrides-present`` stays the emulators' statement (a
+# settings file layered over the very answer it rides, with ``core``, ``dir``
+# and ``key``); this one carries the total ``count`` and ``emulators``, the
+# selected emulator label mapped to how many games select it.
+CAVEAT_PER_GAME_ALTERNATIVE_EMULATOR = "per-game-alternative-emulator"
+CAVEAT_PER_GAME_OVERRIDE = "per-game-override"
+# The third state those two leave out: an emulator that layers per-game files
+# over its whole configuration (PCSX2 installs one game's
+# ``<DataRoot>/gamesettings/<serial>_<crc>.ini`` while it runs — a sibling of
+# the ``inis`` directory its global settings live in, not a child of it) and a
+# directory holding them that could not be read. Neither sibling can say it — "present"
+# asserts they exist and their absence is what tells a caller the answer holds
+# for every game, so silence here claims more than was established. A code of
+# its own rather than one of theirs with the real condition hidden in ``data``:
+# the two facts a client acts on differently are "some games override this" and
+# "whether any does was not checked". ``data`` carries the directory and the
+# key the layer could have changed.
+CAVEAT_PER_GAME_LAYER_UNREAD = "per-game-layer-unread"
+# The fourth state, and the one Dolphin's shape needed: a per-game layer whose
+# DIRECTORY no read of the machine finds, because the emulator compiles it in.
+# Dolphin loads two such layers — the user's ``GameSettings/`` and a second one
+# below the build's own ``Sys`` tree, and the second lives at the compile-time
+# ``DATA_DIR "sys/"`` that is written nowhere on a running machine.
+# ``per-game-layer-unread`` is the wrong code for it: that one says a listing
+# atlas COULD make did not succeed, so a client can act — fix the permission,
+# read the directory itself. This one says no listing was ever possible from
+# here, so there is nothing to retry and no count will ever appear. Keeping
+# them apart is the whole point: one is a degraded check, the other is a
+# structural limit, and a client that treats them alike either retries forever
+# or gives up on a directory it could have read. ``data`` carries the keys the
+# layer could move and which layer it is (``layer``); it carries NO ``dir``,
+# and that absence is the honest half — atlas cannot spell this directory.
+CAVEAT_PER_GAME_BUILD_LAYER_UNREAD = "per-game-build-layer-unread"
+CAVEAT_UNVERIFIED_VERSION = "unverified-version"
+# The frontend writes this core no save file — established from its source, not
+# guessed — and what the core writes on its own is a different question nobody
+# has answered yet. Both halves matter, which is why the empty file set does not
+# travel alone: read on its own, "no files" would tell a client syncing saves
+# that a Nintendo DS game has nothing to back up, when DeSmuME fills no libretro
+# memory id and still keeps its saves somewhere. So the emptiness is stated as
+# what it is — a fact about the FRONTEND — and this says the other half is open.
+CAVEAT_CORE_OWN_WRITES_UNESTABLISHED = "core-own-writes-unestablished"
+CAVEAT_INVALID_SAVE_DIRECTORY = "invalid-save-directory"
+# The screenshot family's own spelling of the refused-directory fact, because
+# the consequence differs: a refused save root falls back to the value that
+# stood before it or the platform default, while a refused screenshot
+# directory is simply cleared at config load (configuration.c:6733-6741) and
+# the shots land in the content's own directory. One code per consequence, so
+# a client never has to guess which family's fallback follows.
+CAVEAT_INVALID_SCREENSHOT_DIRECTORY = "invalid-screenshot-directory"
+CAVEAT_CORE_SUSPECT = "core-suspect"
+CAVEAT_CORE_UNAUDITED = "core-unaudited"
+CAVEAT_CORE_MULTI_OPTION = "core-multi-option"
+CAVEAT_CORE_GENERATION_MISMATCH = "core-generation-mismatch"
+# The installed core could not be read at all, so which generation is on this
+# machine was never established and the recorded deviation is not applied. Its
+# own code, and never together with the mismatch above: that one is a core that
+# WAS read and answered for a generation the record does not describe. Here
+# nothing answered, which is a different thing to tell a client.
+CAVEAT_CORE_GENERATION_UNESTABLISHED = "core-generation-unestablished"
+# The core was read and the recorded deviation fits it, but which value governs
+# the option it hangs on was never established: no configuration on this machine
+# states one, and the core did not state its default either. One level below the
+# code above — there the generation is unknown, here the generation is fine and
+# the *setting* is unknown — and exclusive with both of the two above it, since
+# each of them has already retired the card before an option can be read.
+CAVEAT_CORE_OPTION_VALUE_UNESTABLISHED = "core-option-value-unestablished"
+# The governing options file carries an entry for a key this card's core
+# generation retired — an older generation wrote it, the rename or split left
+# it behind, and RetroArch never prunes the file, so the value someone set
+# there silently stopped applying (issue #79). The inverse direction of
+# core-generation-mismatch: there the RECORD names a key the core does not
+# register and the card steps aside; here the FILE names one and the answer
+# stands on the current key, with this caveat naming the dead entry, its
+# value, and the file a user would prune. Stated only for keys the card
+# records as retired, each with the binary evidence — attributing an
+# arbitrary unregistered entry to a core would be guessing, and the cores
+# that register their options too late for any probe (LRPS2) could never be
+# swept generically at all.
+CAVEAT_OPTION_ENTRY_RETIRED = "option-entry-retired"
+CAVEAT_SORTED_DIR_UNCREATABLE = "sorted-dir-uncreatable"
+# The resolved save root exists on the host and the app cannot touch it: a
+# flatpak override file revokes the filesystem access the app's own metadata
+# grants (a '!'-prefixed entry hides the tree as a tmpfs even under a broader
+# grant — flatpak 1.16.6, flatpak-context.c:1096-1108 via the tmpfs branch,
+# flatpak-exports.c:340-378 longest-covering-entry-wins — or a negated special
+# token drops the grant wholesale). The answer stands, because the config
+# really names this directory; the caveat is the statement that writes there
+# will not land where the answer points (issue #103).
+CAVEAT_SAVE_ROOT_REVOKED = "save-root-revoked"
+CAVEAT_DEAD_SYMLINK = "dead-symlink"
+CAVEAT_SYMLINK_LOOP = "symlink-loop"
+CAVEAT_SAVE_DIR_UNLISTABLE = "save-dir-unlistable"
+# The working_directory root's rider: the directory is a property of how the
+# emulator is launched, not of anything on disk, so no read of the machine can
+# resolve it — the answer stays a template whose one hole only the launcher
+# can fill.
+CAVEAT_SAVE_DIR_LAUNCH_DEPENDENT = "save-dir-launch-dependent"
+# No separate save file exists: the loaded content file itself takes the
+# writes. The file set is a declared emptiness — true as stated — and this
+# caveat is what keeps it from reading as "this game has no save". A client
+# decides for itself what to make of a content file that doubles as the save
+# (back it up, copy it, leave it); atlas states the fact and stops there.
+CAVEAT_SAVE_INSIDE_CONTENT = "save-inside-content"
+# The inside-content statement's console-shaped sibling: the saves live inside
+# a disk image the answer names as a file — xemu's emulated Xbox hard disk
+# holds every game's save on its FATX filesystem. Per-game structure exists
+# *inside* the image (``data`` carries the layout, one directory per title id)
+# but nothing outside it is addressable, so a file-level client backs the
+# image up whole or leaves it, and a tool that parses the image's filesystem
+# has the layout stated machine-readably instead of rediscovering it.
+CAVEAT_SAVE_INSIDE_IMAGE = "save-inside-image"
+# The save-inside-image statement, one question over: the savestates live
+# inside a disk image the answer names as a file. xemu's snapshots are QEMU
+# internal snapshots — the VM state is written into the qcow2 hard-disk image
+# and the snapshot record spans every snapshot-capable device, of which that
+# image is the only one, and xemu's own snapshot browser reads them back out
+# of the file hdd_path names. Nothing outside the image is addressable per
+# snapshot — there is no file per state — so a file-level client backs the
+# image up whole, and ``data`` carries the image and the cited naming of the
+# entries inside it so a qcow2-aware tool has the layout stated
+# machine-readably instead of rediscovering it.
+CAVEAT_SAVESTATE_INSIDE_IMAGE = "savestate-inside-image"
+# The inside-content statement's harder sibling: this configuration keeps no
+# save at all — the writes are discarded (hatari with write protection on
+# throws the modified image away at eject). The declared emptiness is the
+# whole truth here, and the caveat is what separates "nothing is kept" from
+# both "no separate file" above and "nobody looked". The granularity block
+# still travels, with value "none": the option readings and alternatives in
+# it are how a caller sees which switch to flip to make saves exist again.
+CAVEAT_SAVE_WRITES_DISCARDED = "save-writes-discarded"
+# A rule card fits this core, but which of its recorded modes is in force
+# could not be established — the selection rule needed something this
+# question did not carry (hatari's write-protect story splits on whether the
+# content is a floppy or a hard-disk image, so without a content path there
+# is no class to select with) or something the machine does not state. The
+# recorded behaviour is not applied; ``data`` carries the core and the
+# reason. Sibling of core-option-value-unestablished, one level up: there
+# the option's value is missing, here the rule as a whole cannot decide.
+CAVEAT_CORE_MODE_UNESTABLISHED = "core-mode-unestablished"
+
+# ``core-mode-unestablished`` says one thing everywhere — the card's selection
+# rule could not decide — and ``data["reason"]`` says which rule stopped where.
+# One code, one closed vocabulary: a client that switches on the code today
+# keeps working, and one that wants the detail switches on a slug instead of
+# matching an English sentence. Whatever a sentence used to embed is a key of
+# its own beside the slug (named in the comment on each), and the sentence
+# itself stays in ``message``.
+#
+# Which user account an emulator runs as, for the two that keep one tree per
+# user (RPCS3, Vita3K).
+REASON_ACTIVE_USER_UNRECORDED = "active-user-unrecorded"
+REASON_USER_LISTING_UNESTABLISHED = "user-listing-unestablished"
+REASON_NO_USER_DIRECTORY = "no-user-directory"
+REASON_NO_LISTED_USER_ACCOUNT = "no-listed-user-account"
+REASON_LISTED_USER_ACCOUNT_UNESTABLISHED = "listed-user-account-unestablished"
+REASON_CONFIGURED_USER_TREE_NAMED = "configured-user-tree-named"
+REASON_CONFIGURED_USER_SETUP_UNESTABLISHED = "configured-user-setup-unestablished"
+REASON_CONFIGURED_USER_NOT_SET_UP = "configured-user-not-set-up"
+REASON_CONFIGURED_USER_HAS_NO_TREE = "configured-user-has-no-tree"
+REASON_NO_USER_PRESELECTED = "no-user-preselected"
+REASON_CONFIGURED_USER_ID_UNREAD = "configured-user-id-unread"
+# Which console a launch is, and where the emulator's own root comes from.
+# ``region-decided-by-disc`` rides ``regions``, the regions found side by side.
+REASON_REGION_DECIDED_BY_DISC = "region-decided-by-disc"
+REASON_DATA_ROOT_DECIDED_BY_LAUNCH = "data-root-decided-by-launch"
+# What sits in an emulated slot (Dolphin's EXI devices): ``slot`` names the
+# slot letter, and ``value`` the raw configured device the card cannot read.
+REASON_SLOT_HOLDS_AGP_DEVICE = "slot-holds-agp-device"
+REASON_SLOT_DEVICE_UNINTERPRETED = "slot-device-uninterpreted"
+# A per-session override a movie or netplay session sets — ``key`` names it.
+REASON_SESSION_OVERRIDE_SET = "session-override-set"
+REASON_HDD_PATH_UNSET = "hdd-path-unset"
+REASON_MLC_LAUNCH_FLAG_OUTRANKS_CONFIG = "mlc-launch-flag-outranks-config"
+REASON_VIRTUAL_SD_DISABLED = "virtual-sd-disabled"
+# Which class the loaded content is, where the save story splits on it — no
+# content was named, or its extension is outside every class the card records
+# (``extension`` carries the one seen).
+REASON_CONTENT_CLASS_UNNAMED = "content-class-unnamed"
+REASON_CONTENT_CLASS_UNRECORDED = "content-class-unrecorded"
+# Which machine the core emulates decides part of the save story, and here it is
+# either outside the card's modes or not decided at all: PUAE keeps a
+# non-volatile memory file for the CDTV, CD32 and CD32FR models alone, so a
+# floppy run on one of them has a save the floppy modes do not state; and a CD
+# run with the model on 'auto' beside a boot hard drive takes its model from a
+# marker in the content's own launch path where one matches and from the
+# hard-disk model otherwise, neither of which this answer reads. ``model``
+# carries the configured value the reading saw.
+REASON_EMULATED_MODEL_UNRECORDED = "emulated-model-unrecorded"
+# What the loaded archive holds decides the save story, and here the archive
+# itself could not be read that far. ``archive-format-unread`` is a format
+# atlas reads none of — PUAE extracts 7-Zip archives and no reader for that
+# format ships in a runtime atlas may assume, so what is inside stays unknown
+# (``extension`` carries the one seen); ``archive-unread`` is an archive of a
+# format atlas does read whose member list this machine did not yield
+# (``status`` carries the seam's own word); ``archive-content-ambiguous`` is an
+# archive holding WHDLoad members that mount *different* volumes, where which
+# one the core takes is decided by the order its own directory listing returns
+# them in — not a fact about the archive at all (``volumes`` names the mounted
+# roots it could take, which is what those members differ in; members mounting
+# one volume are one mount and no refusal).
+REASON_ARCHIVE_FORMAT_UNREAD = "archive-format-unread"
+REASON_ARCHIVE_UNREAD = "archive-unread"
+REASON_ARCHIVE_CONTENT_AMBIGUOUS = "archive-content-ambiguous"
+# The launch path pins one member inside an archive (RetroArch's browse-inside
+# form, ``archive.zip#member``), which the core honours by making that member
+# the content — a launch shape no mode here states, because the member is a
+# copy in a temporary tree and is named after itself rather than after the
+# archive. ``member`` carries the pinned name.
+REASON_ARCHIVE_MEMBER_PINNED = "archive-member-pinned"
+# Nothing inside the archive is a class the core recognises, and there is more
+# than one entry it could mount instead: the branch that picks one takes the
+# *last* entry its own directory listing returned, so which directory the
+# writes land in is that listing's order and not a fact about the archive.
+# ``entries`` names what the walk saw.
+REASON_ARCHIVE_CONTENT_UNRECOGNISED = "archive-content-unrecognised"
+# The archive holds members of several classes at once. The core does not
+# choose between them: it writes one playlist across all of them and runs
+# that, and no mode here states what a composition of two save stories
+# amounts to. ``classes`` names the ones found.
+REASON_ARCHIVE_CONTENT_MIXED = "archive-content-mixed"
+# Hard-disk content whose boot this answer cannot settle. ``hd-image-unread``
+# is an image whose filesystem atlas does not read while the WHDLoad helper is
+# mounted alongside it, so whether the image boots its own startup script
+# (writing inside itself) or holds a WHDLoad install (writing to the saves
+# volume) is inside bytes nothing here opens — ``extension`` carries the one
+# seen. ``hd-boot-absent`` is content that was read and holds neither: no
+# startup script of its own and no slave to run, so nothing boots and no save
+# story begins.
+REASON_HD_IMAGE_UNREAD = "hd-image-unread"
+REASON_HD_BOOT_ABSENT = "hd-boot-absent"
+# WHDLoad's own prefs decide where the saves go, and these two say the answer
+# cannot rest on them: ``whdload-savepath-unrecorded`` is a SavePath or a
+# SaveDir stating something other than the volume the modes are built on
+# (``savepath`` / ``savedir`` carry what was read, from the prefs file or from
+# a ``custom`` file at the mounted root, which overrides it);
+# ``whdload-prefs-unread`` is a prefs file that is there and could not be read.
+REASON_WHDLOAD_SAVEPATH_UNRECORDED = "whdload-savepath-unrecorded"
+REASON_WHDLOAD_PREFS_UNREAD = "whdload-prefs-unread"
+# The mounted volume carries a startup sequence of its own, so it boots itself
+# rather than letting the WHDLoad helper search it for a slave — and the
+# volume is an archive, mounted read-only, so where the writes its own script
+# makes end up is inside a script this package does not read. ``container``
+# names the archive.
+REASON_VOLUME_BOOTS_ITSELF = "volume-boots-itself"
+# ScummVM's own save directory: its ini could not be read, or the path it sets
+# has no host spelling (``path`` carries the configured value).
+REASON_SAVEPATH_CONFIG_UNREADABLE = "savepath-config-unreadable"
+REASON_SAVEPATH_UNTRANSLATABLE = "savepath-untranslatable"
+# Beetle PSX's card-image index options select card files the recorded names do
+# not cover — ``options`` maps each option key to the value read.
+REASON_CARD_INDEX_OUTSIDE_RECORDED_NAMES = "card-index-outside-recorded-names"
+# MAME's ini cascade, whose members apply by driver metadata inside the binary.
+# ``members`` names the ini files the statement is about, in the order read.
+REASON_INI_PRESENCE_UNESTABLISHED = "ini-presence-unestablished"
+REASON_INI_SEARCH_PATH_UNLISTABLE = "ini-search-path-unlistable"
+REASON_INI_OUTRANKED_BY_CASCADE = "ini-outranked-by-cascade"
+# The whole vocabulary, in the order above. Nothing else may appear under
+# ``data["reason"]`` of this code: :func:`_check_enumerations` refuses a value
+# outside it at construction, a corpus test holds every ``(code, key)`` to one
+# JSON type, and another holds this tuple against the guide's own table.
+CORE_MODE_UNESTABLISHED_REASONS = (
+    REASON_ACTIVE_USER_UNRECORDED,
+    REASON_USER_LISTING_UNESTABLISHED,
+    REASON_NO_USER_DIRECTORY,
+    REASON_NO_LISTED_USER_ACCOUNT,
+    REASON_LISTED_USER_ACCOUNT_UNESTABLISHED,
+    REASON_CONFIGURED_USER_TREE_NAMED,
+    REASON_CONFIGURED_USER_SETUP_UNESTABLISHED,
+    REASON_CONFIGURED_USER_NOT_SET_UP,
+    REASON_CONFIGURED_USER_HAS_NO_TREE,
+    REASON_NO_USER_PRESELECTED,
+    REASON_CONFIGURED_USER_ID_UNREAD,
+    REASON_REGION_DECIDED_BY_DISC,
+    REASON_DATA_ROOT_DECIDED_BY_LAUNCH,
+    REASON_SLOT_HOLDS_AGP_DEVICE,
+    REASON_SLOT_DEVICE_UNINTERPRETED,
+    REASON_SESSION_OVERRIDE_SET,
+    REASON_HDD_PATH_UNSET,
+    REASON_MLC_LAUNCH_FLAG_OUTRANKS_CONFIG,
+    REASON_VIRTUAL_SD_DISABLED,
+    REASON_CONTENT_CLASS_UNNAMED,
+    REASON_CONTENT_CLASS_UNRECORDED,
+    REASON_ARCHIVE_FORMAT_UNREAD,
+    REASON_ARCHIVE_UNREAD,
+    REASON_ARCHIVE_CONTENT_AMBIGUOUS,
+    REASON_ARCHIVE_MEMBER_PINNED,
+    REASON_ARCHIVE_CONTENT_UNRECOGNISED,
+    REASON_ARCHIVE_CONTENT_MIXED,
+    REASON_HD_IMAGE_UNREAD,
+    REASON_HD_BOOT_ABSENT,
+    REASON_WHDLOAD_SAVEPATH_UNRECORDED,
+    REASON_WHDLOAD_PREFS_UNREAD,
+    REASON_VOLUME_BOOTS_ITSELF,
+    REASON_EMULATED_MODEL_UNRECORDED,
+    REASON_SAVEPATH_CONFIG_UNREADABLE,
+    REASON_SAVEPATH_UNTRANSLATABLE,
+    REASON_CARD_INDEX_OUTSIDE_RECORDED_NAMES,
+    REASON_INI_PRESENCE_UNESTABLISHED,
+    REASON_INI_SEARCH_PATH_UNLISTABLE,
+    REASON_INI_OUTRANKED_BY_CASCADE,
+)
+# The emulator's own configuration routes its saves to a directory outside
+# every root kind this answer format states — ScummVM's scummvm.ini can set
+# 'savepath' to any directory at all. The path is read off the machine and
+# carried in ``data`` (with the file it came from), because a client that
+# skips it loses the saves; the placement itself falls back to the standard
+# answer rather than stating a root kind that would be a lie.
+CAVEAT_SAVE_ROOT_REDIRECTED = "save-root-redirected"
+# The redirected caveat's harder sibling: the emulator anchors its save trees
+# in the frontend *process's* state — its working directory, its environment —
+# and that is a value no read of this machine can establish (MAME with its own
+# paths in force resolves ``states/mame/nvram`` against whatever directory
+# RetroArch happens to run from). Where redirected states the directory it
+# read, this one states the relative trees that would hang off the
+# unknowable anchor, in ``data``, so a caller sees what to look for once it
+# knows the anchor atlas refuses to guess. The placement itself falls back to
+# the standard answer, marked as where the frontend would look.
+CAVEAT_SAVE_ROOT_UNRESOLVABLE = "save-root-unresolvable"
+CAVEAT_SANDBOX_PATH_UNTRANSLATED = "sandbox-path-untranslated"
+CAVEAT_APP_RELATIVE_PATH_UNEXPANDED = "app-relative-path-unexpanded"
+CAVEAT_CFG_LINE_DROPPED = "cfg-line-dropped"
+CAVEAT_CFG_VALUE_REJECTED = "cfg-value-rejected"
+CAVEAT_CONTENT_DIR_OBSERVATION = "content-dir-observation"
+CAVEAT_CONTENT_PATH_UNNAMED = "content-path-unnamed"
+# The core's own .info says it cannot make savestates. A statement about the
+# declaration, not about the directory: the placement still resolves, and the
+# caveat is what keeps "here is the directory" from reading as "and states will
+# appear in it".
+CAVEAT_CORE_SAVESTATES_UNSUPPORTED = "core-savestates-unsupported"
+# The declaration caveat's standalone sibling, per machine instead of per
+# core: MAME flags save-state support driver by driver (MACHINE_SUPPORTS_SAVE,
+# gamedrv.h:76 at mame0287), the flags are compiled into the binary, and no
+# read of this machine can say which side the launched system falls on. An
+# unflagged system still WRITES the state file — MAME saves it and warns
+# "Save states are not officially supported for this system"
+# (machine.cpp:927-928) — so the placement stands, and this caveat is what
+# keeps "here is the directory" from reading as "and every machine's states
+# are reliable". ``data`` carries the emulator and the citation.
+CAVEAT_SAVESTATE_SUPPORT_MACHINE_DEPENDENT = "savestate-support-machine-dependent"
+# A directory is stated, and that this emulator reads it is not established.
+# The texture family's own degradation, and one level weaker than every other
+# code here: those qualify an answer atlas resolved, this one qualifies the
+# premise underneath it. Three libretro cores port a standalone emulator and
+# build their tree under a user directory whose root nobody has watched them
+# choose — the same open question the audit already carries for their saves —
+# so the location is the one the reading derives and the caveat says nobody has
+# seen it read. Never to be read as "the packs go nowhere": the directory is
+# real and stated; what is open is whether the emulator looks there.
+CAVEAT_EMULATOR_READ_UNESTABLISHED = "emulator-read-unestablished"
+# The directory is stated and the switch beside it is not, because the setting
+# that would answer it lives in a configuration file of the emulator's own that
+# atlas does not read. The texture family's second degradation, and the one a
+# standalone emulator's answer always carries today: where a libretro core's
+# option is read through RetroArch's own options chain, a standalone emulator
+# keeps its settings in its own ini, and modelling those is a different piece of
+# work (issue #3). Distinct from a value nobody stated — there the file was read
+# and said nothing; here no file was read at all.
+CAVEAT_EMULATOR_CONFIG_UNREAD = "emulator-config-unread"
+# The feature is off and this build offers no way to turn it on — not a core
+# option, not a setting any config file reaches. The strongest of the three
+# statements this family makes about a switch, and the only one that is about
+# the *build* rather than about a value: ``enabled`` is ``false`` here as an
+# established fact, not as a reading of some file. It can never ride with
+# ``emulator-read-unestablished``, which says the opposite kind of thing — there
+# the read path is in doubt, here it is established and simply never taken.
+CAVEAT_FEATURE_SWITCH_ABSENT = "feature-switch-absent"
+# Which patch formats the RetroArch on this machine attempts is not established.
+# The soft-patching question's own degradation, and the one place in atlas where
+# a *frontend* build's compile-time flags decide an answer: patching as a whole
+# and the ``.xdelta`` applier in particular are ``HAVE_PATCH`` / ``HAVE_XDELTA``
+# (``Makefile.common:260-267``), and nothing a running machine writes down says
+# which way they were set — no setting, no log, no file. So the candidate paths
+# are stated (they follow from the content path alone) and each one's
+# ``attempted`` is left unanswered rather than assumed from a build default.
+# Never to be read as "patching is off here": what is missing is the reading,
+# not the feature.
+CAVEAT_PATCH_FORMATS_UNESTABLISHED = "patch-formats-unestablished"
+# This emulator has a mod directory *and* the frontend patches its content
+# before it ever gets there. Stated on the mod answer because the two mechanisms
+# are easy to mistake for one: a caller holding an IPS file for an FBNeo romset
+# has two true places to put it — the core's own ``ips`` tree, and beside the
+# ROM where RetroArch itself would apply it — and they behave differently (one
+# is a core feature under a core option, the other is the frontend patching a
+# buffer). Not a degradation of the directory answer: everything it states
+# stands, and this points at the other question.
+CAVEAT_SOFT_PATCHING_APPLIES = "soft-patching-applies"
+
+
+@dataclass(frozen=True, slots=True)
+class Caveat:
+    """A stated degradation — structured, so clients can act on it.
+
+    ``code`` is a stable identifier from the ``CAVEAT_*`` constants and part of
+    the API contract: clients branch on it, vectors assert it. ``message`` is
+    the human-readable explanation and may change freely. ``data`` carries the
+    machine-readable specifics (e.g. the fallback directory of a silent
+    revert) as a read-only mapping. Decision-relevant → structured;
+    explanatory → text.
+
+    A value a client *branches* on is never a sentence. The enumerations
+    :data:`ENUMERATED_DATA` names come from a closed set defined beside the
+    code they belong to and are refused at construction if they do not;
+    whatever fact a sentence would have embedded is a key of its own, and the
+    sentence itself stays in ``message``, where prose belongs. Which shape a
+    value has is fixed per ``(code, key)`` pair, not per key name — ``key`` is
+    one config key under a dozen codes and the list of them under the per-game
+    layer ones — so a client switches on the code first.
+    """
+
+    code: str
+    """The stable identifier a client branches on — a code from the ``CAVEAT_*`` or
+    ``HEALTH_ISSUE_*`` vocabularies, and part of the contract.
+    """
+    message: str
+    data: Mapping[str, "DataValue"] = field(default_factory=dict)
+    """The machine-readable specifics a client acts on, as a read-only mapping.
+
+    One value, several values, or one value per subject — see
+    :data:`DataValue`. Sequences arrive as any sequence of strings and are
+    kept as tuples. The mapping form belongs to the pairs the guide documents:
+    the alternative-emulator tally, the card-index options
+    ``core-mode-unestablished`` reads, and the BIOS search's listing.
+    """
+
+    def __post_init__(self) -> None:
+        if not self.code:
+            raise ValueError("Caveat: code must be a non-empty stable identifier")
+        _check_enumerations("Caveat", self.code, self.data)
+        object.__setattr__(
+            self,
+            "data",
+            _freeze({key: _frozen_value(value) for key, value in self.data.items()}),
+        )
+
+# The holes a ``needs`` list may carry, each one a value the CALLER fills from
+# the content at hand. Contractual: clients read them, vectors assert them.
+# Nothing a config states belongs here — a configured value no caller can
+# supply is atlas's own to resolve or to state as a degradation, never a
+# template handed over as if it were fillable.
+HOLE_CONTENT_DIR = "content_dir"
+HOLE_LIBRARY_NAME = "library_name"
+HOLE_SAVE_ID = "save_id"
+# The two the resolver fills itself whenever the caller names content, so they
+# reach ``needs`` only on a content-less question: the content file's own stem,
+# and the basename of the directory it lies in. Two holes rather than one,
+# because they are different facts about the same path and a caller fills each
+# by itself — exactly the split between ``<rom_stem>`` in a declared file name
+# and the ``content_dir`` the sorted root keeps.
+HOLE_ROM_STEM = "rom_stem"
+HOLE_CONTENT_DIR_NAME = "content_dir_name"
+# The one hole no content can fill: the working directory of the process that
+# will load the core. It exists for the ``working_directory`` root and is
+# genuinely the caller's to fill — a frontend knows what cwd it launches with.
+HOLE_CWD = "cwd"
+# The hole a region-keyed answer keeps: which of an emulator's per-region
+# trees this game's save lands in is decided by the disc's own region field,
+# which atlas does not read out of content — but a caller with metadata (a
+# library server knows its games' regions) fills it and narrows the answer to
+# one tree. The groups list every tree either way, so a caller without the
+# region still sees the whole candidate set.
+HOLE_REGION = "region"
+
+# The template tokens a rule card's declared file names may carry, and the hole
+# each leaves behind. ``<rom_stem>`` the resolver fills itself from the content
+# path; ``<save_id>`` it never can — a core that names the save after the
+# content's platform-native id (Flycast's per-game VMUs are the disc's product
+# number, ``oslib.cpp:44-52`` at flycast@1dac369) reads that id out of the ROM
+# itself, which atlas does not do: identifying content is not locating a save.
+# So the id stays a hole for whoever knows it, exactly like ``content_dir``.
+TEMPLATE_ROM_STEM = "<rom_stem>"
+TEMPLATE_SAVE_ID = "<save_id>"
+# A card's *subdir* may template a whole segment on the content, because two
+# read cores key the directory itself that way: prboom creates
+# ``<save_dir>/<rom_stem>/`` (libretro.c:2633), the vitaquake2 family
+# ``<save_dir>/<basename of the content's directory>/`` (libretro.c:2259-2262).
+# A token must be the whole segment — ``_base_of`` undoes a subdir by counting
+# segments, and that stays exact only while one template fills to exactly one.
+TEMPLATE_CONTENT_DIR_NAME = "<content_dir_name>"
+# The whole-directory template the content-rooted answers keep when no content
+# was named — the spelling `needs`'s content_dir hole fills.
+TEMPLATE_CONTENT_DIR = "<content_dir>"
+# The whole-directory template a working-directory-rooted answer keeps — the
+# spelling `needs`'s cwd hole fills, and never a directory atlas read.
+TEMPLATE_CWD = "<cwd>"
+# The segment template a region-keyed emulator tree keeps until a caller fills
+# the ``region`` hole — one path segment, exactly like the subdir templates,
+# because that is the granularity Dolphin swaps it at (GetGCIFolderPath
+# replaces the last segment, MainSettings.cpp:844-873 at 2603a).
+TEMPLATE_REGION = "<region>"
+_FILE_NAME_HOLES: Mapping[str, str] = MappingProxyType({TEMPLATE_SAVE_ID: HOLE_SAVE_ID})
+SUBDIR_TEMPLATE_HOLES: Mapping[str, str] = MappingProxyType(
+    {TEMPLATE_ROM_STEM: HOLE_ROM_STEM, TEMPLATE_CONTENT_DIR_NAME: HOLE_CONTENT_DIR_NAME}
+)
+
+# The templates a card's own *rule* fills, from a read no path arithmetic
+# reaches. They are not holes and never become one: where the read fails, the
+# rule selects a different mode that states no such name — PUAE's unnamed
+# WHDLoad fallback is exactly that — so a caller never receives one of these
+# tokens in an answer, and a group carrying one the rule did not fill is a
+# build mistake that fails loudly.
+#
+# ``<whdload_name>`` is the program name inside a WHDLoad slave (``ws_name``),
+# which is what WHDLoad derives its per-game save directory from and what no
+# spelling of the archive's own path gives: an install archive's directory,
+# its slave's file name and its ``ws_name`` are three different strings.
+# ``<archive_member_stem>`` is one archived image's own stem, because a core
+# that extracts an archive names each member's write file after the member
+# rather than after the question's content — one value per member, so the
+# fill is a list and the declared file list grows with it.
+TEMPLATE_WHDLOAD_NAME = "<whdload_name>"
+TEMPLATE_ARCHIVE_MEMBER_STEM = "<archive_member_stem>"
+RULE_FILLED_TEMPLATES = (TEMPLATE_WHDLOAD_NAME, TEMPLATE_ARCHIVE_MEMBER_STEM)
+
+
+def _holes(named: list[str]) -> tuple[str, ...]:
+    """The distinct holes of a template, in the order they first appear.
+
+    One template can name the same hole twice — ``savefiles_in_content_dir``
+    roots at the content directory and ``sort_savefiles_by_content_enable``
+    appends its name again (``runloop.c:8789`` then ``:8827``), so the directory
+    really is ``<content_dir>/<content_dir>``. The caller still fills one value,
+    and ``needs`` is the list of things to fill, not of positions to substitute
+    (REVIEW L4).
+    """
+    return tuple(dict.fromkeys(named))
+
+
+def file_set_holes(files: Iterable[str]) -> tuple[str, ...]:
+    """The holes a declared file-set template still carries, in template order.
+
+    A card may name a save's files through a fact only the content carries.
+    Those names are stated as they are — the template is the answer — and the
+    hole travels to ``needs`` so a caller sees what is left to fill instead of
+    reading a literal ``<save_id>`` off a resolved-looking name.
+    """
+    return _holes([hole for name in files for token, hole in _FILE_NAME_HOLES.items() if token in name])
+
+
+def needs_with_file_set(needs: Iterable[str], files: Iterable[str]) -> tuple[str, ...]:
+    """Every hole of an answer: the directory template's, then the file names'."""
+    return _holes([*needs, *file_set_holes(files)])
+
+
+@dataclass(frozen=True, slots=True)
+class FileGroup:
+    """One directory's worth of a save, with what it is and whom it belongs to.
+
+    A save is not always one list of files in one place. MAME keeps a machine's
+    battery memory under ``nvram/``, its dip switches under ``cfg/`` beside an
+    emulator-wide ``default.cfg``, and disk write-differences under ``diff/``;
+    FinalBurn Neo puts a per-game ``.fs`` and a ``shared.memcard`` in one
+    directory. Those are different data with different owners, and a single
+    ``(dir, files, granularity)`` triple has to lie about at least one of them.
+
+    Each group carries its own resolved ``dir`` — groups may sit under different
+    roots — its own ``granularity`` and its own ``role``. What a group never
+    carries is prose: what a file is *for* beyond its role belongs in the
+    answer's ``sources``, not in a field a client would have to parse.
+
+    A group of an *observed* set is what was found under one declared meaning,
+    and a file the declaration does not name is a group too, with
+    :data:`ROLE_UNKNOWN`. Such a group states its ``granularity`` from the only
+    evidence there is, the names: the observation matched the content's own
+    stem, so these are this game's files rather than every game's, and whether
+    that reads ``per-game-file`` or ``per-game-files`` follows from how many the
+    group holds — the same count a card states its own groups by.
+
+    ``files`` is ``None`` where the emulator writes save data into this directory
+    under names that follow from nothing atlas reads — MAME names a hard disk's
+    differencing image after the disk's entry in the machine's own ROM table, and
+    its memory cards after an index chosen in the emulator's own interface.
+    ``None`` and ``()`` are different claims and the difference is the point:
+    ``()`` would say *this directory holds nothing*, which is exactly what such a
+    group does not say. Read it as "there is save data here and I cannot list
+    it": a backup takes the directory whole, and a name-based sync knows it is
+    blind there instead of silently skipping the player's progress. The reason
+    travels beside the answer as ``file-names-unestablished``, which carries the
+    citation; the group is where the directory itself belongs, so that one walk
+    over a declared answer's ``groups`` reaches every place a save lives. Only a
+    declared answer has such a group at all: ``files=None`` says a name was
+    never derivable, which is a statement about the card and not about what a
+    listing found.
+    """
+
+    dir: str
+    """The resolved directory this group's files lie in — groups of one answer may sit
+    under different roots.
+    """
+    files: tuple[str, ...] | None
+    """The basenames lying in ``dir``, or ``None`` where save data is written here under
+    names nothing atlas reads establishes.
+    """
+    granularity: str
+    """Whose data these files are — one of :data:`GRANULARITIES`, this game's or every
+    game's.
+    """
+    role: str
+    """What kind of data this group holds — one of :data:`ROLES`, the word a syncing
+    client decides by, and :data:`ROLE_UNKNOWN` where nothing atlas read says what the
+    file is.
+    """
+
+    def __post_init__(self) -> None:
+        if self.granularity not in GRANULARITIES:
+            raise ValueError(
+                f"FileGroup: granularity must be one of {GRANULARITIES}, got {self.granularity!r}"
+            )
+        if self.role not in ROLES:
+            raise ValueError(f"FileGroup: role must be one of {ROLES}, got {self.role!r}")
+        if self.files is not None and not self.files:
+            raise ValueError(
+                "FileGroup: a group with no files is not a group — a directory whose names are "
+                "not established carries None, which is a different claim"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class FileSet:
+    """The files a save consists of — observed, declared, or unknown.
+
+    ``state`` is ``"observed"`` (``files`` are real basenames found on disk),
+    ``"declared"`` (``files`` come from a verified rule card — world knowledge
+    with cited provenance, not a guess), or ``"unknown"`` (``files`` is empty;
+    atlas refuses to guess). ``provenance`` says how the state was reached.
+
+    A declared set can itself be a template: where the card names the files
+    through the content's own id, the names keep their ``<save_id>`` hole and
+    :data:`SavefilePlacement.needs` lists it. Stating the shape in full is not the
+    same as claiming the resolved name — it is the directory grammar applied to
+    file names.
+
+    *Observed* means a snapshot of matching files currently seen — it never
+    implies the whole save. ``complete`` is the explicit completeness claim:
+    ``True`` only when a source-verified rule card closes the candidate
+    universe for the active mode; the generic observation can never earn it.
+
+    **Today the field is reserved: it is ``False`` on every answer atlas can
+    give**, because no shipped rule card claims completeness and none can yet.
+    Closing the candidate universe means establishing which files the core can
+    write *at all* for the active mode — an upstream read, not an inventory of
+    what a card happens to list — and no card's evidence goes that far. The
+    field stays in the contract at its honest value rather than being dropped:
+    a client must not read "not complete" as "atlas has no opinion", and the
+    audit grind can earn a ``True`` here one card at a time without the shape
+    of an answer changing.
+
+    ``groups`` decomposes a set whose parts differ in kind or owner — see
+    :class:`FileGroup`. An *unknown* set has none, because it has no files;
+    empty means *not decomposed*, never *no files*.
+
+    **A savefile answer's observed set is decomposed too, and every file it
+    found is in one of its groups** — with the role the declaration knows for
+    that name, and with :data:`ROLE_UNKNOWN` where no declaration names it. The
+    two routes to one answer used to differ here: while the directory was empty
+    the declared set said which of the files were the console's settings, and
+    the moment the game had run once the same question came back with the names
+    and no roles at all. A client reading the absence as "ordinary progress"
+    then synchronised a settings file the user had chosen on that device. So a
+    role does not depend on whether anything was found: a name the declaration
+    covers keeps it, and so does a file in a directory whose role the card
+    states without its file names. A file no group of that directory covers says
+    so in a word. The savestate question's observation is the one that is not
+    decomposed at all — see :class:`SavestatePlacement`.
+
+    Where ``groups`` is populated, ``files`` stays exactly what it always was —
+    the names lying in ``dir`` — and that is enforced: every group under the
+    first group's directory whose names are established holds exactly those
+    names. A declared set is held to the card's order as well, which is the
+    order it states its parts in. An observed set is held to the names alone,
+    because its two lists come out of different passes: the groups follow the
+    declaration's order, while ``files`` follows the observation's — sorted
+    basenames where a directory is globbed, the card's own candidate order where
+    the card's names are checked one by one. So a client that never reads
+    ``groups`` sees no change when a
+    card splits one list into two by role, while a client that does gets the
+    parts under the other directories too wherever the set is declared. Cards
+    state the save's own state first, so the first group is the one a
+    save-syncing client would have taken anyway.
+
+    **Where a card decomposed a declared set, ``groups`` is the complete list of
+    places, and ``files`` is one of them.** A group whose names are not established carries
+    ``files=None`` and still appears here, so a single walk over ``groups``
+    reaches every directory the card knows about — there is no second structure
+    to correlate. A group with ``None`` contributes nothing to ``files``, which
+    is what keeps the flat list exactly the set of names a caller can look for.
+
+    **An observed set's groups describe the directory that was read, and only
+    it.** They are the found files sorted into what the declaration says they
+    are, so a card that also writes elsewhere has parts that no group of this
+    answer carries — and every one of those parts is named by a caveat instead.
+    The parts under another root are :data:`CAVEAT_FILE_SET_SPANS_ROOTS`, in
+    either state. The parts under this answer's own root in another
+    subdirectory are :data:`CAVEAT_FILE_SET_DIRECTORIES_UNREAD`, one per
+    directory, on the observation alone: Kronos declares three groups over
+    ``kronos/saturn`` and ``kronos/stv`` and an observation of the first states
+    one group and names the other directory; MAME 2010 declares eight
+    directories, and an observation states one and names seven. A directory
+    whose file names were never derivable also keeps its
+    :data:`CAVEAT_FILE_NAMES_UNESTABLISHED`, which is the other fact about the
+    same place — one says the names do not follow from anything atlas reads,
+    the other says nothing read the directory. So a short ``groups`` list is
+    never a claim that the card's other directories hold nothing: what the
+    answer says about them is in the caveats, and what it says is that they
+    were not looked at.
+    """
+
+    state: FileSetState
+    """Where these names come from: ``observed`` off disk, ``declared`` from a verified
+    rule card, or ``unknown`` for a set atlas will not guess.
+    """
+    files: tuple[str, ...]
+    """The save's file names as they lie in the answer's own directory — basenames, or
+    templates keeping the holes ``needs`` lists.
+    """
+    provenance: str
+    complete: bool = False
+    """Whether these names close the save's candidate universe — ``False`` on every
+    answer atlas can give today, which is not the same as having no opinion.
+    """
+    groups: tuple[FileGroup, ...] = ()
+    """Where this save lives, decomposed by kind or owner: every place the card knows
+    on a declared answer, the one directory that was read on an observation — empty
+    means not decomposed, never no files.
+    """
+
+    def __post_init__(self) -> None:
+        if self.state not in _FILE_SET_STATES:
+            raise ValueError(f"FileSet: state must be one of {_FILE_SET_STATES}, got {self.state!r}")
+        if self.state == "unknown" and (self.files or self.complete):
+            raise ValueError("FileSet: an unknown set carries no files and no completeness claim")
+        if self.groups and self.state == FILE_SET_UNKNOWN:
+            raise ValueError("FileSet: an unknown set has no files to decompose into groups")
+        if self.groups:
+            self._check_group_agreement()
+
+    def _check_group_agreement(self) -> None:
+        """Hold ``files`` to the groups stating names in the answer's own directory.
+
+        What this checks is agreement, not coverage: a set that carries groups
+        may not lose, invent or double a name between them and ``files``. It
+        says nothing about a set that carries none — the ``if self.groups`` at
+        the one call site is the whole condition — so "every file a savefile
+        observation found is in a group" is the resolver's doing
+        (``_observed_groups``), not this type's. The guard is also what keeps
+        that silence true: reached on an empty tuple this check would not raise
+        on ``groups[0]``, which the comprehension never evaluates, but would
+        refuse the set for groups that name nothing. A savestate answer builds
+        an observed set with files and no groups and is legal in a ``FileSet``.
+
+        The sequence is held only where it is stated. Both lists come out of
+        their own pass: the groups follow the declaration's order, while
+        ``files`` follows the observation's — sorted basenames where a directory
+        is globbed, the card's own candidate order where the card's names are
+        checked one by one. Neither is the order the directory happens to hold,
+        and the two need not agree.
+        """
+        here = tuple(
+            name
+            for group in self.groups
+            if group.dir == self.groups[0].dir and group.files is not None
+            for name in group.files
+        )
+        observed = self.state == FILE_SET_OBSERVED
+        ordered = "" if observed else ", in order"
+        if (sorted(here) if observed else here) != (sorted(self.files) if observed else self.files):
+            raise ValueError(
+                "FileSet: files must be every group in the answer's own directory whose names "
+                f"are established{ordered} — got {self.files}, groups say {here}"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class OptionReading:
+    """One switch that decides the granularity, read live: key, value, and where.
+
+    ``value`` is the live value the resolver read — or ``None`` where the
+    setting has no entry anywhere and its effect falls to a default the
+    ``provenance`` explains. ``provenance`` is prose (which file stated it, or
+    the core's registered default); ``options_file`` is where a caller would
+    change it — change it, ask again, and the new answer confirms the switch.
+    """
+
+    key: str
+    """The option key this reading is of, spelled the way the emulator's own file spells
+    it.
+    """
+    value: str | None
+    """The live value read for ``key``, or ``None`` where nothing states it and the
+    provenance says what applies instead.
+    """
+    provenance: str
+    options_file: str | None
+    """The file to edit to change this switch — change it, ask again, and the new answer
+    confirms it; ``None`` where this answer resolved no such file.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class ModeAlternative:
+    """One other mode a caller could switch to, and the settings that select it.
+
+    ``options`` is the combination that reaches the mode — for a single-option
+    core one pair, for a rule card one pair per switch. ``values`` is every
+    distinct grouping among that mode's groups, in card order with the mode's
+    own first: one entry for most modes, and the honest plural for a mixed one
+    (FinalBurn Neo's shared mode writes a per-game save beside a card every
+    game shares, and a single value would hide the shared file — the
+    understatement issue #128 was about). A client that wants one word reads
+    ``values[0]``, which is exactly what the old single value said.
+    """
+
+    mode: str
+    """The other mode this alternative names — what the grouping becomes if a caller
+    selects it.
+    """
+    options: tuple[tuple[str, str], ...]
+    """The full option combination that reaches ``mode`` — one pair for a single-option
+    core, one pair per switch for a rule card.
+    """
+    values: tuple[str, ...]
+    """Every distinct grouping among that mode's groups, in card order with the mode's
+    own first.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class Granularity:
+    """How this emulator, configured as it is, groups save data — and how to change it.
+
+    ``value`` is the current granularity (``"shared-card"``,
+    ``"per-game-file"``, …, or ``"none"`` for a mode that keeps no save at
+    all); ``mode`` names the rule-card mode in force — an option value where
+    one option governs, the card's own mode name where a rule selects, and
+    ``None`` where no card speaks (the standard rule's per-game grouping).
+    ``readings`` is one :class:`OptionReading` per switch that went into the
+    selection — one for a single-option card, several for a rule card, none
+    where nothing selects. ``alternatives`` lists the other reachable modes
+    as :class:`ModeAlternative`, each with the option combination that
+    selects it. A core with fixed behaviour (e.g. LRPS2) carries no readings
+    and no alternatives. ``provenance`` is prose: how the mode came to be
+    selected — for a granularity with readings each reading carries its own,
+    and this sentence is the summary; for one without, it is the whole story
+    (the standard rule's per-content keying, a card's fixed behaviour).
+    """
+
+    value: str
+    """How this emulator, configured as it is, groups save data — one of
+    :data:`GRANULARITIES`, or :data:`GRANULARITY_NONE` for a mode that keeps no save
+    at all.
+    """
+    mode: str | None
+    """The rule-card mode in force, for display and never for branching — ``None`` where
+    no card speaks.
+    """
+    readings: tuple[OptionReading, ...]
+    """One entry per switch that went into the selection — none where nothing selects, as
+    for a core with fixed behaviour.
+    """
+    alternatives: tuple[ModeAlternative, ...]
+    """The other reachable modes, each with the option combination that selects it."""
+    provenance: str
+
+
+UNKNOWN_FILE_SET = FileSet(
+    state=FILE_SET_UNKNOWN,
+    files=(),
+    provenance="file set not stated — no observation available (never guessed)",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class SavefilePlacement:
+    """A resolved save location with provenance and stated degradations.
+
+    ``dir`` is concrete when the caller supplied the content path; otherwise it
+    is a template whose remaining holes are listed in ``needs`` — as are the
+    holes a declared file-set template keeps, so ``needs`` is the answer's
+    holes, not the directory's alone. ``root_kind``
+    names the anchor (:data:`ROOT_SAVEFILE_DIRECTORY`,
+    :data:`ROOT_CONTENT_DIRECTORY`, :data:`ROOT_SYSTEM_DIRECTORY`,
+    :data:`ROOT_WORKING_DIRECTORY` — the launch's own directory, always a
+    ``<cwd>`` template with its hole in ``needs`` — or
+    :data:`ROOT_EMULATOR_DIRECTORY`, a standalone emulator's own tree).
+    ``file_set`` is observed or unknown, never guessed. ``sources`` is the
+    provenance trail; ``caveats`` states every degradation explicitly.
+
+    ``granularity`` is ``None`` wherever no rule card states it. That alone
+    does not separate "nothing to report" from "atlas deliberately does not
+    state this", so the separation is a caveat, not an empty field: a core
+    whose granularity depends on options atlas does not interpret carries
+    :data:`CAVEAT_CORE_MULTI_OPTION` naming those options.
+
+    A placement can be *conditional*: when ``dir`` does not exist yet,
+    RetroArch attempts to create it on first save and silently reverts to the
+    unsorted root when creation fails — ``fallback_dir`` names that root, so
+    the two possible outcomes are structural, not prose (REVIEW H5).
+    ``physical_dir`` is the fully link-resolved backing directory when ``dir``
+    reaches its files through symlinks (RetroDECK's ``dir_prep`` pattern) —
+    the emulator-side path and the physical path are two truthful answers to
+    different questions (REVIEW M7); a dead link is a ``dead-symlink`` caveat
+    instead.
+    """
+
+    dir: str
+    """The directory this emulator keeps the save in — concrete where the caller supplied
+    the content path, otherwise a template whose holes ``needs`` lists.
+    """
+    root_kind: RootKind
+    """Which anchor ``dir`` hangs off — one of :data:`ROOT_KINDS`, from the configured
+    save root to a standalone emulator's own tree.
+    """
+    needs: tuple[str, ...]
+    """The holes a caller fills, the directory template's and a declared file-set
+    template's together — an answer with none is fully resolved.
+    """
+    file_set: FileSet
+    """The files the save consists of — observed, declared, or unknown, and never
+    guessed.
+    """
+    sources: tuple[str, ...]
+    caveats: tuple[Caveat, ...]
+    """Every degradation of this answer, stated structurally so a client branches on the
+    code rather than on prose.
+    """
+    granularity: Granularity | None = None
+    """How this emulator groups save data and how to change it, and ``None`` wherever no
+    rule card states it.
+    """
+    fallback_dir: str | None = None
+    """The unsorted root RetroArch silently reverts to when it cannot create ``dir``, and
+    ``None`` where the placement is not conditional.
+    """
+    physical_dir: str | None = None
+    """The fully link-resolved backing directory where ``dir`` reaches its files through
+    symlinks, and ``None`` otherwise.
+    """
+
+    def __post_init__(self) -> None:
+        if not self.dir:
+            raise ValueError("SavefilePlacement: dir must be non-empty (an unanswerable placement is Unresolved)")
+        if self.root_kind not in ROOT_KINDS:
+            raise ValueError(f"SavefilePlacement: root_kind must be one of {ROOT_KINDS}, got {self.root_kind!r}")
+
+
+@dataclass(frozen=True, slots=True)
+class ScreenshotPlacement:
+    """Where RetroArch writes this configuration's screenshots (issue #142).
+
+    The savefile placement's shape minus the fields whose domain is empty
+    here, each omission the contract rather than an oversight. No
+    ``file_set``: the default naming is the content's stem plus a timestamp
+    (``fill_str_dated_filename``, task_screenshot.c:517-535 at a79435a), so
+    no closed set of names exists to declare or observe. No ``fallback_dir``:
+    RetroArch creates the directory at the moment of the shot and simply
+    fails the shot when it cannot (task_screenshot.c:553-556) — there is no
+    revert-to-unsorted the way the save families have. No ``granularity``:
+    nothing groups screenshots but the directory itself.
+
+    ``root_kind`` speaks the question's own two-word vocabulary. The
+    ``content_directory`` root is reached three ways, all stated in
+    ``sources``: the ``screenshots_in_content_dir`` flag (which outranks even
+    a configured directory, task_screenshot.c:547-550), a key that is unset
+    or reset to ``"default"``, and a configured directory that does not exist
+    — RetroArch clears that at config load rather than creating it
+    (configuration.c:6733-6741), which the ``invalid-screenshot-directory``
+    caveat carries machine-readably.
+    """
+
+    dir: str
+    """The directory this configuration's screenshots land in — concrete where content or
+    a configured root fills it, otherwise a template whose holes ``needs`` lists.
+    """
+    root_kind: ScreenshotRootKind
+    """Which anchor ``dir`` hangs off — the configured screenshot directory, or the
+    content's own.
+    """
+    needs: tuple[str, ...]
+    """The holes a caller fills to make ``dir`` concrete — empty on an answer that is
+    already a path.
+    """
+    sources: tuple[str, ...]
+    caveats: tuple[Caveat, ...]
+    """Every degradation of this answer, stated structurally so a client branches on the
+    code rather than on prose.
+    """
+    physical_dir: str | None = None
+    """The fully link-resolved backing directory where ``dir`` reaches its files through
+    symlinks, and ``None`` otherwise.
+    """
+
+    def __post_init__(self) -> None:
+        if not self.dir:
+            raise ValueError("ScreenshotPlacement: dir must be non-empty")
+        if self.root_kind not in SCREENSHOT_ROOT_KINDS:
+            raise ValueError(
+                f"ScreenshotPlacement: root_kind must be one of {SCREENSHOT_ROOT_KINDS}, "
+                f"got {self.root_kind!r}"
+            )
+
+
+# Unresolved outcome codes — stable identifiers like caveat codes.
+UNRESOLVED_STANDALONE = "standalone-unsupported"
+# The emulator is known and carded, but the binary THIS entry would launch is
+# not the one whose configuration is established: an arrangement's launcher
+# script picks at run time (EmuDeck's cemu.sh probes an AppImage, then a
+# flatpak, then a Windows build under Proton), and only an established
+# variant's config answers. A statement about atlas's wiring, never about the
+# emulator; ``data`` names the variant so a client can say why this launch
+# has no read placement. Distinct from ``standalone-unsupported`` (no card at
+# all) and from ``emulator-config-unreadable`` (the established config exists
+# and the machine would not let it be read).
+UNRESOLVED_STANDALONE_VARIANT_UNESTABLISHED = "standalone-variant-unestablished"
+# The caller named a core this installation does not have, and the cores
+# directory was read well enough to establish that. One fact, one code on both
+# routes: the firmware route says it with a caveat
+# (``atlas.firmware.CAVEAT_CORE_NOT_INSTALLED``, which is this same string), the
+# save routes with this outcome, and a client that learned the word on one route
+# reads the other. Not to be confused with a core that is *there* and will not
+# load — that one still has a placement, with its generation left unestablished.
+UNRESOLVED_CORE_NOT_INSTALLED = "core-not-installed"
+# Nothing establishes where this emulator reads texture packs, so no directory
+# is named. A statement about atlas, never about the emulator: it does NOT say
+# the emulator has no texture-pack feature, and a client rendering it that way
+# reports something nobody checked. Most cores are simply outside the packaged
+# wiring knowledge; one — LRPS2 at its shipped generation — is deliberately left
+# out of it, because the only path anyone can name for it is one an arrangement
+# builds rather than one the emulator was seen to read.
+UNRESOLVED_TEXTURE_WIRING_UNESTABLISHED = "texture-wiring-unestablished"
+# The texture refusal's twin, one family over: nothing establishes where this
+# emulator reads mods, so no directory is named. A statement about atlas and
+# never about the emulator — most emulators are simply outside the packaged
+# wiring, and one is deliberately outside it: MAME's plugin directories are
+# values an installer writes into ``mame.ini``, so naming them would state an
+# arrangement's directory as an emulator's read location.
+UNRESOLVED_MOD_WIRING_UNESTABLISHED = "mod-wiring-unestablished"
+# A standalone emulator's save answer hangs entirely on a configuration of the
+# emulator's own, and that file exists and could not be read. There is no
+# standard frame to fall back to the way a libretro card steps aside — the
+# frontend hands these emulators nothing — so the whole question refuses,
+# with the file named in ``data``. Distinct from ``standalone-unsupported``:
+# there atlas has no wiring for the emulator, here it does and the machine
+# would not let it look.
+UNRESOLVED_EMULATOR_CONFIG_UNREADABLE = "emulator-config-unreadable"
+# Why the read did not settle the question, under ``data["reason"]``, where the
+# refusal has one to state. Two sources, one vocabulary: the scalar reader's own
+# refusal codes (:data:`~atlas.yaml_scalars.REFUSAL_CODES`) say which construct
+# stopped the whole file, and ``key-unread`` says the file parsed but the one
+# key this answer hangs on is stated as a construct the reader does not read —
+# ``data["key"]`` names it. A refusal that simply could not open the file
+# states no reason at all; the file is in ``data["config"]`` either way.
+REASON_KEY_UNREAD = "key-unread"
+EMULATOR_CONFIG_UNREADABLE_REASONS = (*REFUSAL_CODES, REASON_KEY_UNREAD)
+
+# Every file a BIOS search kept and hashed, keyed by path, beside what the
+# emulator's own table made of each one's bytes. Built by
+# :func:`atlas.firmware._duckstation_candidate_listing`, one module over with
+# the rest of the search family's codes; this one is written here because its
+# ``readings`` key is a closed vocabulary and :data:`ENUMERATED_DATA` below is
+# what closes it. It states what the search already read and changes nothing
+# the answer said before it, so a client that ignores it reads the answer it
+# read without it.
+CAVEAT_FIRMWARE_SEARCH_CANDIDATES = "firmware-search-candidates"
+READING_IDENTIFIED: SearchReading = "identified"
+"""A row of the emulator's own table holds these bytes, so it is an image it recognises."""
+READING_UNRECOGNISED: SearchReading = "unrecognised"
+"""The bytes came back and no row of the table holds them — read, and not an image it knows."""
+READING_UNREADABLE: SearchReading = "unreadable"
+"""The bytes did not come back, so nothing about this file's content was established."""
+# The closed vocabulary those three make up: everything a listing may say
+# about one candidate's bytes, and nothing else.
+FIRMWARE_SEARCH_READINGS = (READING_IDENTIFIED, READING_UNRECOGNISED, READING_UNREADABLE)
+SearchReading = Literal["identified", "unrecognised", "unreadable"]
+
+# The ``(code, key)`` pairs whose value is an enumeration, and the vocabulary
+# each comes from. Checked at construction, the way
+# :class:`CfgSource` checks its kind and the card loader checks its tokens —
+# because being closed by convention is not being closed: a typo in a resolver
+# no fixture reaches would otherwise ship through the type check, the tests and
+# the vectors alike, and reach a client as a value nothing documents.
+#
+# Not every closed set in the contract is here. Older ones — an installation's
+# ``kind``, a card's ``verification`` and ``verdict``, a requirement's ``need``,
+# a health finding's ``status`` — are enforced where they are built or not at
+# all, and registering them is a change of its own rather than a rider on this
+# one. What this table holds, it holds absolutely.
+ENUMERATED_DATA: "Mapping[tuple[str, str], tuple[str, ...]]" = MappingProxyType(
+    {
+        (CAVEAT_CORE_MODE_UNESTABLISHED, "reason"): CORE_MODE_UNESTABLISHED_REASONS,
+        (CAVEAT_FILENAMES_CONTENT_CONDITIONAL, "files_established_for"): (
+            FILES_ESTABLISHED_FOR_TOKENS
+        ),
+        # A mapping-valued pair: the listing states one reading per kept file,
+        # keyed by its path, so the vocabulary closes the mapped words rather
+        # than the mapping as a whole.
+        (CAVEAT_FIRMWARE_SEARCH_CANDIDATES, "readings"): FIRMWARE_SEARCH_READINGS,
+        (CAVEAT_INVALID_SAVE_DIRECTORY, "layer"): CFG_LAYER_KINDS,
+        # The world-knowledge mark carries two keys and only one of them is
+        # closed: the evidence level, as the contract spells it rather than in
+        # the bracket notation the research pages use. The system it is about
+        # is a system id — open by construction, because atlas publishes its
+        # own spelling wherever no catalogue declares one.
+        (CAVEAT_SYSTEM_FIRMWARE_WORLD_KNOWLEDGE, "evidence"): STATED_EVIDENCE_WORDS,
+        (UNRESOLVED_EMULATOR_CONFIG_UNREADABLE, "reason"): EMULATOR_CONFIG_UNREADABLE_REASONS,
+    }
+)
+
+
+def _check_enumerations(what: str, code: str, data: "Mapping[str, DataValue]") -> None:
+    """Refuse a value outside the vocabulary its ``(code, key)`` names.
+
+    The vocabulary closes each word rather than the shape carrying them: the
+    search listing's ``readings`` is a word per kept file, keyed by the path
+    it is about, and neither a mapping nor a list could ever equal a member —
+    so checking one as a single value would refuse every one of them rather
+    than the wrong word inside it. A mapping's KEYS are the subjects the words
+    are said about and are left alone.
+    """
+    for key, value in data.items():
+        allowed = ENUMERATED_DATA.get((code, key))
+        if allowed is None:
+            continue
+        for stated in _stated_words(value):
+            if stated not in allowed:
+                raise ValueError(
+                    f"{what}: {code}.{key} must be one of {list(allowed)}, got {stated!r}"
+                )
+
+
+def _stated_words(value: "DataValue") -> tuple[str, ...]:
+    """The words one data value states: itself, its members, or its mapped values."""
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, Mapping):
+        return tuple(value.values())
+    return tuple(value)
+# The emulator's configuration was read, and the absolute path it states has
+# no spelling on this host from here: the value names a location only the
+# emulator's sandbox can read, and the whole answer hangs on that one path,
+# so there is nothing to anchor at. The caveat vocabulary states the same
+# fact as a degradation (``sandbox-path-untranslated``) where an answer still
+# stands around it; this is that fact as a refusal, with the untranslatable
+# value in ``data["path"]`` beside the file that states it. Distinct from
+# ``emulator-config-unreadable``: there the machine would not let the file be
+# read, here the read succeeded and the stated value is what cannot be
+# reached. ``data["path"]`` is always the primary stated value; an aggregate
+# refusal covering several stated files (xemu's save answer, where the disk
+# image and the EEPROM ride one question) additionally carries
+# ``data["paths"]`` — every untranslatable value, in the emitter's stated
+# order (for xemu: the disk image first, then the EEPROM) — whenever it
+# names more than one.
+UNRESOLVED_EMULATOR_CONFIG_PATH_UNTRANSLATABLE = "emulator-config-path-untranslatable"
+
+
+@dataclass(frozen=True, slots=True)
+class Unresolved:
+    """A question atlas cannot answer for this entry — a domain outcome, not an error.
+
+    Returned where an answer route exists but the subject is outside the
+    resolver's current coverage (e.g. a standalone emulator entry before the
+    standalone block lands). ``code`` is a stable identifier clients branch
+    on; ``message`` says why; ``data`` carries the specifics. Callers switch
+    on the result type — nothing raises at runtime (REVIEW M8).
+    """
+
+    code: str
+    """The stable identifier a client branches on — why this question has no answer for
+    this entry.
+    """
+    message: str
+    data: Mapping[str, "DataValue"] = field(default_factory=dict)
+    """The machine-readable specifics of the refusal, as a read-only mapping.
+
+    The same value vocabulary a caveat's data has (:data:`DataValue`): one
+    string, or the list-valued keys an aggregate refusal documents beside its
+    code (``paths`` on the untranslatable-path code) — tuples here, JSON
+    arrays in the serialized contract.
+    """
+
+    def __post_init__(self) -> None:
+        if not self.code:
+            raise ValueError("Unresolved: code must be a non-empty stable identifier")
+        _check_enumerations("Unresolved", self.code, self.data)
+        object.__setattr__(
+            self,
+            "data",
+            _freeze({key: _frozen_value(value) for key, value in self.data.items()}),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SavestatePlacement:
+    """A resolved savestate location with provenance and stated degradations.
+
+    :class:`SavefilePlacement` field for field, minus ``granularity`` — see the
+    module docstring for why that one cannot exist here. ``dir`` is concrete
+    when the caller supplied the content path; otherwise it is a template whose
+    remaining holes are listed in ``needs``. ``root_kind`` names the anchor
+    (:data:`ROOT_SAVESTATE_DIRECTORY`, :data:`STATE_ROOT_CONTENT_DIRECTORY`,
+    or — for a standalone entry's answer, never for RetroArch's —
+    :data:`STATE_ROOT_EMULATOR_DIRECTORY` and
+    :data:`STATE_ROOT_WORKING_DIRECTORY`).
+
+    ``file_set`` is where the two questions differ in substance rather than in
+    fields. A savefile's set is per-core behaviour with no metadata source; a
+    savestate's is RetroArch's own, and atlas can state it: the base name is
+    ``<stem>.state`` (``runloop.c:8942-8949``, ``file_path_special.h:44``), the
+    numbered slots are ``<stem>.state<N>`` for N above zero and the auto slot is
+    ``<stem>.state.auto`` (``runloop.c:8185-8207``). Which of them exist is
+    still an observation — the slot is a live setting and nothing on disk says
+    how many were ever written — so the set is never ``complete``.
+
+    That set is the one atlas never decomposes: ``file_set.groups`` is empty on
+    every savestate answer, in every state. A group exists to say what a file is
+    and whose it is, and this question has already said both — the set is this
+    content's states, under names the paragraph above states rather than per-core
+    behaviour, so a role beside them would repeat the question. The observation
+    also picks up the ``.png`` thumbnail RetroArch writes beside a state with
+    ``savestate_thumbnail_enable`` on, and the one decomposition anyone could
+    build here would part each thumbnail from the state it belongs to.
+
+    ``fallback_dir`` and ``physical_dir`` mean exactly what they do on a save
+    placement: the root RetroArch silently reverts to when it cannot create the
+    sorted directory (``runloop.c:8878-8887``), and the link-resolved backing
+    directory where the answer is reached through symlinks.
+    """
+
+    dir: str
+    """The directory this emulator keeps savestates in — concrete where the caller
+    supplied the content path, otherwise a template whose holes ``needs`` lists.
+    """
+    root_kind: StateRootKind
+    """Which anchor ``dir`` hangs off — one of :data:`STATE_ROOT_KINDS`, from the
+    configured savestate root to the launching process's own directory.
+    """
+    needs: tuple[str, ...]
+    """The holes a caller fills to make ``dir`` concrete — an answer with none is fully
+    resolved.
+    """
+    file_set: FileSet
+    """The files the savestates consist of — observed where a listing found them,
+    declared where a card names the emulator's own, unknown where neither did.
+    """
+    sources: tuple[str, ...]
+    caveats: tuple[Caveat, ...]
+    """Every degradation of this answer, stated structurally so a client branches on the
+    code rather than on prose.
+    """
+    fallback_dir: str | None = None
+    """The unsorted root RetroArch silently reverts to when it cannot create ``dir``, and
+    ``None`` where the placement is not conditional.
+    """
+    physical_dir: str | None = None
+    """The fully link-resolved backing directory where ``dir`` reaches its files through
+    symlinks, and ``None`` otherwise.
+    """
+
+    def __post_init__(self) -> None:
+        if not self.dir:
+            raise ValueError("SavestatePlacement: dir must be non-empty")
+        if self.root_kind not in STATE_ROOT_KINDS:
+            raise ValueError(
+                f"SavestatePlacement: root_kind must be one of {STATE_ROOT_KINDS}, got {self.root_kind!r}"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class SavestateAbsence:
+    """This emulator has no savestates — a stated, cited fact, and an answer.
+
+    The savestate question's third shape (#284), beside the placement and the
+    refusal, because "the feature does not exist" is neither: a refusal says
+    atlas cannot answer, a placement would have to invent a directory that is
+    not there, and this says the answer is *nowhere* — Cemu 2.6 ships no state
+    serializer, the Ryujinx lineage never had one. ``citation`` is the
+    evidence for the no (the spans and scans that establish it, contractual —
+    a client repeating the claim repeats its source); ``sources`` is the
+    card's provenance prose, non-contractual like every provenance.
+
+    ``caveats`` carries what qualifies the *claim*, never what qualifies a
+    tree: the card's own ``unverified-version`` where no shipped build pins
+    the claim (nothing ships Ryubing; the record reads a release); the
+    arrangement's evidence caveats — a stated no is world knowledge pinned to
+    the build an arrangement was verified with, so an arrangement atlas never
+    observed, or one observed on another version, says so here exactly as it
+    does on a placement; and the entry's catalogue-status and per-game
+    override caveats — a gamelist that would launch a DIFFERENT emulator for
+    this game is a statement about emulator identity, and "this emulator has
+    no savestates" needs the rider that this emulator may not be what runs.
+    Tree-derived caveats (health findings, link walks) do not ride: the
+    absence names no path for them to qualify.
+    """
+
+    token: str
+    """The emulator this stated no is about, named by the token its packaged card carries —
+    atlas's own vocabulary for a carded emulator, and deliberately not ``emulator``, which
+    on a catalogue entry and a firmware core is the frontend's own spelling of the launch.
+
+    The two vocabularies agree wherever an arrangement's commands carry the
+    card's own word, which is every RetroDECK launch, and part company where
+    one spells a launch its own way: EmuDeck runs Cemu through a launcher
+    script, so the entry there reports ``cemu`` while the card behind this
+    answer is ``CEMU``. One name per vocabulary is what keeps a client from
+    joining the two by accident.
+    """
+    citation: str
+    """The evidence for the no, contractual so that a client repeating the claim repeats
+    its source.
+    """
+    sources: tuple[str, ...]
+    caveats: tuple[Caveat, ...] = ()
+    """What qualifies the claim itself — never what qualifies a tree, since an absence
+    names no path.
+    """
+
+    def __post_init__(self) -> None:
+        if not self.token:
+            raise ValueError("SavestateAbsence: token must be non-empty")
+        if not self.citation:
+            raise ValueError(
+                "SavestateAbsence: citation must be non-empty — a stated no without its "
+                "evidence is indistinguishable from a guess"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class TexturePlacement:
+    """Where this emulator, configured as it is, reads texture packs from.
+
+    The third placement, and the first whose *root* is not RetroArch's to
+    choose: a core that supports texture replacement builds the tree itself,
+    under a directory it derives from one of the roots RetroArch hands it. So
+    the split runs the other way round from the save family — the root is read
+    live (the system directory as the core receives it, or the save root as it
+    stands), the fragment below it is per-core behaviour no config states, and
+    the two are joined here.
+
+    ``dir`` is concrete when every hole is filled and otherwise a template whose
+    remaining holes are listed in ``needs`` — the same grammar
+    :class:`SavefilePlacement` answers with, and for the same reason: a core
+    rooted in the system directory is handed the *content's* directory wherever
+    ``systemfiles_in_content_dir`` sends it, so a caller who named no content
+    gets ``<content_dir>`` and a hole to fill rather than a directory nobody
+    picked. ``physical_dir`` is the link-resolved backing directory where the
+    answer is reached through symlinks — the shape every distribution that wires
+    a shared texture tree into place produces — and a traversal that ends
+    nowhere is a ``dead-symlink`` or ``symlink-loop`` caveat instead.
+
+    Two fields are this question's own, and each is a different kind of
+    knowledge:
+
+    - ``enabled`` says whether replacement is switched on **right now**, read
+      from the option that governs it: the options file that RetroArch would
+      read first, else the default the installed core itself registers. It is
+      ``None`` where neither answered — the option is not in any file atlas
+      could read *and* the core did not state a default (or registered a value
+      outside the ones the card knows). A directory whose feature is off is
+      still the right directory, which is exactly why the two facts are separate
+      fields rather than one hedged answer.
+    - ``keying`` names how the tree below ``dir`` is divided per game
+      (:data:`KEYINGS`) and is ``None`` wherever no cited evidence states it.
+      It is world knowledge — nothing on the machine spells it — so it follows
+      the boundary rule to the letter: cited or absent, never derived into an
+      answer.
+    """
+
+    dir: str
+    """The directory this emulator reads texture packs from — concrete where every hole
+    is filled, otherwise a template whose remaining holes ``needs`` lists.
+    """
+    needs: tuple[str, ...]
+    """The holes a caller fills to make ``dir`` concrete — empty on an answer that is
+    already a path.
+    """
+    enabled: bool | None
+    """Whether texture replacement is switched on right now, read from the switch that
+    governs it — ``None`` where no switch answered on this route.
+    """
+    keying: Keying | None
+    """How the tree below ``dir`` is divided per game — one of :data:`KEYINGS`, and
+    ``None`` wherever no cited evidence states it.
+    """
+    sources: tuple[str, ...]
+    caveats: tuple[Caveat, ...]
+    """Every degradation of this answer, stated structurally so a client branches on the
+    code rather than on prose.
+    """
+    physical_dir: str | None = None
+    """The fully link-resolved backing directory where ``dir`` reaches its files through
+    symlinks, and ``None`` otherwise.
+    """
+
+    def __post_init__(self) -> None:
+        if not self.dir:
+            raise ValueError(
+                "TexturePlacement: dir must be non-empty (an unanswerable placement is Unresolved)"
+            )
+        if self.keying is not None and self.keying not in KEYINGS:
+            raise ValueError(f"TexturePlacement: keying must be one of {KEYINGS}, got {self.keying!r}")
+
+
+@dataclass(frozen=True, slots=True)
+class ModTree:
+    """One directory a mod goes into, and how the tree below it is keyed.
+
+    ``dir`` and ``physical_dir`` mean exactly what they mean on a
+    :class:`TexturePlacement`: the path the emulator opens, and the
+    link-resolved directory the bytes are really in where an arrangement wired
+    one. ``keying`` follows the same cited-or-absent rule.
+
+    ``role`` is this family's own field, and its domain is the reason the
+    family's answer is plural at all: an emulator may read mods from **several**
+    directories that are not alternatives to each other but different mechanisms
+    — FBNeo takes a replacement romset from ``patched``, an IPS patch set from
+    ``ips`` and a romdata file from ``romdata``, all governed by one switch. The
+    role is the emulator's own word for such a tree, so a caller with three
+    directories in hand can tell which is which. It is ``None`` where the
+    emulator reads mods from one directory, because there is then nothing to
+    tell apart — a made-up name for the only tree would be vocabulary a client
+    has to learn to ignore.
+    """
+
+    dir: str
+    """The directory the emulator opens this mod tree at."""
+    keying: Keying | None
+    """How the tree below ``dir`` is divided per game — one of :data:`KEYINGS`, and
+    ``None`` wherever no cited evidence states it.
+    """
+    role: str | None = None
+    """The emulator's own word for what this tree is, and ``None`` where it reads mods
+    from one directory and there is nothing to tell apart.
+    """
+    physical_dir: str | None = None
+    """The link-resolved directory the bytes are really in where an arrangement wired
+    one, and ``None`` otherwise.
+    """
+
+    def __post_init__(self) -> None:
+        if not self.dir:
+            raise ValueError("ModTree: dir must be non-empty")
+        if self.keying is not None and self.keying not in KEYINGS:
+            raise ValueError(f"ModTree: keying must be one of {KEYINGS}, got {self.keying!r}")
+
+
+@dataclass(frozen=True, slots=True)
+class ModPlacement:
+    """Where this emulator, configured as it is, reads mods from.
+
+    The texture family's answer with one difference, and the difference is the
+    plural: ``trees`` replaces the single ``dir``/``keying``/``physical_dir``
+    trio, because a mod is not one kind of thing. Ten of the eleven rows atlas
+    ships carry exactly one tree; FBNeo carries three, each a different
+    mechanism under one switch, and an answer that named one of them would be
+    two-thirds wrong for a caller who has an IPS patch in hand.
+
+    That plurality is deliberate rather than incidental, and it is the shape
+    this grammar will need again: a single question can have several true
+    locations at once, which is the same class of answer the save side runs into
+    where one core writes to two roots for one game (issue #97).
+
+    Everything else is the texture answer, field for field and meaning for
+    meaning. ``needs`` are the holes of the *answer* — a root resolved into the
+    content's own directory leaves the same hole for every tree hanging off it,
+    so the list belongs here rather than on each tree. ``enabled`` is the switch
+    that governs the feature, read live where a live read exists, ``None``
+    where nothing established it and never to be read as *off*.
+    """
+
+    trees: tuple[ModTree, ...]
+    """Every directory this emulator reads mods from, each a different mechanism rather
+    than an alternative to the others.
+    """
+    needs: tuple[str, ...]
+    """The holes a caller fills in the trees' directories — one list, because a shared
+    root leaves the same hole for every tree hanging off it.
+    """
+    enabled: bool | None
+    """Whether the switch that governs mods is on, read live where a live read exists —
+    ``None`` where nothing established it, and never to be read as off.
+    """
+    sources: tuple[str, ...]
+    caveats: tuple[Caveat, ...]
+    """Every degradation of this answer, stated structurally so a client branches on the
+    code rather than on prose.
+    """
+
+    def __post_init__(self) -> None:
+        if not self.trees:
+            raise ValueError(
+                "ModPlacement: at least one tree (an emulator with no directory is Unresolved)"
+            )
+        roles = [tree.role for tree in self.trees]
+        if len(self.trees) > 1:
+            if None in roles:
+                raise ValueError(
+                    "ModPlacement: every tree of a multi-tree answer names its role — that is what "
+                    "the field is for"
+                )
+            if len(set(roles)) != len(roles):
+                raise ValueError(f"ModPlacement: roles must tell the trees apart, got {roles}")
+
+
+@dataclass(frozen=True, slots=True)
+class SoftPatchCandidate:
+    """One patch file RetroArch would look for beside the content, and its chain.
+
+    ``path`` is the absolute file name the frontend composes: the content's own
+    basename with its last extension stripped, plus this format's extension
+    (``runloop.c:5196-5253``, over the basename ``runloop.c:8673-8713`` built).
+    ``continuations`` are the indexed follow-ups applied on top of it once it
+    hits — the same name with one digit appended, 1 through 9, stopping at the
+    first gap (``task_patch.c:1121-1147``). They are listed rather than
+    described because they *are* file names: a rule for composing them would
+    hand a client the one piece of upstream arithmetic this answer exists to
+    have done for it.
+
+    ``attempted`` says whether the RetroArch on this machine tries this format
+    at all, and it is ``None`` wherever nobody established that — the flags are
+    compile-time (:data:`CAVEAT_PATCH_FORMATS_UNESTABLISHED`) and no read of a
+    running machine recovers them. ``None`` is not *no*: a patch in an
+    unestablished format may well apply, and a client that renders it as
+    unsupported reports something nobody checked.
+    """
+
+    format: PatchFormat
+    """The patch format this candidate is — one of :data:`PATCH_FORMATS`, listed in the
+    order RetroArch tries them.
+    """
+    path: str
+    """The absolute file name RetroArch would look for: the content's own basename with
+    its last extension stripped, plus this format's extension.
+    """
+    continuations: tuple[str, ...]
+    """The nine indexed follow-ups RetroArch would look for on top of this one — the
+    same name with one digit appended, 1 through 9, listed rather than described.
+    """
+    attempted: bool | None = None
+    """Whether the RetroArch on this machine tries this format at all, and ``None``
+    wherever nobody established that — which is not a no.
+    """
+
+    def __post_init__(self) -> None:
+        if self.format not in PATCH_FORMATS:
+            raise ValueError(
+                f"SoftPatchCandidate: format must be one of {PATCH_FORMATS}, got {self.format!r}"
+            )
+        if not self.path:
+            raise ValueError("SoftPatchCandidate: path must be non-empty")
+
+
+@dataclass(frozen=True, slots=True)
+class SoftPatchAnswer:
+    """Which files RetroArch would patch this content with, before any core sees it.
+
+    The family's second question, and the only one whose subject is the
+    **content** rather than an emulator: soft patching is the frontend's own,
+    it has no directory of its own — the files sit beside the ROM — and no
+    configuration key anywhere governs it (a grep for ``soft_patching`` over
+    the pinned tree finds none; the one patch-related setting,
+    ``notification_show_patch_applied``, governs an on-screen message). What
+    could change it is a command line — ``--ips=``/``--bps=``/``--ups=``/
+    ``--xdelta=`` force one format, ``--no-patch`` blocks patching entirely
+    (``retroarch.c:7458-7465``, consumed ``task_content.c:695-696``,
+    ``:1203-1204``) — and no launcher on either arrangement passes one.
+
+    So this answer is exact where the rest of the family hedges: ``candidates``
+    is the whole candidate set in attempt order, derived from the content path
+    by arithmetic atlas ports rather than from anything it had to look up.
+
+    ``applies`` is the one live per-core reading: RetroArch patches only content
+    it loads **into memory**, which is every core that does not need a full path
+    (``task_content.c:744-745`` sets the flag from the core's own
+    ``retro_system_info.need_fullpath``, ``:1736-1737`` puts it on the content
+    element, ``:1469`` skips the memory load — and with it the patch call at
+    ``:1195-1215`` — when it is set). ``True`` means this core loads into memory
+    and is therefore patched, ``False`` means it never is, ``None`` means atlas
+    could not establish it: no core was named, or the core's ``.info`` states no
+    ``needs_fullpath``, or it could not be read (which says so in a caveat).
+
+    Two further gates ride every ``True`` and are stated in prose rather than in
+    fields, because neither is a fact about this machine: only the **first**
+    content file is patched (``idx == 0``), and only when it is not a media type
+    (``first_content_type == RARCH_CONTENT_NONE``, ``task_content.c:1195-1198``).
+    A single-file launch — what every launcher on both arrangements performs —
+    meets both.
+
+    **Nothing here is written to disk.** The patch is applied to the in-memory
+    buffer the core is handed (``task_patch.c:872-879``); the ROM beside the
+    patch file is not modified, and no answer of atlas's is a statement that it
+    will be.
+    """
+
+    candidates: tuple[SoftPatchCandidate, ...]
+    """The whole candidate set beside the content, in the order RetroArch attempts them."""
+    applies: bool | None
+    """Whether patching reaches the named core: ``True`` where it loads content into
+    memory, ``False`` where it never does, ``None`` where atlas could not establish
+    it.
+    """
+    sources: tuple[str, ...]
+    caveats: tuple[Caveat, ...]
+    """Every degradation of this answer, stated structurally so a client branches on the
+    code rather than on prose.
+    """
+
+
+def build_soft_patch_candidates(
+    *, content_basename: str, attempted: Mapping[str, bool] | None = None
+) -> tuple[SoftPatchCandidate, ...]:
+    """The four candidates for a content basename, in RetroArch's attempt order.
+
+    *content_basename* is ``runtime_content_path_basename`` — the value
+    :func:`atlas.content_path.content_basename` ports, which is already the
+    archive-aware, extension-truncated name, so content inside an archive is
+    answered with the inner file's name in the archive's own directory. An
+    empty one names no file and yields no candidates: appending ``.ips`` to
+    nothing would name a dotfile in a directory nobody asked about.
+
+    *attempted* maps a format to whether this build tries it; a format the
+    mapping does not carry is left ``None``, which is the honest state wherever
+    no record establishes the build.
+    """
+    if not content_basename:
+        return ()
+    states = attempted or {}
+    return tuple(
+        SoftPatchCandidate(
+            format=fmt,
+            path=f"{content_basename}.{fmt}",
+            continuations=tuple(
+                f"{content_basename}.{fmt}{index}" for index in PATCH_CONTINUATION_INDICES
+            ),
+            attempted=states.get(fmt),
+        )
+        for fmt in PATCH_FORMATS
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolvedDirectory:
+    """RetroArch's path math applied to one family's layout — the shared part."""
+
+    dir: str
+    rooted_in_content: bool
+    needs: tuple[str, ...]
+    sources: tuple[str, ...]
+
+
+def _resolve_placement_dir(
+    *,
+    layout: RetroArchCfg,
+    platform_default_dir: str,
+    content_dir_path: str | None,
+    content_dir_name: str | None,
+    library_name: str | None,
+) -> _ResolvedDirectory:
+    """The directory both families are placed by — one port of one upstream rule.
+
+    Root selection first (``runloop.c:8785-8813``), then the sorting stages,
+    which run regardless of how the root was selected (``runloop.c:8822-8888``)
+    — content component first, then ``library_name``. The savefile and
+    savestate halves of that function are the same shape line for line; the
+    only thing that differs is which four settings were read, which is what
+    ``layout.keys`` carries.
+    """
+    needs: list[str] = []
+    sources = list(layout.sources)
+    keys = layout.keys
+
+    if layout.in_content_dir:
+        rooted_in_content = True
+        sources.append(f"layout: root is the ROM's own directory ({keys.in_content_dir})")
+        if content_dir_path is not None:
+            parts = [content_dir_path]
+        else:
+            parts = [TEMPLATE_CONTENT_DIR]
+            needs.append(HOLE_CONTENT_DIR)
+    else:
+        rooted_in_content = False
+        parts = [platform_default_dir if layout.directory is None else layout.directory]
+
+    if layout.sort_by_content:
+        if content_dir_name is not None:
+            parts.append(content_dir_name)
+        else:
+            parts.append(TEMPLATE_CONTENT_DIR)
+            needs.append(HOLE_CONTENT_DIR)
+    if layout.sort_by_core:
+        if library_name is not None:
+            parts.append(library_name)
+        else:
+            parts.append("<library_name>")
+            needs.append(HOLE_LIBRARY_NAME)
+
+    return _ResolvedDirectory(
+        dir=os.path.join(*parts),
+        rooted_in_content=rooted_in_content,
+        needs=_holes(needs),
+        sources=tuple(sources),
+    )
+
+
+def build_savefile_placement(
+    *,
+    layout: RetroArchCfg,
+    platform_default_dir: str,
+    content_dir_path: str | None,
+    content_dir_name: str | None,
+    library_name: str | None,
+    extra_sources: tuple[str, ...] = (),
+    caveats: tuple[Caveat, ...] = (),
+    file_set: FileSet = UNKNOWN_FILE_SET,
+) -> SavefilePlacement:
+    """Compose a :class:`SavefilePlacement` from a resolved layout and the caller's fills.
+
+    ``platform_default_dir`` is the arrangement's RetroArch platform default
+    saves directory (``saves`` under the config tree, ``platform_unix.c:2133-2134``)
+    — the effective root whenever ``savefile_directory`` is unset or reset.
+    ``content_dir_path`` / ``content_dir_name`` derive from the content path
+    when the caller supplied one (the ROM's own directory and its basename);
+    when absent the corresponding hole is left in the template and listed in
+    ``needs``. ``library_name`` is the core's self-reported name (via
+    ``query_core``); when the layout sorts by core and it is absent, the
+    ``<library_name>`` hole remains.
+    """
+    resolved = _resolve_placement_dir(
+        layout=layout,
+        platform_default_dir=platform_default_dir,
+        content_dir_path=content_dir_path,
+        content_dir_name=content_dir_name,
+        library_name=library_name,
+    )
+    return SavefilePlacement(
+        dir=resolved.dir,
+        root_kind=ROOT_CONTENT_DIRECTORY if resolved.rooted_in_content else ROOT_SAVEFILE_DIRECTORY,
+        needs=resolved.needs,
+        file_set=file_set,
+        sources=(*resolved.sources, *extra_sources),
+        caveats=tuple(caveats),
+    )
+
+
+def build_savestate_placement(
+    *,
+    layout: RetroArchCfg,
+    platform_default_dir: str,
+    content_dir_path: str | None,
+    content_dir_name: str | None,
+    library_name: str | None,
+    extra_sources: tuple[str, ...] = (),
+    caveats: tuple[Caveat, ...] = (),
+    file_set: FileSet = UNKNOWN_FILE_SET,
+) -> SavestatePlacement:
+    """The savestate twin of :func:`build_savefile_placement`, over the same path math.
+
+    ``platform_default_dir`` is ``states`` under the config tree
+    (``platform_unix.c:2135-2136``) — the effective root whenever
+    ``savestate_directory`` is unset or reset, the same way its savefile twin
+    resolves to ``saves``.
+    """
+    resolved = _resolve_placement_dir(
+        layout=layout,
+        platform_default_dir=platform_default_dir,
+        content_dir_path=content_dir_path,
+        content_dir_name=content_dir_name,
+        library_name=library_name,
+    )
+    return SavestatePlacement(
+        dir=resolved.dir,
+        root_kind=(
+            STATE_ROOT_CONTENT_DIRECTORY if resolved.rooted_in_content else ROOT_SAVESTATE_DIRECTORY
+        ),
+        needs=resolved.needs,
+        file_set=file_set,
+        sources=(*resolved.sources, *extra_sources),
+        caveats=tuple(caveats),
+    )

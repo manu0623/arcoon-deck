@@ -1,0 +1,199 @@
+# The per-unit apply is chunked into durable per-chunk commits
+
+## Status
+
+Accepted. Tracked under [#1025](https://github.com/danielcopper/decky-romm-sync/issues/1025). Extends
+[ADR-0006](0006-narrow-unit-of-work-scope.md) (the narrow write Unit of Work each chunk commits under) and the
+group-aware apply of [ADR-0021](0021-sibling-group-one-shortcut-binding-active-version.md) (chunks cut only at
+sibling-group boundaries, so a game's dumps never straddle two commits). It carries the #1041 run/unit ack identity and
+the #1052 heartbeat-timeout late-ack recovery down to chunk granularity.
+
+## Context
+
+The library apply emits one `sync_apply_unit` event per platform/collection unit, carrying that unit's whole collapsed
+shortcut list, then waits for the frontend's `report_unit_results` ack before committing the unit's `roms` rows in a
+single write UoW. On small libraries this is fine. On large ones it is a single point of catastrophic loss.
+
+[#797](https://github.com/danielcopper/decky-romm-sync/issues/797) is the field data. A platform unit of **3084
+shortcuts** was emitted in one event. The frontend applied them at the CEF-safe 50 ms cadence — about 24 minutes of work
+— and roughly 24 minutes in, `steamwebhelper` died of an internal out-of-memory (a `SIGTRAP` inside `libcef.so`, the
+process image near 4 GB). No `report_unit_results` ever arrived, so the backend committed **nothing**: the entire unit's
+24 minutes of shortcut creation was forfeit, and the next sync started it over from zero. Two compounding costs made the
+single emit fragile:
+
+- **Payload size.** One unit's shortcut list is a multi-MB JSON blob (~3 MB at 3084 entries) pushed through the
+  size-limited `decky.emit` WebSocket bridge in one frame, and the frontend closure holds the whole list live for the
+  entire apply.
+- **Blast radius.** The commit is all-or-nothing at unit granularity, so any crash, cancel, or heartbeat timeout
+  anywhere in those 24 minutes discards the whole unit.
+
+## Decision
+
+**A unit's emitted shortcuts are split into fixed-size chunks that are emitted, acked, and committed one at a time, so a
+mid-unit failure forfeits only the in-flight chunk.**
+
+- **Chunk size is a fixed 200** (`_APPLY_CHUNK_SIZE`, `services/library/sync_orchestrator.py`). At ~200 entries a
+  chunk's payload is ~200 KB (comfortably under the bridge ceiling) and its apply is ~2 minutes at the 50 ms cadence —
+  the crash blast radius drops from 24+ minutes to ~2. It is not configurable (see Alternatives).
+- **Chunks cut only at sibling-group boundaries** (`domain/sync_chunking.py::build_unit_chunks`, pure). The collapsed
+  emit list is group-clustered (ADR-0021); a chunk greedy-fills to 200 but **overflows to finish a group** so a
+  multi-version game's entries never straddle two chunks — and therefore two commits. A keyless entry (a legacy or solo
+  ROM) is its own singleton run, so a cut before or after it is always legal. Groups fetched but never emitted (a
+  partial view's grandfathered siblings) plus any unmatched leftover ROMs ride chunk 0's commit row set; an empty unit
+  yields exactly one empty chunk, so the empty round-trip and its unbound-row commit survive.
+- **Each chunk is a durable commit.** `sync_apply_unit` now also carries `chunk_index` / `chunk_count` / `chunk_offset`
+  / `unit_total`, and `shortcuts` is the chunk slice. On the ack the reporter commits only that chunk's `roms` rows —
+  the same group-aware two-pass write it already did per unit (every fetched sibling upserted, only representatives
+  bound; Rom row before `rom_metadata`, FK-safe; the ADR-0006 narrow UoW), now over a row subset. A committed chunk is
+  crash-safe on its own; the next chunk emits only after it commits.
+- **Reuse the existing event and callable, extended in place.** `sync_apply_unit` gains four fields and
+  `report_unit_results(map, run_id, unit_id, chunk_index)` gains the chunk index. No new `sync_apply_chunk` event and no
+  new ack callable were added — a chunk is the unit at a finer grain, so the chunk protocol is the unit protocol.
+  Frontend and backend ship in the same PR, the callable-manifest and event-parity gates keep them in lock-step, and
+  there is no half-wired dead surface (a new event with no listener, or a callable with no caller, would fail those
+  gates).
+- **Ack identity is chunk-scoped.** The #1041 identity check (`run_id` == `current_sync_id`, `unit_id` ==
+  `active_unit_id`) gains `chunk_index` == `active_chunk_index`. The orchestrator stamps `active_chunk_index` before
+  each chunk's emit and clears it at commit, cancel, or timeout (moved into the abandoned-chunk stash below), so a late
+  ack for a superseded chunk can never commit against a newer one — the same defense the run/unit identity already gave,
+  at chunk granularity.
+- **Late-ack recovery is per chunk, via an abandoned-chunk stash (#1052 / #1367).** A heartbeat timeout moves the
+  **abandoned chunk** — its run/unit/chunk identity plus its fetched rows (the `metadatum` source), only that chunk,
+  never the whole unit — into an `AbandonedChunk` stash held on `LibrarySyncStateBox` **outside** the run-lifecycle
+  state; every chunk committed before the timeout stays committed. The stash deliberately **survives the run's
+  teardown** (`finish_run` nulls `current_sync_id` but leaves the stash), because in production the frontend's late
+  `report_unit_results` arrives **after** the run has already wound down — the exact window an earlier design missed,
+  where the active-unit ack check could no longer match and the recovery was unreachable (#1367). The late ack matches
+  the stash **by identity** (`take_abandoned_chunk`) and drives `commit_unit_results` itself over the stashed rows,
+  binding the delivered shortcuts instead of leaving orphans; it **never** passes a `platform_stamp`, since a timed-out
+  platform is incomplete and must not be stamped complete. The stash has a **bounded lifetime**: it is cleared at the
+  next run's `try_begin_run`, so a frontend that crashes and never acks just leaves inert data that the next sync drops
+  (the orphan self-heals via the existing-shortcut scan either way).
+- **Cancel is chunk-atomic.** A user cancel or a timeout mid-unit forfeits only the in-flight chunk; every chunk
+  committed before it survives. The `SyncRun` still completes **only at run end**, so a partial unit is never recorded
+  as complete and the incremental-skip gate re-fetches it on the next run; the stale-removal scan is already skipped on
+  a cancelled run, so partial progress never triggers removals.
+
+## Consequences
+
+- **A large unit survives a mid-apply crash.** The #797 scenario now loses one ~2-minute chunk, not 24 minutes; the
+  committed chunks are on disk and the next sync resumes from the first uncommitted game.
+- **The bridge payload and frontend memory are bounded by the chunk, not the unit** — ~200 KB and one chunk's closure
+  instead of ~3 MB and the whole list.
+- **Cancel/timeout becomes chunk-atomic rather than unit-atomic.** Cancelling a large unit keeps the games already
+  committed in prior chunks — a behavior change: previously the whole in-flight unit was discarded. This is strictly
+  less lost work and matches "cancel keeps finished games," but it does mean a cancelled unit can leave a **partially**
+  applied platform; the next sync completes it. Platform units that _did_ finish (their last chunk committed) before the
+  cancel are additionally stamped complete (`PlatformSyncState`, #1025) in the same write UoW as that final chunk, so
+  the next run's incremental-skip gate skips them wholesale rather than re-walking every already-applied game through
+  CEF — even though the cancelled run never completed its `SyncRun` and so never advanced the library-wide `last_sync`.
+- **The stamp is the sole skip authority; its contract is
+  `stamp exists ⟺ the platform's most recent apply attempt ran
+  to completion`.** A completed run's library-wide
+  `last_sync` is deliberately **not** a fallback for the skip: a run-scoped timestamp cannot see a platform whose
+  shortcuts were locally removed and only partially re-applied since, so trusting it can silently skip a platform with
+  missing shortcuts — the same gap in a second coat. No stamp means a full fetch; installations from before this
+  contract carry no stamps, so their first sync re-walks once (update-path cheap) and stamps everything it completes. A
+  **preview-gated** sync would otherwise strand a complete-but-unstamped platform (a late-ack recovery leaves one,
+  #1416): its shortcut delta is empty, so the preview short-circuits on "no changes" before the re-walk that would
+  re-stamp it ever runs, and the run's `interrupted` status lingers because only an apply run records a fresh `SyncRun`.
+  So `sync_preview` counts enabled platforms lacking a stamp and offers Apply on that alone (`restamp_platform_count`);
+  the re-walk's empty final chunk re-writes the stamp and records a fresh `SyncRun`. The stamp is still written **only**
+  by the pipeline's final chunk — the preview counts unstamped platforms, it never stamps. Two rules keep the contract
+  true. (1) The stamp is **cleared at a platform unit's apply start** (in `_sync_one_unit`, once the fetch has succeeded
+  and the apply is about to emit its first chunk) and re-written only by that unit's final chunk, so an apply
+  interrupted by a crash / cancel / heartbeat-timeout before the final chunk leaves **no** stamp — never a stale one
+  from a prior run. (2) The **local destructive flows** invalidate the stamp of every platform whose shortcuts they
+  unbind: the DangerZone remove-all and per-platform removals (both via `report_removal_results`) and the
+  Steam-UI-deletion reconcile (`reconcile_live_shortcuts`) delete the touched platforms' stamps in the same write UoW as
+  the unbind. Both rules exist because unbinding keeps the `roms` row (ADR-0007), so a platform's persisted-row count is
+  unchanged and a surviving stamp with a matching `rom_count` would let the skip gate skip a half-mirrored platform and
+  silently drop the un-recreated games (the #1025 gap). The server-side stale removal in the reporter is the deliberate
+  exception — it does **not** invalidate the stamp, because a ROM the server dropped lowers RomM's platform `rom_count`,
+  which the stamp's `rom_count` guard already catches on the next skip.
+- **The row-count condition counts by fetch generation, not by every persisted row (#1504).** The skip requires RomM's
+  platform `rom_count` to equal the local row count, and that count originally included every `roms` row for the
+  platform. Rows outlive the server ids they came from: when RomM re-creates a ROM under a new id (re-import, file move,
+  library rebuild) the sibling-group rebind lane moves the shortcut onto the new row and unbinds the old one, which is
+  then retained forever as an identity anchor (ADR-0007). Such a superseded row inflated the count permanently, so the
+  platform could never satisfy the condition again and full-fetched on **every** sync — silently, for exactly the
+  long-lived libraries the skip is worth the most to. The apply therefore marks each row it commits with the **fetch
+  generation** that returned it (`roms.last_fetch_id`), the completion stamp records that same generation
+  (`platform_sync_state.fetch_id`), and the condition counts only rows whose generation matches the stamp's. A
+  superseded row keeps an older generation, so it stops counting while staying on disk — ADR-0007's retention is
+  untouched and nothing is deleted, which is the point: that ADR's rejected "auto-delete on sync-stale" alternative is
+  why the fix is a marker rather than a prune. Three consequences of the chunked apply shape above: (1) the generation
+  is an **opaque id (the run id)**, not a timestamp compared against `completed_at` — each chunk commits with its own
+  clock reading while the stamp is built at the final chunk, so on any platform whose delta exceeds one chunk the
+  earlier chunks' rows would fall before `completed_at` and the skip would count only the last chunk, wedging itself off
+  permanently; (2) it is written on **every** chunk of a platform unit, not only the stamped final one, so the whole
+  unit's rows share the generation its stamp names; (3) a **collection** unit writes none — a collection spans
+  platforms, and re-marking a foreign platform's row would drop it from that platform's counted rows and suppress that
+  platform's skip. A skipped unit returns before any chunk, so neither side is rewritten and the reference point holds
+  across consecutive skips. A pre-#1504 stamp carries no generation and cannot say what its fetch returned, so the skip
+  falls back to counting every row: a platform with no superseded rows keeps skipping through the upgrade, and one that
+  carries them already fails the count today, so it full-fetches until both sides are re-stamped. That re-stamp lands on
+  the next sync that **applies** something, not simply the next sync — both columns are written by the apply's commit,
+  and a run whose library-wide delta is empty stops at the preview and reaches no commit. The wait is nonetheless short:
+  an applying run commits every unit that did not wholesale-skip, including a unit whose own delta is empty (it chunks
+  into a single leftover chunk), and a platform carrying superseded rows can never wholesale-skip, so it is always among
+  the units such a run heals.
+- **Collection units get the same fetch-avoiding skip (#742).** A user/smart collection work unit's final chunk stamps a
+  `CollectionSyncState` — the collection sibling of `PlatformSyncState` — in the same write UoW as that chunk's `roms`
+  upserts, so "this collection fully synced" ⟺ "stamp exists" is atomic on a crash, just like a platform. The gate skips
+  a collection only when three verified RomM signals all agree with the stamp: the collection's server `updated_at` is
+  unchanged (RomM bumps it on any membership add/remove, and on a smart-criteria edit — the membership-stable signal); a
+  scoped `updated_after` probe keyed off the stamp's own `completed_at` reports zero rows (catching a member ROM's
+  content change, and a ROM entering a smart collection via its own metadata change); and the `rom_count` still matches
+  both the live listing and the stored member set. Because a collection has no local membership column to reconstruct
+  from (`roms.platform_slug` is per-platform), the stamp additionally stores `member_rom_ids`, which a skipped run
+  replays into the run's `synced_rom_ids` and Steam-collection membership map. The stamp is cleared on the same events
+  as a platform stamp: the local destructive flows (`report_removal_results` / `reconcile_live_shortcuts`) drop any
+  collection stamp whose member set intersects a removed ROM (surgical, since a collection id can't be mapped from a
+  platform slug), and "Force Full Sync" clears every collection stamp wholesale alongside the platform stamps.
+  Franchise/virtual collections have no stable `updated_at` and are never stamped — they always full-fetch. **Known
+  limitation (rommapp/romm#3836):** until that upstream fix lands, every RomM filesystem scan re-stamps all member ROMs'
+  `updated_at`, so the scoped probe fires and the skip yields a full fetch after each nightly scan — the same limitation
+  the platform skip has; the design is correct regardless and becomes fully effective once the fix ships.
+- **More round-trips.** A 3084 unit now runs ~16 emit/ack/commit cycles instead of one. Each cycle adds an event, a
+  callable ack, and a short write UoW; the added overhead is roughly 2% of the unit's apply time — negligible against
+  the crash-recovery it buys.
+- **No wire-surface growth.** Extending the existing event and callable keeps the callable-manifest and event-parity
+  gates green with no new names to police.
+- **The operational envelope this buys against.** The crash-resume emphasis rests on a measured finding, not a
+  hypothetical. Steam's renderer (`steamwebhelper` / CEF) accumulates memory as each shortcut is touched — roughly
+  0.8–1.5 MB per created shortcut observed on-device — against a finite per-session budget, with the process image seen
+  climbing to roughly 2.5 GB during a large first import before it OOM-crashed (#797). A mass first import of a
+  multi-thousand-game library can therefore exhaust the budget **mid-run**. Chunking does not raise that ceiling; it
+  converts hitting it from catastrophic loss (the whole unit forfeit) into a cheap resume — every chunk committed before
+  the crash is on disk, and the next sync continues from the first uncommitted game. Raising the ceiling itself is the
+  out-of-CEF bulk-import path below, out of scope for this decision.
+
+## Alternatives considered
+
+- **A dedicated `sync_apply_chunk` event and a new chunk-ack callable.** Rejected as pure churn: the chunk is the unit
+  at a finer grain, so a parallel event/callable pair would duplicate the identity check, the late-ack path, and the
+  parity-gate entries for no behavioral gain — two protocols to keep in sync instead of one.
+- **A configurable chunk size** (a setting or a heuristic). Rejected: 200 already balances payload, cadence, and blast
+  radius across the library sizes we see, and a user-facing knob invites misconfiguration — a too-large value re-opens
+  the #797 loss — for a value no one needs to tune. `_APPLY_CHUNK_SIZE` stays a build-time constant.
+- **Bulk-importing shortcuts outside CEF** (writing `shortcuts.vdf` directly, or an out-of-process importer that
+  bypasses the per-shortcut SteamClient cadence). Deliberately **not** part of this decision. `shortcuts.vdf` is
+  memory-authoritative — Steam rewrites it from memory and clobbers external writes while it is running (see
+  [Steam Non-Steam Shortcuts](../architecture/steam-non-steam-shortcuts.md)) — so a safe bulk path requires Steam
+  restarted or not running, which is a different, research-gated design. Chunking hardens the in-CEF path we have
+  without blocking that future work; the bulk-import route is tracked separately.
+
+## See also
+
+- [#797](https://github.com/danielcopper/decky-romm-sync/issues/797) (the field crash),
+  [#1025](https://github.com/danielcopper/decky-romm-sync/issues/1025) (chunked apply),
+  [#1041](https://github.com/danielcopper/decky-romm-sync/issues/1041) (run/unit ack identity),
+  [#1052](https://github.com/danielcopper/decky-romm-sync/issues/1052) (heartbeat-timeout late-ack recovery),
+  [#1367](https://github.com/danielcopper/decky-romm-sync/issues/1367) (abandoned-chunk stash — makes the recovery
+  reachable in production)
+- [ADR-0006](0006-narrow-unit-of-work-scope.md) (the narrow write UoW each chunk commits under)
+- [ADR-0021](0021-sibling-group-one-shortcut-binding-active-version.md) (sibling-group collapse — the boundary chunks
+  cut at)
+- [Backend Architecture](../architecture/backend-architecture.md) and
+  [Steam Non-Steam Shortcuts](../architecture/steam-non-steam-shortcuts.md) (the apply pipeline this chunks)

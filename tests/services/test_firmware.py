@@ -1,0 +1,5664 @@
+import asyncio
+import inspect
+import os
+from dataclasses import asdict
+from datetime import UTC, datetime
+from typing import Any
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+# conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
+from _factories import _make_testable_plugin
+from fakes.fake_active_core_resolver import FakeActiveCoreResolver
+from fakes.fake_core_info_provider import (
+    FakeCoreInfoProvider,
+    FakeSandboxLauncher,
+    libretro_option,
+    standalone_option,
+)
+from fakes.fake_disc_resolver import FakeDiscResolver
+from fakes.fake_firmware_file_store import FakeFirmwareFileStore
+from fakes.fake_firmware_resolver import FakeFirmwareResolver
+from fakes.fake_path_exists_reader import FakePathExistsReader
+from fakes.fake_platform_core_reader import FakePlatformCoreReader
+from fakes.fake_renderer_gc import FakeRendererGc
+from fakes.fake_renderer_rss import FakeRendererRss
+from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
+from fakes.fake_settings_persister import FakeSettingsPersister
+from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
+from fakes.library_peers import FakeArtworkManager
+from fakes.running_loop import running_loop
+from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
+
+from adapters.firmware_file import FirmwareFileAdapter
+from adapters.steam_config import SteamConfigAdapter
+from domain.bios_file import BiosFile
+from domain.bios_status import BiosFileEntry
+from domain.emulator_commands import EmulatorOption, option_to_invocation, select_default_option
+from domain.firmware_cache import FirmwareCacheEntry
+from domain.firmware_wants import (
+    SYSTEM_FIRMWARE_CANNOT_RUN_WITHOUT,
+    SYSTEM_FIRMWARE_CORE_ALTERNATIVE,
+    SYSTEM_FIRMWARE_OPEN,
+    SYSTEM_FIRMWARE_RUNS_WITHOUT,
+    FolderVerdict,
+)
+from domain.rom import Rom
+from domain.shortcut_data import EmulatorInvocation
+from services.active_core_resolver import ActiveCoreResolver, ActiveCoreResolverConfig
+from services.cores import CoreService, CoreServiceConfig
+from services.firmware import FirmwareService, FirmwareServiceConfig
+from services.firmware.status import FirmwareStatusReader
+from services.game_detail import GameDetailService, GameDetailServiceConfig
+from services.library import LibraryService, LibraryServiceConfig
+
+
+class FakeSystemResolver:
+    """In-memory ``SystemResolver`` for tests.
+
+    Maps known RomM platform slugs to RetroDECK systems and records each
+    call. Unknown slugs fall through unchanged, mirroring the real
+    resolver's pass-through. Used to assert the core read seams receive a
+    normalized system while BIOS-folder lookups stay on the raw slug.
+    """
+
+    def __init__(self, mapping: dict[str, str] | None = None) -> None:
+        self.mapping = mapping if mapping is not None else {}
+        self.calls: list[tuple[str, str | None]] = []
+
+    def __call__(self, platform_slug: str, platform_fs_slug: str | None = None) -> str:
+        self.calls.append((platform_slug, platform_fs_slug))
+        return self.mapping.get(platform_slug, platform_slug)
+
+
+def _make_clock() -> FakeClock:
+    """Return a fresh FakeClock pinned to a synthetic instant."""
+    return FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC))
+
+
+def _seed_rom(uow: FakeUnitOfWork, *, rom_id: int, platform_slug: str, app_id: int | None = 1) -> None:
+    """Seed one ``Rom`` so firmware's synced-platform read sees the platform.
+
+    ``app_id=None`` seeds an *unbound* ROM (no Steam shortcut) — its platform
+    does not count as synced.
+    """
+    uow.roms.save(
+        Rom(
+            rom_id=rom_id,
+            platform_slug=platform_slug,
+            name=f"rom-{rom_id}",
+            fs_name=f"rom-{rom_id}.zip",
+            shortcut_app_id=app_id,
+            last_synced_at="2026-01-01T00:00:00+00:00",
+        )
+    )
+
+
+def _seed_firmware_cache(uow: FakeUnitOfWork, entries: list[FirmwareCacheEntry]) -> None:
+    """Replace the fake firmware-cache repo's contents in one shot."""
+    uow.firmware_cache.replace_all(entries)
+
+
+def _id(core_so: str) -> str:
+    """The identity a libretro entry carries — its core file's own basename.
+
+    The tests seed a core by its ``core_so`` stem, which is what an emulator
+    option's ``core_so`` field holds; a firmware answer is keyed on the identity
+    instead, and for a libretro entry that is the same name with its extension.
+    Spelled apart here rather than folded, because a service reading ``core_so``
+    where it should read the identity is exactly the defect this seam removed —
+    and with one string for both, that bug would pass.
+    """
+    return f"{core_so}.so"
+
+
+def _pick(emulator: str | None, label: str | None = None) -> EmulatorInvocation:
+    """One resolved emulator, as the per-game path hands it to the BIOS check.
+
+    The check takes the PICK rather than an identity beside a name, so a test
+    asking it about an emulator hands it one value too. ``EmulatorInvocation`` is
+    what the ROM path really passes; its ``kind`` plays no part in a firmware
+    answer, which is keyed on the identity alone.
+    """
+    return EmulatorInvocation(kind="libretro", label=label, emulator=emulator)
+
+
+def _make_firmware_service(
+    *,
+    romm_api=None,
+    uow_factory: FakeUnitOfWorkFactory | None = None,
+    clock: FakeClock | None = None,
+    firmware_file_store=None,
+    firmware_resolver: FakeFirmwareResolver | None = None,
+    retrodeck_paths: FakeRetroDeckPaths | None = None,
+    core_info: FakeCoreInfoProvider | None = None,
+    resolve_system: FakeSystemResolver | None = None,
+    platform_core_reader: FakePlatformCoreReader | None = None,
+    logger=None,
+) -> FirmwareService:
+    """Build a ``FirmwareService`` over fake adapters + a fake Unit of Work.
+
+    Mirrors the SQLite wiring: persistence flows entirely through
+    ``uow_factory`` (no state dict, no persisters). Defaults keep every
+    call-site terse; pass overrides only for the axis under test. The default
+    resolver declares nothing and reports every emulator read, so an unseeded
+    test sees a machine that genuinely wants no firmware.
+
+    The resolver is pointed at the same BIOS root and file store the service
+    gets, because on a real machine they are one directory read by two
+    readers — so a test that puts a file where the platform expects it gets
+    the same ``present`` from both. A test that hands in a resolver with a root
+    of its own keeps it, and one that wants the two to disagree says so per
+    file (``FakeFirmwareResolver.declare(present=...)``).
+
+    One fake stands in for both resolver seams — the per-platform reading and
+    the whole-machine one — because a test states one demand and which question
+    reached it is not what it is pinning. ``FakeFirmwareResolver.calls`` records
+    the systems it was asked about, for the tests where that IS the point.
+    """
+    import decky
+
+    store = firmware_file_store if firmware_file_store is not None else FirmwareFileAdapter()
+    paths = retrodeck_paths if retrodeck_paths is not None else FakeRetroDeckPaths()
+    resolver = firmware_resolver if firmware_resolver is not None else FakeFirmwareResolver()
+    if resolver.bios_root is None:
+        resolver.bios_root = paths.bios_path()
+        resolver.present_probe = store.exists
+
+    return FirmwareService(
+        config=FirmwareServiceConfig(
+            romm_api=romm_api if romm_api is not None else MagicMock(),
+            loop=running_loop(),
+            logger=logger if logger is not None else decky.logger,
+            clock=clock if clock is not None else _make_clock(),
+            firmware_file_store=store,
+            firmware_resolver=resolver,
+            platform_firmware_resolver=resolver,
+            retrodeck_paths=paths,
+            core_info=core_info if core_info is not None else FakeCoreInfoProvider(),
+            resolve_system=resolve_system if resolve_system is not None else FakeSystemResolver(),
+            platform_core_reader=platform_core_reader if platform_core_reader is not None else FakePlatformCoreReader(),
+            uow_factory=uow_factory if uow_factory is not None else FakeUnitOfWorkFactory(),
+        ),
+    )
+
+
+def _set_loop(fw: FirmwareService, loop) -> None:
+    """Point every sub-service that offloads work at *loop*.
+
+    The loop is config-carried, so each sub-service holds its own reference and
+    the façade holds none. A test that swaps the loop has to reach all three, or
+    the swap lands on nothing and the offloaded hop runs on the loop the fixture
+    happened to construct the service under.
+    """
+    fw._status._loop = loop
+    fw._downloads._loop = loop
+    fw._deletion._loop = loop
+
+
+def _inline_executor(fw: FirmwareService) -> None:
+    """Run every ``run_in_executor`` hop inline, on the calling task.
+
+    The service offloads several distinct reads — the machine's firmware demand,
+    the synced-platform slugs, the RomM listing — and which one a hop is running
+    matters. A blanket ``AsyncMock`` answering one canned value for all of them
+    would pass whatever the service asked for, so the shim dispatches on the
+    function instead of on the call count.
+    """
+
+    async def run(_executor, fn, *args):
+        return fn(*args)
+
+    loop = MagicMock()
+    loop.run_in_executor = run
+    _set_loop(fw, loop)
+
+
+def _core_info(fw: FirmwareService) -> FakeCoreInfoProvider:
+    """The fake core-info provider behind *fw*, for tests that seed or read it after construction."""
+    core_info = fw._config.core_info
+    assert isinstance(core_info, FakeCoreInfoProvider)
+    return core_info
+
+
+async def _overview(fw: FirmwareService) -> dict[str, Any]:
+    """The whole page's BIOS answer, composed the way the page composes it.
+
+    ``get_firmware_status`` names the platforms it can speak for and
+    ``get_platform_firmware_status`` answers for one, so what a reader ends up
+    looking at is the two joined. The tests that are about what the page SHOWS
+    join them here rather than each learning the walk — and the join is the
+    page's own: the platforms in the order the overview named them, each with
+    its own entry, and a platform whose answer is withheld simply absent.
+
+    Deliberately serial and complete, which the page is not: the frontend
+    reorders around the focused row and stops when the reader leaves, and
+    neither of those changes an answer.
+
+    **This helper cannot catch a composition bug**, and nothing that uses it
+    should be read as covering one: it joins the two answers the way the
+    production code splits them, so a field dropped in the split is dropped here
+    too and every assertion below stays green. What makes these callers safe is
+    `tests/contract/test_firmware_status_read.py`, which composes the same two
+    calls over the real wiring and holds the result against the key set the
+    single whole-page call answered with.
+    """
+    skeleton = await fw.get_firmware_status()
+    platforms = []
+    for named in skeleton["platforms"]:
+        answer = await fw.get_platform_firmware_status(named["platform_slug"])
+        if answer["platform"] is not None:
+            platforms.append(answer["platform"])
+    return {**skeleton, "platforms": platforms}
+
+
+def _platform_core_reader(fw: FirmwareService) -> FakePlatformCoreReader:
+    """The fake per-platform override map behind *fw*.
+
+    Taken off the service rather than built a second time, for the tests that
+    hand the same map to a peer: two readers seeded alike agree by coincidence,
+    which is the shape those tests exist to refuse.
+    """
+    reader = fw._config.platform_core_reader
+    assert isinstance(reader, FakePlatformCoreReader)
+    return reader
+
+
+def _set_platform_emulator(fw: FirmwareService, core_so: str, label: str) -> None:
+    """Make *core_so* the one emulator ES-DE offers for every system, on the fake behind *fw*.
+
+    Seeds both of the fake's inputs: ``options``, which the platform's own pick
+    is resolved from, and ``active_core``, the libretro-only system reading. They
+    are separate seeds answering different questions, so a test that means "this
+    platform launches with mGBA" has to state it in the list rather than in the
+    system reading alone.
+    """
+    core_info = _core_info(fw)
+    core_info.options = [libretro_option(core_so, label)]
+    core_info.active_core = (core_so, label)
+
+
+def _resolver(fw: FirmwareService) -> FakeFirmwareResolver:
+    """The fake resolver behind *fw*, for tests that seed it after construction."""
+    resolver = fw._demand._firmware_resolver
+    assert isinstance(resolver, FakeFirmwareResolver)
+    return resolver
+
+
+def _resolver_reads(fw: FirmwareService, bios_dir) -> None:
+    """Point the resolver at *bios_dir* as well — one directory, two readers.
+
+    For a test that swaps the service's BIOS root after construction, where
+    ``_make_firmware_service`` could not wire the pair up itself.
+    """
+    _resolver(fw).bios_root = str(bios_dir)
+
+
+def _stub_listing(fw: FirmwareService, firmware_list: list[dict[str, Any]]) -> None:
+    """Answer ``list_firmware`` with *firmware_list* on the service's API stub."""
+    api = fw._config.romm_api
+    assert isinstance(api, MagicMock)
+    api.list_firmware.return_value = firmware_list
+
+
+_TEST_CORE = "testcore_libretro"
+
+
+def _test_core_info() -> FakeCoreInfoProvider:
+    """ES-DE offering exactly the one libretro core ``_declare`` attributes its wants to.
+
+    The scope must be non-empty and must contain that core. A platform ES-DE
+    offers no libretro core for reads ``unknown`` by design (35 of its 172
+    systems are in that position), so a fixture left on the bare
+    ``FakeCoreInfoProvider()`` would exercise the no-scope path while its tests
+    read as if they were about a complete reading.
+    """
+    return FakeCoreInfoProvider(options=[libretro_option(_TEST_CORE, "Test Core")])
+
+
+@pytest.fixture
+def plugin():
+    p = _make_testable_plugin()
+    p.settings = {"romm_url": "", "romm_user": "", "romm_pass": "", "enabled_platforms": {}}
+    p._http_adapter = MagicMock()
+    p._romm_api = MagicMock()
+
+    import decky
+
+    steam_config = SteamConfigAdapter(user_home=decky.DECKY_USER_HOME, logger=decky.logger)
+    p._steam_config = steam_config
+
+    # Shared fake Unit of Work — firmware persistence flows through it, and tests
+    # inspect the repos (uow.bios_files / uow.firmware_cache / uow.roms) after the
+    # service has run. Exposed on the plugin as ``p._uow`` for assertions.
+    p._uow = FakeUnitOfWork()
+    p._firmware_service = _make_firmware_service(
+        romm_api=p._romm_api,
+        uow_factory=FakeUnitOfWorkFactory(p._uow),
+        clock=_make_clock(),
+        core_info=_test_core_info(),
+    )
+
+    p._sync_service = LibraryService(
+        config=LibraryServiceConfig(
+            romm_api=p._romm_api,
+            steam_config=steam_config,
+            settings=p.settings,
+            loop=running_loop(),
+            logger=decky.logger,
+            plugin_dir=decky.DECKY_PLUGIN_DIR,
+            launcher_exe=f"{decky.DECKY_USER_HOME}/.local/share/romm-tender/bin/rom-launcher",
+            emit=decky.emit,
+            clock=FakeClock(),
+            uuid_gen=FakeUuidGen(),
+            sleeper=FakeSleeper(),
+            settings_persister=MagicMock(),
+            log_debug=p._log_debug,
+            artwork=FakeArtworkManager(),
+            uow_factory=FakeUnitOfWorkFactory(),
+            active_core=FakeActiveCoreResolver(default=(None, None)),
+            disc_resolver=FakeDiscResolver(),
+            renderer_rss=FakeRendererRss(),
+            renderer_gc=FakeRendererGc(),
+        ),
+    )
+    return p
+
+
+@pytest.fixture(autouse=True)
+async def _set_event_loop(plugin, fw):
+    """Ensure plugin.loop and the firmware sub-services match the running event loop."""
+    loop = asyncio.get_running_loop()
+    plugin.loop = loop
+    _set_loop(fw, loop)
+
+
+# Shorthand to access the firmware service from plugin
+@pytest.fixture
+def fw(plugin):
+    return plugin._firmware_service
+
+
+# What the façade holds. Everything else the service needs lives on a sub-service.
+_FACADE_ATTRIBUTES = frozenset({"_config", "_listing", "_demand", "_status", "_downloads", "_deletion"})
+
+
+@pytest.fixture(autouse=True)
+def _no_dead_rebind_on_the_facade(fw):
+    """Fail an assignment to a name the façade does not have.
+
+    Python answers such an assignment by creating the name, so ``fw._loop = loop``
+    — a line meaning to swap the loop the offloaded hops run on — lands on the
+    façade, does nothing, and leaves the test green against whichever loop the
+    fixture built the service under. Nothing else notices: the call it was meant
+    to redirect still works, just against the old object. This makes the
+    assignment itself the failure.
+
+    Two assignments stay allowed, and only one of them is safe. Shadowing a name
+    the façade already answers to is deliberate — ``fw.check_platform_bios = mock``
+    replaces a real method rather than inventing one. Rebinding one of the six
+    construction slots is NOT: ``fw._listing = FakeListing()`` reaches
+    ``invalidate_firmware_cache`` and nothing else, because every sub-service bound
+    its own reference to the listing when it was built, and the same holds for
+    ``_demand``. A swap has to reach every holder, so build the service around the
+    fake rather than rebinding it afterwards.
+    """
+    yield
+    stray = sorted(name for name in vars(fw) if name not in _FACADE_ATTRIBUTES and not hasattr(type(fw), name))
+    assert not stray, (
+        f"assigned {stray} to the façade, which holds no such name — the assignment did nothing. "
+        f"Firmware state lives on a sub-service: assign inside fw._listing / fw._demand / fw._status / "
+        f"fw._downloads / fw._deletion, or _set_loop(fw, loop) for the event loop."
+    )
+
+
+def _declare(fw: FirmwareService, *specs: tuple[str, str, bool]) -> None:
+    """State the machine's demand as ``(file_name, description, required)`` triples.
+
+    Every want is attributed to an owning emulator, because a placement without
+    one is exactly what the four-value model removes. These tests leave the
+    active core unresolved, where a file required by any emulator counts as
+    required for the launch, so the core's name is not the axis under test — the
+    tests that DO test per-core filtering name their cores themselves.
+    """
+    for file_name, description, required in specs:
+        _resolver(fw).declare(
+            file_name,
+            required_by=[_id(_TEST_CORE)] if required else [],
+            optional_for=[] if required else [_TEST_CORE],
+            description=description,
+        )
+
+
+class TestTheFacadeOnlyDelegates:
+    """The façade wires the sub-services and delegates. It implements nothing itself.
+
+    Stated as the whole surface rather than as a list of banned names, so it fails
+    in both directions: a helper the split relocated cannot come back here, and a
+    new method cannot arrive without someone deciding it belongs on the façade
+    rather than in the module that owns its job. A second implementation here is
+    what the split cost — presence, the destination it is read at, and the RomM
+    listing each have one owner now, and a convenience wrapper on the façade would
+    answer from whatever it happened to hold.
+    """
+
+    def test_the_facade_defines_exactly_its_delegations(self):
+        own = {name for name, value in vars(FirmwareService).items() if callable(value) and not name.startswith("__")}
+        assert own == {
+            "invalidate_firmware_cache",
+            "get_firmware_status",
+            "get_platform_firmware_status",
+            "check_platform_bios",
+            "download_firmware",
+            "download_all_firmware",
+            "download_platform_firmware_file",
+            "download_required_firmware",
+            "delete_platform_bios",
+            "delete_bios_file",
+            "delete_bios_folder",
+        }
+
+    def test_the_facade_holds_only_its_sub_services(self, fw):
+        """Construction leaves the config and the five sub-services, and nothing else."""
+        assert set(vars(fw)) == _FACADE_ATTRIBUTES
+
+
+class TestFirmwareDestPath:
+    """Where a firmware file lands: the resolver's placement, or flat as a fallback."""
+
+    def test_flat_default_when_nothing_declares_the_file(self, fw, tmp_path):
+        """A server file no emulator asks for has no stated layout — flat in the root."""
+        bios = os.path.join(str(tmp_path), "retrodeck", "bios")
+        fw._demand._retrodeck_paths = FakeRetroDeckPaths(bios=bios)
+        firmware = {"file_name": "bios.bin", "file_path": "bios/n64/bios.bin"}
+        dest = fw._demand.dest_path(firmware, None)
+        assert dest == os.path.join(str(tmp_path), "retrodeck", "bios", "bios.bin")
+
+    def test_subdirectory_placement_is_honoured(self, fw, tmp_path):
+        """A placement below the firmware root places the file in that subdirectory."""
+        placement = _resolver(fw).declare(
+            "dc_boot.bin", required_by=[_id("flycast_libretro")], relative_path="dc/dc_boot.bin"
+        )
+        bios = os.path.join(str(tmp_path), "retrodeck", "bios")
+        fw._demand._retrodeck_paths = FakeRetroDeckPaths(bios=bios)
+        firmware = {"file_name": "dc_boot.bin", "file_path": "bios/dc/dc_boot.bin"}
+        dest = fw._demand.dest_path(firmware, placement)
+        assert dest == os.path.join(str(tmp_path), "retrodeck", "bios", "dc", "dc_boot.bin")
+
+    def test_placement_without_a_subdirectory_goes_flat(self, fw, tmp_path):
+        placement = _resolver(fw).declare("scph5501.bin", required_by=[_id("mednafen_psx_libretro")])
+        bios = os.path.join(str(tmp_path), "retrodeck", "bios")
+        with patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=bios)):
+            firmware = {"file_name": "scph5501.bin", "file_path": "bios/ps/scph5501.bin"}
+            dest = fw._demand.dest_path(firmware, placement)
+            assert dest == os.path.join(str(tmp_path), "retrodeck", "bios", "scph5501.bin")
+
+    def test_a_placement_outside_the_root_falls_back_to_the_file_name(self, fw, tmp_path):
+        """An emulator keeping firmware in its own tree states no placement here.
+
+        The plugin owns one BIOS directory and writes only inside it, so a
+        destination the resolver could not express relative to the firmware root
+        leaves the flat default in charge rather than an absolute path from
+        outside.
+        """
+        placement = _resolver(fw).declare("bios7.bin", required_by=[_id("melonds_libretro")], relative_path=None)
+        bios = os.path.join(str(tmp_path), "retrodeck", "bios")
+        with patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=bios)):
+            firmware = {"file_name": "bios7.bin", "file_path": "bios/nds/bios7.bin"}
+            dest = fw._demand.dest_path(firmware, placement)
+            assert dest == os.path.join(bios, "bios7.bin")
+
+    def test_uses_dynamic_bios_path(self, fw, tmp_path):
+        """Uses ``retrodeck_paths.bios_path()`` for the base directory."""
+        sd_bios = "/run/media/deck/Emulation/retrodeck/bios"
+        with patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=sd_bios)):
+            firmware = {"file_name": "fw.bin", "file_path": "bios/saturn/fw.bin"}
+            dest = fw._demand.dest_path(firmware, None)
+            assert dest == os.path.join(sd_bios, "fw.bin")
+
+    def test_a_traversing_placement_is_refused(self, fw, tmp_path):
+        """``safe_join`` guards the placement too, not only the server file name."""
+        from lib.path_safety import PathTraversalError
+
+        placement = _resolver(fw).declare("evil.bin", required_by=[_id("x_libretro")], relative_path="../evil.bin")
+        bios = os.path.join(str(tmp_path), "retrodeck", "bios")
+        with (
+            patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=bios)),
+            pytest.raises(PathTraversalError),
+        ):
+            fw._demand.dest_path({"file_name": "evil.bin"}, placement)
+
+    def test_a_declaration_the_distribution_links_onto_the_root_is_still_a_destination(self, fw, tmp_path):
+        """RetroDECK points ``<bios>/pcsx2/bios`` at ``<bios>``, so LRPS2's folder IS the root.
+
+        ``safe_join`` refuses the base by default, which would drop a real
+        requirement instead of guarding anything — a declared location opts in.
+        """
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        (bios_dir / "pcsx2").mkdir(parents=True)
+        (bios_dir / "pcsx2" / "bios").symlink_to(bios_dir)
+        placement = _resolver(fw).declare("bios", required_by=[_id("pcsx2_libretro")], relative_path="pcsx2/bios")
+        fw._demand._retrodeck_paths = FakeRetroDeckPaths(bios=str(bios_dir))
+
+        assert fw._demand.dest_path({"file_name": "bios"}, placement) == os.path.realpath(str(bios_dir))
+
+    def test_a_server_file_name_may_not_land_on_the_root(self, fw, tmp_path):
+        """The opt-in is the declaration's, not the listing's — an empty name is no file."""
+        from lib.path_safety import PathTraversalError
+
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        fw._demand._retrodeck_paths = FakeRetroDeckPaths(bios=str(bios_dir))
+
+        with pytest.raises(PathTraversalError):
+            fw._demand.dest_path({"file_name": ""}, None)
+
+
+class TestPresenceComesFromTheReading:
+    """Who answers "is the file there": the reading for a declared row, us for the rest."""
+
+    _CORE = "flycast_libretro"
+
+    def _service(self, plugin, tmp_path, resolver, store: FakeFirmwareFileStore | None = None):
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            firmware_file_store=store if store is not None else FakeFirmwareFileStore(),
+            firmware_resolver=resolver,
+            core_info=FakeCoreInfoProvider(
+                active_core=(self._CORE, "Flycast"), options=[libretro_option(self._CORE, "Flycast")]
+            ),
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(tmp_path / "bios")),
+        )
+        _inline_executor(fw)
+        _stub_listing(
+            fw,
+            [{"id": 1, "file_name": "dc_boot.bin", "file_path": "bios/dc/dc_boot.bin", "file_size_bytes": 8}],
+        )
+        return fw
+
+    @staticmethod
+    def _store_holding(tmp_path, name: str) -> FakeFirmwareFileStore:
+        """A file store with *name* sitting in the BIOS root, whatever the reading says."""
+        return FakeFirmwareFileStore({os.path.join(str(tmp_path / "bios"), name): b"\x00"})
+
+    @pytest.mark.asyncio
+    async def test_a_declared_row_is_there_when_the_reading_says_so(self, plugin, tmp_path):
+        """Nothing in our own store, and the row still reads present.
+
+        The reading followed the symlinks to the destination the emulator will
+        open; a probe of the path assembled here answers about a different
+        place, and that divergence is what put a satisfied LRPS2 requirement on
+        the page as a red missing row.
+        """
+        resolver = FakeFirmwareResolver()
+        resolver.declare("dc_boot.bin", required_by=[_id(self._CORE)], present=True)
+        fw = self._service(plugin, tmp_path, resolver)
+
+        result = await fw.check_platform_bios("dc")
+
+        assert result["files"][0]["downloaded"] is True
+        assert result["required_downloaded"] == 1
+
+    @pytest.mark.asyncio
+    async def test_a_declared_row_is_absent_when_the_reading_says_so(self, plugin, tmp_path):
+        """And the other direction: our store holding it does not override the reading."""
+        resolver = FakeFirmwareResolver()
+        resolver.declare("dc_boot.bin", required_by=[_id(self._CORE)], present=False)
+        fw = self._service(plugin, tmp_path, resolver, self._store_holding(tmp_path, "dc_boot.bin"))
+
+        result = await fw.check_platform_bios("dc")
+
+        assert result["files"][0]["downloaded"] is False
+
+    @pytest.mark.asyncio
+    async def test_a_destination_the_reading_could_not_look_at_is_not_a_claim(self, plugin, tmp_path):
+        """ "Could not look" is not "it is there" — the row stays missing."""
+        resolver = FakeFirmwareResolver()
+        resolver.declare("dc_boot.bin", required_by=[_id(self._CORE)])
+        resolver.bios_root = ""  # no place for the fake to take a reading, so it withholds one
+        # The store holds it, so a fallback to our own probe would read green here.
+        fw = self._service(plugin, tmp_path, resolver, self._store_holding(tmp_path, "dc_boot.bin"))
+
+        result = await fw.check_platform_bios("dc")
+
+        assert result["files"][0]["downloaded"] is False
+
+    @pytest.mark.asyncio
+    async def test_a_row_nothing_declares_is_ours_to_probe(self, plugin, tmp_path):
+        """One of the rows our own check covers: a library file no emulator asked for."""
+        fw = self._service(plugin, tmp_path, FakeFirmwareResolver(), self._store_holding(tmp_path, "dc_boot.bin"))
+
+        result = await fw.check_platform_bios("dc")
+
+        assert result["files"][0]["downloaded"] is True
+        assert result["files"][0]["wanted"] == "not_needed"
+
+    @pytest.mark.asyncio
+    async def test_a_placement_we_cannot_honour_is_ours_to_probe_too(self, plugin, tmp_path):
+        """The other one: a declared destination outside the BIOS root.
+
+        The file then goes by this service's own flat default, which is not the
+        destination the reading was taken at — an emulator's own tree holding
+        it says nothing about the BIOS root.
+        """
+        resolver = FakeFirmwareResolver()
+        # The reading says absent; it was taken somewhere this service will not write.
+        resolver.declare("dc_boot.bin", required_by=[_id(self._CORE)], relative_path=None, present=False)
+        fw = self._service(plugin, tmp_path, resolver, self._store_holding(tmp_path, "dc_boot.bin"))
+
+        result = await fw.check_platform_bios("dc")
+
+        assert result["files"][0]["downloaded"] is True
+
+
+class TestDestinationReadingsReachBothSurfaces:
+    """``supplied_by`` and ``declared_kind`` travel to the game page and the platform detail."""
+
+    _CORE = "flycast_libretro"
+
+    def _service(self, plugin, tmp_path, resolver):
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            firmware_resolver=resolver,
+            core_info=FakeCoreInfoProvider(
+                active_core=(self._CORE, "Flycast"), options=[libretro_option(self._CORE, "Flycast")]
+            ),
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(tmp_path / "bios")),
+        )
+        _inline_executor(fw)
+        return fw
+
+    @pytest.mark.asyncio
+    async def test_the_game_page_row_names_the_supplying_distribution(self, plugin, tmp_path):
+        resolver = FakeFirmwareResolver()
+        resolver.declare("codehandler.bin", required_by=[_id(self._CORE)], present=True, supplied_by="RetroDECK")
+        fw = self._service(plugin, tmp_path, resolver)
+        _stub_listing(fw, [])
+
+        result = await fw.check_platform_bios("dc")
+
+        assert result["files"][0]["supplied_by"] == "RetroDECK"
+        assert result["files"][0]["declared_kind"] == "file"
+
+    @pytest.mark.asyncio
+    async def test_the_system_page_row_names_the_folder_declaration(self, plugin, tmp_path):
+        _seed_rom(plugin._uow, rom_id=51, platform_slug="dc", app_id=1)
+        resolver = FakeFirmwareResolver()
+        resolver.declare(
+            "bios", required_by=[_id(self._CORE)], relative_path="pcsx2/bios", present=True, declares_directory=True
+        )
+        fw = self._service(plugin, tmp_path, resolver)
+        _stub_listing(fw, [])
+
+        result = await _overview(fw)
+        row = next(p for p in result["platforms"] if p["platform_slug"] == "dc")["files"][0]
+
+        assert row["declared_kind"] == "directory"
+        assert row["supplied_by"] is None
+        assert row["downloaded"] is True
+
+
+class TestTheOverviewRowsAreAlphabetical:
+    """The pane's file list is ordered as it reads, not as the two halves arrive."""
+
+    _CORE = "dolphin_libretro"
+
+    @pytest.mark.asyncio
+    async def test_local_only_rows_are_not_simply_appended(self, plugin, tmp_path):
+        """A file the plugin holds sorts among the library's, not below them.
+
+        The rows come from two sources — the library's listing, then what the
+        emulators want beyond it — and the second was appended, so
+        ``codehandler.bin`` sat under ``gc-pal-12.bin`` on a GameCube pane for
+        no reason a reader could see.
+        """
+        store = FakeFirmwareFileStore()
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            firmware_file_store=store,
+            core_info=_test_core_info(),
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(tmp_path / "bios")),
+        )
+        _inline_executor(fw)
+        # Declared by an emulator and NOT in the library, so it is appended.
+        _declare(fw, ("cx4.data.rom", "CX4 data", True))
+        _stub_listing(
+            fw,
+            [
+                {
+                    "id": 1,
+                    "file_name": "sgb_boot.bin",
+                    "file_path": "bios/gc/sgb_boot.bin",
+                    "file_size_bytes": 8,
+                    "md5_hash": "",
+                },
+                {
+                    "id": 2,
+                    "file_name": "SGB1.sfc",
+                    "file_path": "bios/gc/SGB1.sfc",
+                    "file_size_bytes": 8,
+                    "md5_hash": "",
+                },
+            ],
+        )
+
+        result = await _overview(fw)
+        names = [f["file_name"] for f in next(p for p in result["platforms"] if p["platform_slug"] == "gc")["files"]]
+
+        # Case-folded, so a capitalised name does not sort above every lowercase
+        # one: the SNES pane really does mix `SGB1.sfc` with `sgb_boot.bin`, and
+        # a case-sensitive sort puts every capital first, which reads as no sort
+        # at all. `cx4.data.rom` is the appended one and lands between them.
+        assert names == ["cx4.data.rom", "SGB1.sfc", "sgb_boot.bin"]
+
+
+class TestAFolderRowCountsWhatWePutInside:
+    """The folder branch of the row field, which nothing else exercises.
+
+    A declared folder has no name a record could carry, so its ``deletable_count``
+    counts the distinct FILES our records name underneath it — the rule that a
+    folder is never a download says nothing about the files already in one.
+    """
+
+    _CORE = "pcsx2_libretro"
+
+    def _service(self, plugin, tmp_path, resolver, store):
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            firmware_file_store=store,
+            firmware_resolver=resolver,
+            core_info=FakeCoreInfoProvider(
+                active_core=(self._CORE, "LRPS2"), options=[libretro_option(self._CORE, "LRPS2")]
+            ),
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(tmp_path / "bios")),
+        )
+        _inline_executor(fw)
+        _stub_listing(fw, [])
+        return fw
+
+    @pytest.mark.asyncio
+    async def test_the_folder_row_counts_the_files_beneath_it(self, plugin, tmp_path):
+        _seed_rom(plugin._uow, rom_id=61, platform_slug="dc", app_id=1)
+        inside = os.path.join(str(tmp_path / "bios"), "pcsx2", "bios", "scph39001.bin")
+        hand_placed = os.path.join(str(tmp_path / "bios"), "pcsx2", "bios", "scph70012.bin")
+        elsewhere = os.path.join(str(tmp_path / "bios"), "scph5501.bin")
+        store = FakeFirmwareFileStore({inside: b"\x00" * 8, hand_placed: b"\x00" * 8, elsewhere: b"\x00" * 8})
+        for name, path in (("scph39001.bin", inside), ("scph5501.bin", elsewhere)):
+            plugin._uow.bios_files.save(
+                BiosFile.mark_downloaded(
+                    platform_slug="dc",
+                    file_name=name,
+                    file_path=path,
+                    downloaded_at="2026-01-01T00:00:00+00:00",
+                    firmware_id=None,
+                )
+            )
+        resolver = FakeFirmwareResolver()
+        resolver.declare(
+            "bios", required_by=[_id(self._CORE)], relative_path="pcsx2/bios", present=True, declares_directory=True
+        )
+        fw = self._service(plugin, tmp_path, resolver, store)
+
+        result = await _overview(fw)
+        row = next(p for p in result["platforms"] if p["platform_slug"] == "dc")["files"][0]
+
+        assert row["declared_kind"] == "directory"
+        # One of the two records is inside the folder; the hand-placed file in
+        # there is not ours, and our own download outside it belongs to the
+        # platform button rather than to this row.
+        assert row["deletable_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_two_records_naming_one_file_are_one_deletion(self, plugin, tmp_path):
+        """The row promises unlinks, and the same path unlinks once.
+
+        A file downloaded twice — once under ``psx``, once under ``ps``, the two
+        spellings RomM files one platform's firmware under — leaves two records
+        at one path. Counting records there offers ``Delete (2)`` and takes one
+        file away, which is the platform count's own rule read one layer in.
+        """
+        _seed_rom(plugin._uow, rom_id=62, platform_slug="psx", app_id=1)
+        inside = os.path.join(str(tmp_path / "bios"), "pcsx2", "bios", "scph39001.bin")
+        store = FakeFirmwareFileStore({inside: b"\x00" * 8})
+        for slug in ("psx", "ps"):
+            plugin._uow.bios_files.save(
+                BiosFile.mark_downloaded(
+                    platform_slug=slug,
+                    file_name="scph39001.bin",
+                    file_path=inside,
+                    downloaded_at="2026-01-01T00:00:00+00:00",
+                    firmware_id=None,
+                )
+            )
+        resolver = FakeFirmwareResolver()
+        resolver.declare(
+            "bios", required_by=[_id(self._CORE)], relative_path="pcsx2/bios", present=True, declares_directory=True
+        )
+        fw = self._service(plugin, tmp_path, resolver, store)
+
+        result = await _overview(fw)
+        plat = next(p for p in result["platforms"] if p["platform_slug"] == "psx")
+
+        assert plat["files"][0]["declared_kind"] == "directory"
+        assert plat["files"][0]["deletable_count"] == 1
+        # And the platform button, which has counted paths all along, agrees.
+        assert plat["deletable_count"] == 1
+
+
+class TestWhatBecameOfARowsBytes:
+    """``checked`` reaches the wire, because the verdict beside it cannot carry it.
+
+    A withheld verdict has several causes and one of them is not a withholding at
+    all: a file the emulator READ and does not recognise was checked, and the
+    surfaces said it could not be. The resolver states which, and the row has to
+    carry the word rather than a reading of it — the vocabulary is upstream's and
+    narrowing it here would be our own claim about it.
+    """
+
+    _CORE = "swanstation"
+
+    def _page(self, plugin, tmp_path, checked: str | None):
+        resolver = FakeFirmwareResolver()
+        resolver.declare("scph1001.bin", required_by=[_id(self._CORE)], present=True, checked=checked)
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            firmware_resolver=resolver,
+            core_info=FakeCoreInfoProvider(
+                active_core=(self._CORE, "SwanStation"), options=[libretro_option(self._CORE, "SwanStation")]
+            ),
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(tmp_path / "bios")),
+        )
+        _inline_executor(fw)
+        _stub_listing(fw, [])
+        return fw.check_platform_bios("psx")
+
+    @pytest.mark.asyncio
+    async def test_the_resolvers_own_word_reaches_the_row(self, plugin, tmp_path):
+        result = await self._page(plugin, tmp_path, "unrecognised")
+        row = next(row for row in result["files"] if row["file_name"] == "scph1001.bin")
+
+        assert row["checked"] == "unrecognised"
+
+    @pytest.mark.asyncio
+    async def test_a_different_reading_travels_as_itself(self, plugin, tmp_path):
+        """The non-vacuity check: a row hardcoding one value would pass the first."""
+        result = await self._page(plugin, tmp_path, "unread")
+        row = next(row for row in result["files"] if row["file_name"] == "scph1001.bin")
+
+        assert row["checked"] == "unread"
+
+    @pytest.mark.asyncio
+    async def test_a_reading_that_asked_no_byte_question_says_nothing(self, plugin, tmp_path):
+        """The ordinary case, and it must stay a stated absence rather than a word."""
+        result = await self._page(plugin, tmp_path, None)
+        row = next(row for row in result["files"] if row["file_name"] == "scph1001.bin")
+
+        assert row["checked"] is None
+
+    @pytest.mark.asyncio
+    async def test_it_moves_no_verdict(self, plugin, tmp_path):
+        """It says what was DONE, never whether the requirement is met.
+
+        ``unrecognised`` is the case that makes the two come apart: the bytes
+        were read and the requirement is still unsettled, so a row folding this
+        into ``satisfied`` would claim a readiness nobody established.
+        """
+        result = await self._page(plugin, tmp_path, "unrecognised")
+        row = next(row for row in result["files"] if row["file_name"] == "scph1001.bin")
+
+        assert row["satisfied"] is True
+        assert row["downloaded"] is True
+
+    @pytest.mark.asyncio
+    async def test_the_platform_pane_gets_the_same_word(self, plugin, tmp_path):
+        """The two pages are built by two row builders, and this asks the other one.
+
+        The game page's rows come off ``asdict`` and carry every field the entry
+        has; the platform pane's are a hand-written projection
+        (``_wanted_fields``), so a field added to the entry reaches that page
+        only if somebody adds it there too. The two surfaces word this from ONE
+        module, so a field on one and not the other means one of them silently
+        words a state it cannot see.
+        """
+        resolver = FakeFirmwareResolver()
+        resolver.declare("scph1001.bin", required_by=[_id(self._CORE)], present=True, checked="unrecognised")
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            firmware_resolver=resolver,
+            core_info=FakeCoreInfoProvider(
+                active_core=(self._CORE, "SwanStation"), options=[libretro_option(self._CORE, "SwanStation")]
+            ),
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(tmp_path / "bios")),
+        )
+        _set_loop(fw, asyncio.get_running_loop())
+
+        with patch.object(plugin._romm_api, "list_firmware", return_value=[]):
+            result = await fw.get_platform_firmware_status("psx")
+
+        row = next(row for row in result["platform"]["files"] if row["file_name"] == "scph1001.bin")
+        assert row["checked"] == "unrecognised"
+
+
+class TestAFolderRequirementIsAnsweredByItsContents:
+    """LRPS2's ``pcsx2/bios`` is answered by what is inside it, never by its being there.
+
+    RetroDECK links that folder onto the BIOS root, so it is present on every
+    install: reading presence as the verdict reports "All required ready" over a
+    PS2 system with no BIOS file at all, and reading absence reports red over a
+    folder that is plainly there. The verified per-platform read settles it, and
+    the readiness verdict declines only where that read established nothing.
+    """
+
+    _CORE = "pcsx2_libretro"
+    _IMAGES = ("Europe  v02.00(14/06/2004)  Console 20040614-100914",)
+
+    def _service(self, plugin, tmp_path, resolver):
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            firmware_resolver=resolver,
+            core_info=FakeCoreInfoProvider(
+                active_core=(self._CORE, "LRPS2"), options=[libretro_option(self._CORE, "LRPS2")]
+            ),
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(tmp_path / "bios")),
+        )
+        _inline_executor(fw)
+        _stub_listing(fw, [])
+        return fw
+
+    def _resolver(self, folder: FolderVerdict | None, *, caveats=()) -> FakeFirmwareResolver:
+        """What LRPS2 asks for: a folder that is there, and a file beside it."""
+        resolver = FakeFirmwareResolver()
+        resolver.declare(
+            "bios",
+            required_by=[_id(self._CORE)],
+            relative_path="pcsx2/bios",
+            present=True,
+            declares_directory=True,
+            folder=folder,
+            caveats=caveats,
+        )
+        resolver.declare(
+            "GameIndex.yaml",
+            required_by=[_id(self._CORE)],
+            relative_path="pcsx2/resources/GameIndex.yaml",
+            present=True,
+        )
+        return resolver
+
+    @pytest.mark.asyncio
+    async def test_an_image_in_the_folder_completes_the_required_ratio(self, plugin, tmp_path):
+        resolver = self._resolver(FolderVerdict(satisfied=True, images=self._IMAGES))
+        fw = self._service(plugin, tmp_path, resolver)
+
+        result = await fw.check_platform_bios("ps2")
+
+        assert result["required_count"] == 2
+        assert result["required_downloaded"] == 2
+        assert result["required_withheld"] == 0
+        assert result["bios_level"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_the_row_names_the_images_the_read_identified(self, plugin, tmp_path):
+        resolver = self._resolver(FolderVerdict(satisfied=True, images=self._IMAGES))
+        fw = self._service(plugin, tmp_path, resolver)
+
+        result = await fw.check_platform_bios("ps2")
+        row = next(row for row in result["files"] if row["file_name"] == "bios")
+
+        assert row["satisfied"] is True
+        assert row["images"] == self._IMAGES
+        assert row["declared_kind"] == "directory"
+
+    @pytest.mark.asyncio
+    async def test_a_folder_holding_no_image_is_a_requirement_shown_to_be_unmet(self, plugin, tmp_path):
+        """Not a declined verdict: the read happened and the answer is no."""
+        resolver = self._resolver(FolderVerdict(satisfied=False), caveats=("firmware-directory-holds-no-image",))
+        fw = self._service(plugin, tmp_path, resolver)
+
+        result = await fw.check_platform_bios("ps2")
+        row = next(row for row in result["files"] if row["file_name"] == "bios")
+
+        assert result["required_downloaded"] == 1
+        assert result["required_withheld"] == 0
+        assert result["bios_level"] == "partial"
+        assert row["satisfied"] is False
+        assert row["caveats"] == ("firmware-directory-holds-no-image",)
+
+    @pytest.mark.asyncio
+    async def test_a_read_that_established_nothing_still_declines_the_verdict(self, plugin, tmp_path):
+        """The resolver could not answer, so neither ready nor missing is a claim."""
+        fw = self._service(plugin, tmp_path, self._resolver(None))
+
+        result = await fw.check_platform_bios("ps2")
+
+        assert result["required_downloaded"] == 1
+        assert result["required_withheld"] == 1
+        assert result["bios_level"] == "unknown"
+        assert result["bios_label"] == "Unknown"
+
+    @pytest.mark.asyncio
+    async def test_presence_never_stands_in_for_the_verdict(self, plugin, tmp_path):
+        """The folder is there on every stock RetroDECK, and that says nothing.
+
+        Reading ``downloaded`` where the verdict belongs is what reported "All
+        required ready" over a PS2 install holding no BIOS image at all.
+        """
+        fw = self._service(plugin, tmp_path, self._resolver(FolderVerdict(satisfied=False)))
+
+        result = await fw.check_platform_bios("ps2")
+        row = next(row for row in result["files"] if row["file_name"] == "bios")
+
+        assert row["downloaded"] is True
+        assert row["satisfied"] is False
+
+    @pytest.mark.asyncio
+    async def test_the_rows_beside_the_folder_keep_their_own_answers(self, plugin, tmp_path):
+        resolver = self._resolver(FolderVerdict(satisfied=True, images=self._IMAGES))
+        fw = self._service(plugin, tmp_path, resolver)
+
+        result = await fw.check_platform_bios("ps2")
+        rows = {row["file_name"]: row for row in result["files"]}
+
+        assert rows["GameIndex.yaml"]["downloaded"] is True
+        assert rows["GameIndex.yaml"]["satisfied"] is True
+        assert rows["GameIndex.yaml"]["declared_kind"] == "file"
+        assert rows["GameIndex.yaml"]["wanted"] == "needed"
+
+    @pytest.mark.asyncio
+    async def test_an_absent_folder_is_a_requirement_shown_to_be_unmet(self, plugin, tmp_path):
+        resolver = FakeFirmwareResolver()
+        resolver.declare(
+            "bios",
+            required_by=[_id(self._CORE)],
+            relative_path="pcsx2/bios",
+            present=False,
+            declares_directory=True,
+            folder=FolderVerdict(satisfied=False),
+        )
+        fw = self._service(plugin, tmp_path, resolver)
+
+        result = await fw.check_platform_bios("ps2")
+
+        assert result["required_downloaded"] == 0
+        assert result["bios_level"] == "missing"
+
+    @pytest.mark.asyncio
+    async def test_the_code_that_words_the_verdict_reaches_the_row(self, plugin, tmp_path):
+        """Red is not enough on its own — the row has to say why.
+
+        The folder is this platform's only requirement here, so the code beside
+        the verdict is the whole of what the page can tell a user about a red no
+        download can clear.
+        """
+        resolver = FakeFirmwareResolver()
+        resolver.declare(
+            "bios",
+            required_by=[_id(self._CORE)],
+            relative_path="pcsx2/bios",
+            present=True,
+            declares_directory=True,
+            folder=FolderVerdict(satisfied=False),
+            caveats=("firmware-directory-holds-no-candidate",),
+        )
+        fw = self._service(plugin, tmp_path, resolver)
+
+        result = await fw.check_platform_bios("ps2")
+        row = next(row for row in result["files"] if row["file_name"] == "bios")
+
+        assert row["satisfied"] is False
+        assert row["caveats"] == ("firmware-directory-holds-no-candidate",)
+        assert result["bios_level"] == "missing"
+
+    @pytest.mark.asyncio
+    async def test_the_system_page_and_the_game_page_read_one_verdict(self, plugin, tmp_path):
+        """One reading per platform, and both surfaces answer off it."""
+        _seed_rom(plugin._uow, rom_id=52, platform_slug="ps2", app_id=2)
+        resolver = self._resolver(FolderVerdict(satisfied=True, images=self._IMAGES))
+        fw = self._service(plugin, tmp_path, resolver)
+
+        result = await _overview(fw)
+        platform = next(p for p in result["platforms"] if p["platform_slug"] == "ps2")
+
+        assert platform["bios_level"] == "ok"
+        assert platform["required_count"] == 2
+        assert platform["required_downloaded"] == 2
+        assert platform["required_withheld"] == 0
+
+    @pytest.mark.asyncio
+    async def test_a_folder_no_installed_core_requires_leaves_the_verdict_alone(self, plugin, tmp_path):
+        """The scope is the launching emulator's requirement, not every folder on the page."""
+        resolver = FakeFirmwareResolver()
+        resolver.declare(
+            "bios",
+            optional_for=[_id(self._CORE)],
+            relative_path="pcsx2/bios",
+            present=True,
+            declares_directory=True,
+        )
+        fw = self._service(plugin, tmp_path, resolver)
+
+        result = await fw.check_platform_bios("ps2")
+
+        assert result["required_withheld"] == 0
+        assert result["bios_level"] == "ok"
+
+
+class TestAFileWithSomethingElseAtItsDestination:
+    """A directory in a declared file's way settles nothing about the requirement.
+
+    The resolver states one shape at the destination and it is not the file, so
+    neither "there" nor "absent" is a claim the reading supports — the mirror
+    image of the folder whose contents could not be read.
+    """
+
+    _CORE = "flycast_libretro"
+
+    @pytest.mark.asyncio
+    async def test_an_obstructed_file_declines_the_verdict_rather_than_reading_as_present(self, plugin, tmp_path):
+        resolver = FakeFirmwareResolver()
+        resolver.declare(
+            "dc_boot.bin",
+            required_by=[_id(self._CORE)],
+            present=True,
+            caveats=("firmware-path-obstructed",),
+        )
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            firmware_resolver=resolver,
+            core_info=FakeCoreInfoProvider(
+                active_core=(self._CORE, "Flycast"), options=[libretro_option(self._CORE, "Flycast")]
+            ),
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(tmp_path / "bios")),
+        )
+        _inline_executor(fw)
+        _stub_listing(fw, [])
+
+        result = await fw.check_platform_bios("dc")
+        row = result["files"][0]
+
+        assert row["downloaded"] is True
+        assert row["satisfied"] is None
+        assert row["caveats"] == ("firmware-path-obstructed",)
+        assert result["required_downloaded"] == 0
+        assert result["required_withheld"] == 1
+        assert result["bios_level"] == "unknown"
+
+
+class TestTheOverviewNamesPlatformsWithoutReadingThem:
+    """``get_firmware_status`` says WHICH platforms the page can speak for, and no more.
+
+    The reading a platform's state costs is a live per-system one — 64-350 ms
+    each on the reference machine, and a library of 28 platforms put roughly
+    three seconds in front of the first row when the overview paid them all. So
+    the overview pays none, and every assertion here is about an ABSENCE: what
+    this call does NOT read, and what it does NOT carry.
+
+    A field on this payload is a field the page can render before any reading
+    has happened, which is why the key set is pinned rather than sampled: a
+    ``bios_level`` or a ``files`` list leaking back onto it would be rendered as
+    an answer about a platform nobody has asked about yet.
+    """
+
+    @staticmethod
+    def _service(plugin, **kwargs) -> FirmwareService:
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            **kwargs,
+        )
+        _set_loop(fw, asyncio.get_running_loop())
+        return fw
+
+    @pytest.mark.asyncio
+    async def test_it_names_the_listings_platforms_and_the_synced_ones(self, plugin):
+        """Both halves of the page's platform set, in one sorted list.
+
+        ``dc`` comes from the library's own firmware, ``nes`` from a ROM bound to
+        a Steam shortcut — a platform the library holds nothing for is exactly
+        the one whose emulators may still want something.
+        """
+        _seed_rom(plugin._uow, rom_id=44, platform_slug="nes", app_id=1)
+        fw = self._service(plugin)
+
+        with patch.object(
+            plugin._romm_api,
+            "list_firmware",
+            return_value=[{"id": 1, "file_name": "a.bin", "file_path": "bios/dc/a.bin", "file_size_bytes": 1}],
+        ):
+            result = await fw.get_firmware_status()
+
+        assert result == {
+            "success": True,
+            "server_offline": False,
+            "platforms": [
+                {"platform_slug": "dc", "has_games": False},
+                {"platform_slug": "nes", "has_games": True},
+            ],
+        }
+
+    @pytest.mark.asyncio
+    async def test_it_asks_the_resolver_and_the_catalogue_about_nothing(self, plugin):
+        """The absence the whole split is for, stated as one.
+
+        Neither seam is reached for any platform — not the firmware reading, and
+        not the emulator catalogue, which is a per-system read of its own.
+        """
+        _seed_rom(plugin._uow, rom_id=44, platform_slug="nes", app_id=1)
+        resolver = FakeFirmwareResolver()
+        core_info = _test_core_info()
+        fw = self._service(plugin, firmware_resolver=resolver, core_info=core_info)
+
+        with patch.object(
+            plugin._romm_api,
+            "list_firmware",
+            return_value=[{"id": 1, "file_name": "a.bin", "file_path": "bios/dc/a.bin", "file_size_bytes": 1}],
+        ):
+            result = await fw.get_firmware_status()
+
+        assert [p["platform_slug"] for p in result["platforms"]] == ["dc", "nes"]
+        assert resolver.calls == []
+        assert core_info.emulator_options_calls == []
+        assert core_info.active_core_calls == []
+
+    @pytest.mark.asyncio
+    async def test_an_unreachable_server_still_names_the_synced_platforms(self, plugin):
+        """What an unreachable RomM costs is the platforms only IT knows about."""
+        _seed_rom(plugin._uow, rom_id=44, platform_slug="nes", app_id=1)
+        fw = self._service(plugin)
+
+        with patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")):
+            result = await fw.get_firmware_status()
+
+        assert result["server_offline"] is True
+        assert [p["platform_slug"] for p in result["platforms"]] == ["nes"]
+
+
+class TestOnePlatformsOwnEntry:
+    """``get_platform_firmware_status`` — the half that pays the reading, one platform at a time.
+
+    What it answers is the entry the page renders. The one thing it decides
+    beyond that is whether there IS an entry: a platform the listing never named
+    and whose reading finished wanting nothing has nothing to manage, and the
+    page shows it no block — the drop a whole-page answer used to perform before
+    returning.
+    """
+
+    @staticmethod
+    def _service(plugin, **kwargs) -> FirmwareService:
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            **kwargs,
+        )
+        _set_loop(fw, asyncio.get_running_loop())
+        return fw
+
+    @pytest.mark.asyncio
+    async def test_it_answers_with_the_entry_the_pane_renders(self, plugin, tmp_path):
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        (bios_dir / "req1.bin").write_bytes(b"\x00" * 100)
+        fw = self._service(
+            plugin,
+            firmware_resolver=_dc_resolver(),
+            core_info=_dc_core_info(),
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(bios_dir)),
+        )
+
+        with patch.object(
+            plugin._romm_api,
+            "list_firmware",
+            return_value=[{"id": 1, "file_name": "req1.bin", "file_path": "bios/dc/req1.bin", "file_size_bytes": 100}],
+        ):
+            result = await fw.get_platform_firmware_status("dc")
+
+        entry = result["platform"]
+        assert result["success"] is True
+        assert entry["platform_slug"] == "dc"
+        assert entry["active_core"] == _id(_DC_CORE)
+        assert {f["file_name"] for f in entry["files"]} == {"req1.bin", "req2.bin", "opt1.bin"}
+        assert (entry["required_count"], entry["required_downloaded"]) == (2, 1)
+        assert entry["bios_level"] == "partial"
+
+    @pytest.mark.asyncio
+    async def test_it_reads_only_the_platform_it_was_asked_about(self, plugin):
+        """The whole point of asking one at a time, stated as the reading it did not do."""
+        resolver = FakeFirmwareResolver()
+        fw = self._service(plugin, firmware_resolver=resolver)
+
+        with patch.object(
+            plugin._romm_api,
+            "list_firmware",
+            return_value=[
+                {"id": 1, "file_name": "a.bin", "file_path": "bios/dc/a.bin", "file_size_bytes": 1},
+                {"id": 2, "file_name": "b.bin", "file_path": "bios/psx/b.bin", "file_size_bytes": 1},
+            ],
+        ):
+            await fw.get_platform_firmware_status("dc")
+
+        assert resolver.calls == ["dc"]
+
+    @pytest.mark.asyncio
+    async def test_it_takes_only_its_own_platforms_rows_from_the_listing(self, plugin):
+        """The listing is the library's whole firmware; an entry is one key's slice."""
+        fw = self._service(plugin, core_info=_test_core_info())
+
+        with patch.object(
+            plugin._romm_api,
+            "list_firmware",
+            return_value=[
+                {"id": 1, "file_name": "a.bin", "file_path": "bios/dc/a.bin", "file_size_bytes": 1},
+                {"id": 2, "file_name": "b.bin", "file_path": "bios/psx/b.bin", "file_size_bytes": 1},
+            ],
+        ):
+            result = await fw.get_platform_firmware_status("dc")
+
+        assert [f["file_name"] for f in result["platform"]["files"]] == ["a.bin"]
+
+    @pytest.mark.asyncio
+    async def test_a_synced_platform_nothing_wants_answers_with_no_entry(self, plugin):
+        """The drop, now an answer of its own: a finished reading that wants nothing."""
+        _seed_rom(plugin._uow, rom_id=44, platform_slug="nes", app_id=1)
+        fw = self._service(plugin, firmware_resolver=FakeFirmwareResolver(), core_info=_test_core_info())
+
+        with patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")):
+            result = await fw.get_platform_firmware_status("nes")
+
+        assert result == {"success": True, "platform": None}
+
+    @pytest.mark.asyncio
+    async def test_a_synced_platform_nothing_could_answer_for_keeps_its_entry(self, plugin):
+        """The counterpart, and the reason the no-entry answer is conditional (#1660).
+
+        ``ps3``'s only ES-DE entry is RPCS3, so there is no core to ask and the
+        empty file list is silence rather than an answer. Answering with no entry
+        would say the system needs nothing.
+        """
+        _seed_rom(plugin._uow, rom_id=45, platform_slug="ps3", app_id=1)
+        fw = self._service(plugin, firmware_resolver=FakeFirmwareResolver(), core_info=FakeCoreInfoProvider(options=[]))
+
+        with patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")):
+            result = await fw.get_platform_firmware_status("ps3")
+
+        assert result["platform"]["files"] == []
+        assert result["platform"]["bios_level"] == "unknown"
+
+    @pytest.mark.asyncio
+    async def test_a_platform_the_library_holds_firmware_for_keeps_its_entry(self, plugin):
+        """A listed platform answers even where every row falls away.
+
+        Its one server row carries a traversing name, so the path guard drops it
+        and the reading wants nothing else. The library holding firmware filed
+        under this platform is itself the thing to say, and a page that showed no
+        block would leave the reader looking for a platform RomM does list.
+        """
+        fw = self._service(plugin, firmware_resolver=FakeFirmwareResolver(), core_info=_test_core_info())
+
+        with patch.object(
+            plugin._romm_api,
+            "list_firmware",
+            return_value=[
+                {"id": 1, "file_name": "../escape.bin", "file_path": "bios/dc/../escape.bin", "file_size_bytes": 1}
+            ],
+        ):
+            result = await fw.get_platform_firmware_status("dc")
+
+        assert result["platform"] is not None
+        assert result["platform"]["files"] == []
+
+
+class TestGetFirmwareStatus:
+    @pytest.mark.asyncio
+    async def test_returns_grouped_platforms(self, fw, tmp_path):
+        firmware_list = [
+            {
+                "id": 1,
+                "file_name": "bios_dc.bin",
+                "file_path": "bios/dc/bios_dc.bin",
+                "file_size_bytes": 2048,
+                "md5_hash": "abc123",
+            },
+            {
+                "id": 2,
+                "file_name": "flash_dc.bin",
+                "file_path": "bios/dc/flash_dc.bin",
+                "file_size_bytes": 1024,
+                "md5_hash": "def456",
+            },
+            {
+                "id": 3,
+                "file_name": "scph.bin",
+                "file_path": "bios/ps2/scph.bin",
+                "file_size_bytes": 4096,
+                "md5_hash": "",
+            },
+        ]
+
+        _stub_listing(fw, firmware_list)
+        _inline_executor(fw)
+
+        result = await _overview(fw)
+        assert result["success"] is True
+        assert len(result["platforms"]) == 2
+
+        dc_plat = next(p for p in result["platforms"] if p["platform_slug"] == "dc")
+        assert len(dc_plat["files"]) == 2
+        assert all(not f["downloaded"] for f in dc_plat["files"])  # get_firmware_status files are dicts
+
+    @pytest.mark.asyncio
+    async def test_enrich_resolves_system_for_cores_keeps_raw_slug_for_platform(self, tmp_path):
+        """Per-platform core reads get the NORMALIZED system; entry slug stays raw.
+
+        ``_enrich_platform`` keys ``platform_slug`` / ``has_games`` /
+        BIOS-folder file lookups on the raw RomM/BIOS-folder slug (ADR-0010 §4)
+        but must feed the resolved RetroDECK system to the ``get_active_core`` /
+        ``get_emulator_options`` seams (ADR-0010 §2).
+        """
+        from tests.fakes.fake_core_info_provider import libretro_option
+
+        core_info = FakeCoreInfoProvider(
+            active_core=("flycast_libretro", "Flycast"),
+            options=[libretro_option("flycast_libretro", "Flycast")],
+        )
+        resolver = FakeSystemResolver(mapping={"dc": "dreamcast"})
+        fw = _make_firmware_service(core_info=core_info, resolve_system=resolver)
+
+        firmware_list = [
+            {
+                "id": 1,
+                "file_name": "bios_dc.bin",
+                "file_path": "bios/dc/bios_dc.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
+        ]
+        _stub_listing(fw, firmware_list)
+        _inline_executor(fw)
+
+        result = await _overview(fw)
+
+        dc_plat = next(p for p in result["platforms"] if p["platform_slug"] == "dc")
+        # Entry identity stays on the RAW slug.
+        assert dc_plat["platform_slug"] == "dc"
+        # Active-core data resolved under the NORMALIZED system surfaces on the entry.
+        assert dc_plat["active_core"] == _id("flycast_libretro")
+        assert dc_plat["emulator_data_available"] is True
+        assert dc_plat["emulators"] == [
+            {
+                "label": "Flycast",
+                "kind": "libretro",
+                "core_so": "flycast_libretro",
+                "emulator": _id("flycast_libretro"),
+                "is_default": True,
+                "bakeable": True,
+                "reason": None,
+            }
+        ]
+        # The core read seam received the NORMALIZED system, not the raw slug.
+        assert core_info.emulator_options_calls == ["dreamcast"]
+        assert resolver.calls == [("dc", None)]
+
+    async def _psp_active_core_label(self, platform_core_reader):
+        """Run ``get_firmware_status`` for a psp platform whose default is a standalone.
+
+        Seeds a standalone-first options list (the PPSSPP flip) so the *default*
+        emulator label ("PPSSPP (Standalone)") differs from the libretro
+        ``active_core`` label ("PPSSPP") — the exact case the platform detail's
+        label must reflect. Returns the resolved ``active_core_label``.
+        """
+        from tests.fakes.fake_core_info_provider import libretro_option, standalone_option
+
+        core_info = FakeCoreInfoProvider(
+            active_core=("ppsspp_libretro", "PPSSPP"),
+            options=[
+                standalone_option("%EMULATOR_PPSSPP% -b %ROM%", "PPSSPP (Standalone)"),
+                libretro_option("ppsspp_libretro", "PPSSPP"),
+            ],
+        )
+        fw = _make_firmware_service(core_info=core_info, platform_core_reader=platform_core_reader)
+        firmware_list = [
+            {
+                "id": 1,
+                "file_name": "ppsspp.bin",
+                "file_path": "bios/psp/ppsspp.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
+        ]
+        _stub_listing(fw, firmware_list)
+        _inline_executor(fw)
+        result = await _overview(fw)
+        psp = next(p for p in result["platforms"] if p["platform_slug"] == "psp")
+        return psp["active_core_label"]
+
+    @pytest.mark.asyncio
+    async def test_active_core_label_is_default_emulator_not_libretro_core(self):
+        """No override → the label is the default EMULATOR (standalone), not the libretro core.
+
+        The libretro ``active_core`` stays "PPSSPP" (BIOS filter), but the
+        displayed label follows the bakeable default, so a standalone-default
+        system reads its standalone label instead of the libretro one (#1210).
+        """
+        label = await self._psp_active_core_label(FakePlatformCoreReader())
+        assert label == "PPSSPP (Standalone)"
+
+    @pytest.mark.asyncio
+    async def test_active_core_label_reflects_per_platform_override(self):
+        """A per-platform pin surfaces on the platform detail's label immediately (#1305)."""
+        label = await self._psp_active_core_label(FakePlatformCoreReader({"psp": "PPSSPP"}))
+        assert label == "PPSSPP"
+
+    @pytest.mark.asyncio
+    async def test_active_core_label_degrades_when_override_stale(self):
+        """An override that no longer resolves falls back to the default emulator label."""
+        label = await self._psp_active_core_label(FakePlatformCoreReader({"psp": "No Longer Here"}))
+        assert label == "PPSSPP (Standalone)"
+
+    @pytest.mark.asyncio
+    async def test_has_games_reflects_bound_roms(self, plugin, fw):
+        """``has_games`` is True only for platforms with a ROM bound to a shortcut.
+
+        - ``dc``: one bound ROM (``shortcut_app_id`` set) -> True.
+        - ``ps2``: only an *unbound* ROM (``shortcut_app_id is None``) -> False.
+        - ``gba``: no ROM rows at all -> False.
+        """
+        firmware_list = [
+            {"id": 1, "file_name": "bios_dc.bin", "file_path": "bios/dc/bios_dc.bin", "file_size_bytes": 100},
+            {"id": 2, "file_name": "scph.bin", "file_path": "bios/ps2/scph.bin", "file_size_bytes": 200},
+            {"id": 3, "file_name": "gba_bios.bin", "file_path": "bios/gba/gba_bios.bin", "file_size_bytes": 300},
+        ]
+        # A real loop so the executor-run reads hit the shared fake UoW.
+        _set_loop(fw, asyncio.get_running_loop())
+        # "dc": a bound ROM. "ps2": only an unbound ROM. "gba": no ROM rows.
+        _seed_rom(plugin._uow, rom_id=42, platform_slug="dc", app_id=1)
+        _seed_rom(plugin._uow, rom_id=43, platform_slug="ps2", app_id=None)
+
+        with patch.object(plugin._romm_api, "list_firmware", return_value=firmware_list):
+            result = await _overview(fw)
+
+        dc_plat = next(p for p in result["platforms"] if p["platform_slug"] == "dc")
+        ps2_plat = next(p for p in result["platforms"] if p["platform_slug"] == "ps2")
+        gba_plat = next(p for p in result["platforms"] if p["platform_slug"] == "gba")
+        assert dc_plat["has_games"] is True
+        assert ps2_plat["has_games"] is False
+        assert gba_plat["has_games"] is False
+
+    @pytest.mark.asyncio
+    async def test_detects_downloaded_files(self, fw, tmp_path):
+        # File goes flat in bios root — nothing declares a placement for it
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        (bios_dir / "bios_dc.bin").write_bytes(b"\x00" * 100)
+
+        firmware_list = [
+            {
+                "id": 1,
+                "file_name": "bios_dc.bin",
+                "file_path": "bios/dc/bios_dc.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
+        ]
+
+        _stub_listing(fw, firmware_list)
+        _inline_executor(fw)
+
+        with patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))):
+            result = await _overview(fw)
+        assert result["success"] is True
+        assert result["platforms"][0]["files"][0]["downloaded"] is True
+
+    @pytest.mark.asyncio
+    async def test_handles_api_error_with_offline_fallback(self, plugin, fw):
+        # Real loop: only the HTTP list_firmware fails; the installed-slugs read
+        # against the fake UoW still succeeds.
+        _set_loop(fw, asyncio.get_running_loop())
+
+        with patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("Connection refused")):
+            result = await _overview(fw)
+
+        assert result["success"] is True
+        assert result["server_offline"] is True
+        assert "platforms" in result
+
+
+_DC_CORE = "flycast_libretro"
+
+
+def _dc_resolver() -> FakeFirmwareResolver:
+    """Two files the dc core will not run without, and one it merely accepts."""
+    resolver = FakeFirmwareResolver()
+    resolver.declare("req1.bin", required_by=[_id(_DC_CORE)], description="Required BIOS 1")
+    resolver.declare("req2.bin", required_by=[_id(_DC_CORE)], description="Required BIOS 2")
+    resolver.declare("opt1.bin", optional_for=[_id(_DC_CORE)], description="Optional firmware")
+    return resolver
+
+
+def _dc_core_info() -> FakeCoreInfoProvider:
+    """A dc platform whose launching core is the one declaring those files."""
+    from tests.fakes.fake_core_info_provider import libretro_option
+
+    return FakeCoreInfoProvider(
+        active_core=(_DC_CORE, "Flycast"),
+        options=[libretro_option(_DC_CORE, "Flycast")],
+    )
+
+
+class TestGetFirmwareStatusBiosAggregates:
+    """``get_firmware_status`` ships per-platform BIOS aggregates + ``bios_level``.
+
+    The platform detail reads the unknown/ok/partial/missing decision and display
+    counts off this payload instead of re-deriving the threshold logic in the
+    frontend (#461). The level is computed by the same
+    ``domain.bios_status.compute_bios_level`` the game-detail path uses, from the
+    same classified files.
+    """
+
+    @staticmethod
+    def _firmware(*names: str) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": i + 1,
+                "file_name": name,
+                "file_path": f"bios/dc/{name}",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            }
+            for i, name in enumerate(names)
+        ]
+
+    async def _run(self, tmp_path, firmware_list, downloaded: set[str]):
+        """Run get_firmware_status against the dc demand and the given downloads."""
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True, exist_ok=True)
+        for name in downloaded:
+            (bios_dir / name).write_bytes(b"\x00" * 100)
+
+        romm_api = MagicMock()
+        romm_api.list_firmware.return_value = firmware_list
+        fw = _make_firmware_service(
+            romm_api=romm_api,
+            firmware_resolver=_dc_resolver(),
+            core_info=_dc_core_info(),
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(bios_dir)),
+        )
+        _inline_executor(fw)
+
+        result = await _overview(fw)
+        return next(p for p in result["platforms"] if p["platform_slug"] == "dc")
+
+    @pytest.mark.asyncio
+    async def test_all_required_ready_is_ok(self, tmp_path):
+        """All required files downloaded → bios_level 'ok' + matching counts."""
+        plat = await self._run(
+            tmp_path, self._firmware("req1.bin", "req2.bin", "opt1.bin"), downloaded={"req1.bin", "req2.bin"}
+        )
+        assert plat["bios_level"] == "ok"
+        assert plat["required_count"] == 2
+        assert plat["required_downloaded"] == 2
+        assert plat["server_count"] == 3
+        assert plat["local_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_some_required_downloaded_is_partial(self, tmp_path):
+        """One of two required files present → bios_level 'partial'."""
+        plat = await self._run(tmp_path, self._firmware("req1.bin", "req2.bin", "opt1.bin"), downloaded={"req1.bin"})
+        assert plat["bios_level"] == "partial"
+        assert plat["required_count"] == 2
+        assert plat["required_downloaded"] == 1
+
+    @pytest.mark.asyncio
+    async def test_no_required_downloaded_is_missing(self, tmp_path):
+        """No required file present → bios_level 'missing'."""
+        plat = await self._run(tmp_path, self._firmware("req1.bin", "req2.bin", "opt1.bin"), downloaded=set())
+        assert plat["bios_level"] == "missing"
+        assert plat["required_count"] == 2
+        assert plat["required_downloaded"] == 0
+        assert plat["local_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_a_wanted_file_the_library_lacks_is_still_a_row(self, tmp_path):
+        """The third row kind: wanted, missing, and not downloadable from here.
+
+        The listing carries only the optional file; the two the dc core will not
+        run without are wanted all the same, so they are shown — marked
+        ``on_server`` false, which is the field the page's buttons and totals
+        filter on, and carrying no server id because there is no server record.
+        """
+        plat = await self._run(tmp_path, self._firmware("opt1.bin"), downloaded={"opt1.bin"})
+
+        rows = {f["file_name"]: f for f in plat["files"]}
+        assert set(rows) == {"opt1.bin", "req1.bin", "req2.bin"}
+        assert rows["opt1.bin"]["on_server"] is True
+        for name in ("req1.bin", "req2.bin"):
+            assert rows[name]["on_server"] is False
+            assert rows[name]["id"] is None
+            assert rows[name]["wanted"] == "needed"
+
+        # They are missing prerequisites, so the platform is not ready.
+        assert plat["required_count"] == 2
+        assert plat["required_downloaded"] == 0
+        assert plat["bios_level"] == "missing"
+
+    @pytest.mark.asyncio
+    async def test_unanswerable_platform_projects_unknown_level(self, tmp_path):
+        """Overview projection: server files nothing could answer for → 'unknown'.
+
+        A platform one of whose emulators could not be read classifies every
+        unmatched file ``unknown`` (known_count 0), so the aggregate stamps
+        ``bios_level == "unknown"`` instead of the false ``"ok"`` (#1520). It is
+        never flagged as a BIOS-needed platform (required_count is 0).
+        """
+        from tests.fakes.fake_core_info_provider import libretro_option
+
+        romm_api = MagicMock()
+        romm_api.list_firmware.return_value = [
+            {
+                "id": 1,
+                "file_name": "vita.bin",
+                "file_path": "bios/psvita/vita.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
+        ]
+        fw = _make_firmware_service(
+            romm_api=romm_api,
+            firmware_resolver=FakeFirmwareResolver(unread_emulators=frozenset({_id("vita_libretro")})),
+            core_info=FakeCoreInfoProvider(options=[libretro_option("vita_libretro", "Vita")]),
+        )
+        _inline_executor(fw)
+
+        result = await _overview(fw)
+
+        plat = next(p for p in result["platforms"] if p["platform_slug"] == "psvita")
+        assert plat["bios_level"] == "unknown"
+        assert plat["required_count"] == 0
+        assert plat["server_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_platform_whose_emulators_were_all_read_is_not_unknown(self, tmp_path):
+        """Every emulator read and none asks for the file → an answer, not a gap.
+
+        The counterpart to the case above, and the whole point of the four-value
+        model: the same empty match set means "nothing needs this" here and
+        "nothing could be established" there.
+        """
+        from tests.fakes.fake_core_info_provider import libretro_option
+
+        romm_api = MagicMock()
+        romm_api.list_firmware.return_value = [
+            {
+                "id": 1,
+                "file_name": "stray.bin",
+                "file_path": "bios/snes/stray.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
+        ]
+        fw = _make_firmware_service(
+            romm_api=romm_api,
+            firmware_resolver=FakeFirmwareResolver(),
+            core_info=FakeCoreInfoProvider(options=[libretro_option("snes9x_libretro", "Snes9x")]),
+        )
+        _inline_executor(fw)
+
+        result = await _overview(fw)
+
+        plat = next(p for p in result["platforms"] if p["platform_slug"] == "snes")
+        assert [f["wanted"] for f in plat["files"]] == ["not_needed"]
+        assert plat["bios_level"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_the_library_ratio_counts_only_what_the_library_holds(self, tmp_path):
+        """ "N of M files" is a progress bar over a set the user can complete.
+
+        Optional files no library holds are shown as rows but stay out of the
+        ratio — folding them in reports work outstanding on a system that needs
+        nothing. Measured: a stock RetroDECK's SNES emulators declare 26 optional
+        files, so the header would have read "0 / 26 files, 26 missing" for a
+        system no core requires anything from.
+        """
+        from tests.fakes.fake_core_info_provider import libretro_option
+
+        romm_api = MagicMock()
+        romm_api.list_firmware.return_value = [
+            {"id": 1, "file_name": "held.bin", "file_path": "bios/snes/held.bin", "file_size_bytes": 1, "md5_hash": ""},
+        ]
+        resolver = FakeFirmwareResolver()
+        resolver.declare("held.bin", optional_for=[_id("snes9x_libretro")])
+        for name in ("absent1.bin", "absent2.bin"):
+            resolver.declare(name, optional_for=[_id("snes9x_libretro")])
+        fw = _make_firmware_service(
+            romm_api=romm_api,
+            firmware_resolver=resolver,
+            core_info=FakeCoreInfoProvider(options=[libretro_option("snes9x_libretro", "Snes9x")]),
+        )
+        _inline_executor(fw)
+
+        result = await _overview(fw)
+        plat = next(p for p in result["platforms"] if p["platform_slug"] == "snes")
+
+        # All three are listed — the machine wants them and the user should see so.
+        assert len(plat["files"]) == 3
+        # Only the one the library holds is in the ratio.
+        assert plat["server_count"] == 1
+        assert plat["local_count"] == 0
+        # None is required, so the badge stays quiet either way.
+        assert plat["required_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_a_required_file_the_library_lacks_still_counts_as_required(self, tmp_path):
+        """The other side of the same split: readiness is not a progress bar.
+
+        A required file nobody can fetch is still a prerequisite, so it raises
+        ``required_count`` and holds the level down — the download affordance is
+        what withholds itself, not the count.
+        """
+        from tests.fakes.fake_core_info_provider import libretro_option
+
+        romm_api = MagicMock()
+        romm_api.list_firmware.return_value = []
+        resolver = FakeFirmwareResolver()
+        resolver.declare("lynxboot.img", required_by=[_id("handy_libretro")], description="Boot ROM")
+        fw = _make_firmware_service(
+            romm_api=romm_api,
+            firmware_resolver=resolver,
+            core_info=FakeCoreInfoProvider(
+                active_core=("handy_libretro", "Handy"),
+                options=[libretro_option("handy_libretro", "Handy")],
+            ),
+        )
+        _inline_executor(fw)
+
+        result = await fw.check_platform_bios("atarilynx")
+
+        assert result["required_count"] == 1
+        assert result["required_downloaded"] == 0
+        assert result["bios_level"] == "missing"
+        assert result["server_count"] == 0
+        assert result["files"][0]["on_server"] is False
+
+    @pytest.mark.asyncio
+    async def test_a_file_the_library_files_under_another_platform_is_not_called_absent(self, tmp_path):
+        """ "Not in your library" is a claim about the library, not about a directory.
+
+        A core that serves several systems declares the same file for each of
+        them while RomM files it under one directory. Checking only this
+        platform's slice of the listing would tell the user to upload a file they
+        already have — and it is one download either way, because the destination
+        comes from the placement rather than from the directory it was listed
+        under.
+        """
+        from tests.fakes.fake_core_info_provider import libretro_option
+
+        romm_api = MagicMock()
+        romm_api.list_firmware.return_value = [
+            {
+                "id": 1,
+                "file_name": "bios.gg",
+                "file_path": "bios/gamegear/bios.gg",
+                "file_size_bytes": 1,
+                "md5_hash": "",
+            },
+        ]
+        resolver = FakeFirmwareResolver()
+        resolver.declare("bios.gg", optional_for=[_id("genesis_plus_gx_libretro")], description="Game Gear BIOS")
+        fw = _make_firmware_service(
+            romm_api=romm_api,
+            firmware_resolver=resolver,
+            core_info=FakeCoreInfoProvider(options=[libretro_option("genesis_plus_gx_libretro", "Genesis Plus GX")]),
+        )
+        _inline_executor(fw)
+
+        result = await _overview(fw)
+
+        # The listing names one platform, so only that one carries the row —
+        # and it carries it as a library file, not as an absent one.
+        assert [p["platform_slug"] for p in result["platforms"]] == ["gamegear"]
+        assert [f["on_server"] for f in result["platforms"][0]["files"]] == [True]
+
+    @pytest.mark.asyncio
+    async def test_the_demand_is_read_once_per_platform(self, tmp_path):
+        """One reading per platform the page renders, and exactly one.
+
+        A reading is per platform because which emulators can run a system is the
+        only thing that says whether a standalone emulator's declarations belong
+        to it — a whole-machine reading enumerates installed cores and carries
+        none of them. What must not happen is a second reading WITHIN a platform:
+        the rows, the counts and the verdict all come off one answer, so two
+        readings could disagree about the same file on one page.
+        """
+        romm_api = MagicMock()
+        romm_api.list_firmware.return_value = [
+            {"id": 1, "file_name": "a.bin", "file_path": "bios/dc/a.bin", "file_size_bytes": 1, "md5_hash": ""},
+            {"id": 2, "file_name": "b.bin", "file_path": "bios/psx/b.bin", "file_size_bytes": 1, "md5_hash": ""},
+            {"id": 3, "file_name": "c.bin", "file_path": "bios/gba/c.bin", "file_size_bytes": 1, "md5_hash": ""},
+        ]
+        resolver = FakeFirmwareResolver()
+        fw = _make_firmware_service(romm_api=romm_api, firmware_resolver=resolver)
+        _inline_executor(fw)
+
+        result = await _overview(fw)
+
+        assert len(result["platforms"]) == 3
+        assert sorted(resolver.calls) == ["dc", "gba", "psx"]
+
+    @pytest.mark.asyncio
+    async def test_server_offline_still_answers_readiness(self, plugin, tmp_path):
+        """Readiness needs no server: ES-DE, the resolver and the disk answer it.
+
+        What an unreachable RomM costs is the files only it knows about and the
+        ability to download — not the requirement, and not the platform.
+        """
+        _seed_rom(plugin._uow, rom_id=42, platform_slug="dc", app_id=1)
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True, exist_ok=True)
+        (bios_dir / "req1.bin").write_bytes(b"\x00" * 100)
+
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            firmware_resolver=_dc_resolver(),
+            core_info=_dc_core_info(),
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(bios_dir)),
+        )
+        _set_loop(fw, asyncio.get_running_loop())
+
+        with patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")):
+            result = await _overview(fw)
+
+        assert result["server_offline"] is True
+        dc = next(p for p in result["platforms"] if p["platform_slug"] == "dc")
+        assert dc["has_games"] is True
+        assert {f["file_name"] for f in dc["files"]} == {"req1.bin", "req2.bin", "opt1.bin"}
+        assert all(f["on_server"] is False for f in dc["files"])
+        # One of the two required files is on disk — a real, partial answer.
+        assert dc["required_count"] == 2
+        assert dc["required_downloaded"] == 1
+        assert dc["bios_level"] == "partial"
+
+    @pytest.mark.asyncio
+    async def test_a_synced_platform_nothing_wants_stays_off_the_page(self, plugin, tmp_path):
+        """Seeding every synced platform would fill the page with 0/0 rows.
+
+        The core the page can ask is offered AND read, so the empty list is a
+        finished answer — the one shape that may be dropped.
+        """
+        _seed_rom(plugin._uow, rom_id=44, platform_slug="nes", app_id=1)
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            firmware_resolver=FakeFirmwareResolver(),
+            core_info=_test_core_info(),
+        )
+        _set_loop(fw, asyncio.get_running_loop())
+
+        with patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")):
+            result = await _overview(fw)
+
+        assert result["platforms"] == []
+
+    @pytest.mark.asyncio
+    async def test_a_synced_platform_nothing_could_answer_for_stays_on_the_page(self, plugin, tmp_path):
+        """A platform ES-DE offers no libretro core for keeps its block, reading unknown.
+
+        The counterpart to the drop above, and the reason the drop is conditional
+        (#1660). ``ps3``'s only ES-DE entry is RPCS3, so there is no core to ask
+        and the empty file list is silence rather than an answer. Dropping the
+        block would say the system needs nothing — the exact claim the four-value
+        vocabulary exists to refuse — over firmware RPCS3 will not boot without.
+        """
+        _seed_rom(plugin._uow, rom_id=45, platform_slug="ps3", app_id=1)
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            firmware_resolver=FakeFirmwareResolver(),
+            core_info=FakeCoreInfoProvider(options=[]),
+        )
+        _set_loop(fw, asyncio.get_running_loop())
+
+        with patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")):
+            result = await _overview(fw)
+
+        ps3 = next(p for p in result["platforms"] if p["platform_slug"] == "ps3")
+        assert ps3["files"] == []
+        assert ps3["bios_level"] == "unknown"
+        assert ps3["required_count"] == 0
+        assert ps3["server_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_no_exists_read_escapes_the_bios_directory(self, plugin, fw, tmp_path):
+        """#966 NIT2: a server-supplied traversal name is skipped, not joined.
+
+        The listing is server-controlled, so a ``file_name`` carrying ``..`` must
+        be dropped (log-and-skip) rather than steering an ``exists()`` read
+        outside the BIOS sandbox.
+        """
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True, exist_ok=True)
+        (bios_dir / "good.bin").write_bytes(b"\x00" * 100)
+        (tmp_path / "retrodeck" / "evil.bin").write_bytes(b"\x00" * 100)
+
+        firmware_list = [
+            {"id": 1, "file_name": "good.bin", "file_path": "bios/dc/good.bin", "file_size_bytes": 1, "md5_hash": ""},
+            {
+                "id": 2,
+                "file_name": "../evil.bin",
+                "file_path": "bios/dc/../evil.bin",
+                "file_size_bytes": 1,
+                "md5_hash": "",
+            },
+        ]
+        _set_loop(fw, asyncio.get_running_loop())
+
+        real_exists = fw._config.firmware_file_store.exists
+        checked: list[str] = []
+
+        def _tracking_exists(path):
+            checked.append(path)
+            return real_exists(path)
+
+        fw._config.firmware_file_store.exists = _tracking_exists
+
+        with (
+            patch.object(plugin._romm_api, "list_firmware", return_value=firmware_list),
+            patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
+        ):
+            result = await _overview(fw)
+
+        plat = next(p for p in result["platforms"] if p["platform_slug"] == "dc")
+        assert {f["file_name"] for f in plat["files"]} == {"good.bin"}
+        real_bios = os.path.realpath(str(bios_dir))
+        for path in checked:
+            assert os.path.realpath(path).startswith(real_bios + os.sep)
+
+
+class TestGetFirmwareStatusDeletableCount:
+    """``get_firmware_status`` ships the count the Delete BIOS button stands on.
+
+    The delete is authorised by the download record, so the button's number has
+    to be a record count. ``local_count`` is the library's progress ratio over a
+    different set and is wrong in both directions: it counts a hand-placed file
+    that shares a server file's name and drops our own download the moment RomM
+    stops listing it — the direction that used to hide the button entirely over
+    files it could still remove.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_delete_count_counts_records_not_library_files(self, plugin, tmp_path):
+        """Both directions in one platform, so the two counts cannot coincide.
+
+        ``IPL.bin`` and ``card.bin`` are in the library and on disk but were put
+        there by hand; ``retired.bin`` we downloaded and RomM no longer offers;
+        ``ours.bin`` we downloaded and it is still listed. The library ratio sees
+        the three it holds, the delete sees the two we placed — and per row, only
+        ``ours.bin`` offers a button, because ``retired.bin`` has no row at all.
+        """
+        bios_dir = tmp_path / "bios"
+        ipl = os.path.join(str(bios_dir), "IPL.bin")
+        card = os.path.join(str(bios_dir), "card.bin")
+        retired = os.path.join(str(bios_dir), "retired.bin")
+        ours = os.path.join(str(bios_dir), "ours.bin")
+        store = FakeFirmwareFileStore({ipl: b"\x00" * 8, card: b"\x00" * 8, retired: b"\x00" * 8, ours: b"\x00" * 8})
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            firmware_file_store=store,
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(bios_dir)),
+            core_info=_test_core_info(),
+        )
+        _inline_executor(fw)
+        _declare(fw, ("IPL.bin", "GameCube IPL", True))
+        plugin._uow.bios_files.save(
+            BiosFile.mark_downloaded(
+                platform_slug="gc",
+                file_name="retired.bin",
+                file_path=retired,
+                downloaded_at="2026-01-01T00:00:00+00:00",
+                firmware_id=None,
+            )
+        )
+        # Ours, and still offered by the library, so it has a row of its own.
+        plugin._uow.bios_files.save(
+            BiosFile.mark_downloaded(
+                platform_slug="gc",
+                file_name="ours.bin",
+                file_path=ours,
+                downloaded_at="2026-01-01T00:00:00+00:00",
+                firmware_id=9,
+            )
+        )
+        _stub_listing(
+            fw,
+            [
+                {"id": 7, "file_name": "IPL.bin", "file_path": "bios/gc/IPL.bin", "file_size_bytes": 8, "md5_hash": ""},
+                {
+                    "id": 8,
+                    "file_name": "card.bin",
+                    "file_path": "bios/gc/card.bin",
+                    "file_size_bytes": 8,
+                    "md5_hash": "",
+                },
+                {
+                    "id": 9,
+                    "file_name": "ours.bin",
+                    "file_path": "bios/gc/ours.bin",
+                    "file_size_bytes": 8,
+                    "md5_hash": "",
+                },
+            ],
+        )
+
+        result = await _overview(fw)
+        plat = next(p for p in result["platforms"] if p["platform_slug"] == "gc")
+
+        assert plat["local_count"] == 3
+        assert plat["deletable_count"] == 2
+        # And per row, which is what a row's own Delete button reads. `IPL.bin`
+        # is the shape that matters: in the library, on disk, `downloaded: True`
+        # — and not ours, so it must offer nothing. Deriving the field from
+        # `downloaded` instead of from the records flips exactly this row, and
+        # it is the shape that destroyed `codehandler.bin` on a real device.
+        rows = {f["file_name"]: f for f in plat["files"]}
+        assert rows["IPL.bin"]["downloaded"] is True
+        assert rows["IPL.bin"]["deletable_count"] == 0
+        assert rows["card.bin"]["deletable_count"] == 0
+        # And the positive direction, which is the one that fails silently: a row
+        # the plugin DID place must offer its button. Without it, forcing every
+        # file row to 0 leaves the suite green and the button simply never
+        # appears.
+        assert rows["ours.bin"]["deletable_count"] == 1
+        # `retired.bin` has no row at all: nothing declares it and the library no
+        # longer offers it. So the platform count and the rows legitimately
+        # differ — the count is over records, the rows are what the pane has to
+        # show, and only the platform-wide button can reach this one.
+        assert "retired.bin" not in rows
+        # And the count means the delete: it removes ours, leaves theirs.
+        deleted = await fw.delete_platform_bios("gc")
+        assert deleted["deleted_count"] == 2
+        assert retired not in store.files
+        assert ipl in store.files
+        assert card in store.files
+
+    @pytest.mark.asyncio
+    async def test_a_record_whose_file_is_gone_is_not_offered(self, plugin, tmp_path):
+        """Nothing to unlink, nothing to offer — the button must not promise a deletion."""
+        bios_dir = tmp_path / "bios"
+        held = os.path.join(str(bios_dir), "IPL.bin")
+        store = FakeFirmwareFileStore({held: b"\x00" * 8})
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            firmware_file_store=store,
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(bios_dir)),
+            core_info=_test_core_info(),
+        )
+        _inline_executor(fw)
+        _declare(fw, ("IPL.bin", "GameCube IPL", True))
+        plugin._uow.bios_files.save(
+            BiosFile.mark_downloaded(
+                platform_slug="gc",
+                file_name="gone.bin",
+                file_path=os.path.join(str(bios_dir), "gone.bin"),
+                downloaded_at="2026-01-01T00:00:00+00:00",
+                firmware_id=None,
+            )
+        )
+        _stub_listing(
+            fw,
+            [{"id": 7, "file_name": "IPL.bin", "file_path": "bios/gc/IPL.bin", "file_size_bytes": 8, "md5_hash": ""}],
+        )
+
+        result = await _overview(fw)
+        plat = next(p for p in result["platforms"] if p["platform_slug"] == "gc")
+
+        assert plat["local_count"] == 1
+        assert plat["deletable_count"] == 0
+
+
+class TestCheckPlatformBiosUnknown:
+    """``check_platform_bios`` surfaces the 'unknown' state for unanswerable platforms.
+
+    A platform one of whose emulators could not be read has every unmatched file
+    classified ``unknown`` (known_count 0), so the per-game BIOS payload ships
+    ``bios_level == "unknown"`` instead of a false ``"ok"`` all-clear (#1520).
+    """
+
+    @pytest.mark.asyncio
+    async def test_unanswerable_platform_is_unknown(self, tmp_path):
+        from tests.fakes.fake_core_info_provider import libretro_option
+
+        romm_api = MagicMock()
+        romm_api.list_firmware.return_value = [
+            {
+                "id": 1,
+                "file_name": "vita.bin",
+                "file_path": "bios/psvita/vita.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
+        ]
+        fw = _make_firmware_service(
+            romm_api=romm_api,
+            firmware_resolver=FakeFirmwareResolver(unread_emulators=frozenset({_id("vita_libretro")})),
+            core_info=FakeCoreInfoProvider(options=[libretro_option("vita_libretro", "Vita")]),
+        )
+        _inline_executor(fw)
+
+        result = await fw.check_platform_bios("psvita")
+
+        assert result["needs_bios"] is True
+        assert result["server_count"] == 1
+        assert result["known_count"] == 0
+        assert result["unknown_count"] == 1
+        assert result["required_count"] == 0
+        assert result["bios_level"] == "unknown"
+
+    @pytest.mark.asyncio
+    async def test_an_unread_core_outside_the_platform_does_not_make_it_unknown(self, tmp_path):
+        """The doubt is scoped to the emulators THIS platform offers.
+
+        Measured on a stock RetroDECK (211 cores, 172 ES-DE systems): five
+        installed cores ship without a ``.info``, and exactly one of them —
+        ``amiarcadia_libretro`` — is offered by any system. Letting an unread
+        core silence platforms that do not offer it would make ``not_needed``
+        unreachable and put the four-value model back at three.
+        """
+        from tests.fakes.fake_core_info_provider import libretro_option
+
+        romm_api = MagicMock()
+        romm_api.list_firmware.return_value = [
+            {
+                "id": 1,
+                "file_name": "stray.bin",
+                "file_path": "bios/snes/stray.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
+        ]
+        fw = _make_firmware_service(
+            romm_api=romm_api,
+            firmware_resolver=FakeFirmwareResolver(unread_emulators=frozenset({_id("amiarcadia_libretro")})),
+            core_info=FakeCoreInfoProvider(options=[libretro_option("snes9x_libretro", "Snes9x")]),
+        )
+        _inline_executor(fw)
+
+        result = await fw.check_platform_bios("snes")
+
+        assert result["unknown_count"] == 0
+        assert [f["wanted"] for f in result["files"]] == ["not_needed"]
+
+    @pytest.mark.asyncio
+    async def test_the_platform_that_does_offer_the_unread_core_is_unknown(self, tmp_path):
+        """The other half of the same machine, and the reason the value exists.
+
+        ``arcadia`` (Emerson Arcadia 2001) is the one system of 172 that offers
+        ``amiarcadia_libretro``, whose ``.info`` RetroDECK does not ship. It is
+        the whole population of ``unknown`` on a stock install — rare, and
+        reachable, which is what the fourth value is for.
+        """
+        from tests.fakes.fake_core_info_provider import libretro_option
+
+        romm_api = MagicMock()
+        romm_api.list_firmware.return_value = [
+            {
+                "id": 1,
+                "file_name": "stray.bin",
+                "file_path": "bios/arcadia/stray.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
+        ]
+        fw = _make_firmware_service(
+            romm_api=romm_api,
+            firmware_resolver=FakeFirmwareResolver(unread_emulators=frozenset({_id("amiarcadia_libretro")})),
+            core_info=FakeCoreInfoProvider(options=[libretro_option("amiarcadia_libretro", "Amiarcadia")]),
+        )
+        _inline_executor(fw)
+
+        result = await fw.check_platform_bios("arcadia")
+
+        assert result["unknown_count"] == 1
+        assert [f["wanted"] for f in result["files"]] == ["unknown"]
+        assert result["bios_level"] == "unknown"
+
+    @pytest.mark.asyncio
+    async def test_a_row_the_library_does_not_hold_cannot_cancel_the_unknown_verdict(self, tmp_path):
+        """``known_count`` is about server files, so a union row must not raise it.
+
+        A beyond-server row exists only because an emulator declared the file,
+        so it is always ``needed``/``optional`` — always "known". Counted, one of
+        them cancels ``unknown`` for a platform whose every server file went
+        unanswered: the headline goes green while the row underneath still says
+        nothing could answer for it.
+        """
+        romm_api = MagicMock()
+        romm_api.list_firmware.return_value = [
+            {"id": 1, "file_name": "stray.bin", "file_path": "bios/snes/stray.bin", "file_size_bytes": 100},
+        ]
+        fw = _make_firmware_service(
+            romm_api=romm_api,
+            firmware_resolver=FakeFirmwareResolver(unread_emulators=frozenset({_id("snes9x_libretro")})),
+            core_info=FakeCoreInfoProvider(
+                options=[libretro_option("snes9x_libretro", "Snes9x"), libretro_option("bsnes_libretro", "bsnes")]
+            ),
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(tmp_path / "bios")),
+        )
+        # Declared by the core that WAS read, and absent from the library — the
+        # union row. The server's own file stays unanswerable either way.
+        _resolver(fw).declare("extra.bin", required_by=[_id("bsnes_libretro")])
+        _inline_executor(fw)
+
+        result = await fw.check_platform_bios("snes")
+
+        wanted = {f["file_name"]: f["wanted"] for f in result["files"]}
+        assert wanted == {"stray.bin": "unknown", "extra.bin": "needed"}
+        assert result["server_count"] == 1
+        assert result["known_count"] == 0
+        assert result["unknown_count"] == 1
+        assert result["bios_level"] == "unknown"
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_emulator_list_leaves_the_scope_unestablished(self, tmp_path):
+        """No ``es_systems.xml`` → the scope itself is unknown, so nothing is ruled out."""
+        romm_api = MagicMock()
+        romm_api.list_firmware.return_value = [
+            {
+                "id": 1,
+                "file_name": "stray.bin",
+                "file_path": "bios/snes/stray.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
+        ]
+        fw = _make_firmware_service(
+            romm_api=romm_api,
+            firmware_resolver=FakeFirmwareResolver(),
+            core_info=FakeCoreInfoProvider(available=False),
+        )
+        _inline_executor(fw)
+
+        result = await fw.check_platform_bios("snes")
+
+        assert result["unknown_count"] == 1
+        assert result["bios_level"] == "unknown"
+
+    @pytest.mark.asyncio
+    async def test_a_resolver_that_could_not_answer_never_reads_as_needing_none(self, tmp_path):
+        """The adapter's failure shape must not clear a real requirement."""
+        romm_api = MagicMock()
+        romm_api.list_firmware.return_value = [
+            {
+                "id": 1,
+                "file_name": "stray.bin",
+                "file_path": "bios/snes/stray.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
+        ]
+        fw = _make_firmware_service(
+            romm_api=romm_api,
+            firmware_resolver=FakeFirmwareResolver(resolved=False),
+        )
+        _inline_executor(fw)
+
+        result = await fw.check_platform_bios("snes")
+
+        assert result["bios_level"] == "unknown"
+        assert result["known_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_answered_platform_threads_known_count_and_is_not_unknown(self, tmp_path):
+        """A platform with declared files ships known_count > 0 and keeps its level."""
+        romm_api = MagicMock()
+        romm_api.list_firmware.return_value = [
+            {"id": 1, "file_name": "req1.bin", "file_path": "bios/dc/req1.bin", "file_size_bytes": 100, "md5_hash": ""},
+            {"id": 2, "file_name": "opt1.bin", "file_path": "bios/dc/opt1.bin", "file_size_bytes": 100, "md5_hash": ""},
+        ]
+        fw = _make_firmware_service(
+            romm_api=romm_api,
+            firmware_resolver=_dc_resolver(),
+            core_info=_dc_core_info(),
+        )
+        _inline_executor(fw)
+
+        result = await fw.check_platform_bios("dc")
+
+        # Three declared files, but only the two the listing carries count:
+        # ``count_wanted`` is scoped to ``on_server`` rows, the same subset
+        # ``server_count`` is taken over, so the row the library does not hold is
+        # in neither. Nothing weighs the two against each other — they agree here
+        # because one scoping produced both.
+        assert result["known_count"] == 2
+        assert result["server_count"] == 2
+        assert result["bios_level"] != "unknown"
+
+
+_PSX_CORE = "swanstation_libretro"
+_PSX_ALTERNATIVE_CORE = "pcsx_rearmed_libretro"
+_PSX_IMAGES = ("scph5500.bin", "scph5501.bin", "scph5502.bin")
+
+
+def _psx_service(
+    *,
+    core_so: str = _PSX_CORE,
+    system_firmware: str | None = SYSTEM_FIRMWARE_CANNOT_RUN_WITHOUT,
+    requirements_met: bool | None = False,
+    held: str | None = None,
+    bios_dir=None,
+) -> FirmwareService:
+    """A PlayStation platform as the machine really answers it.
+
+    Every image the core declares is ``optional`` — that is all a libretro
+    ``.info`` can say — so the file counts alone report nothing required. What
+    separates a console that boots from one that does not is the resolver's
+    ``system_firmware`` entry, which is why it is seeded per core here rather
+    than per file. ``requirements_met`` is seeded beside it because the resolver
+    carries it, not because anything reads it: the default is the ``False`` the
+    reference device reports for every core in this state.
+    """
+    romm_api = MagicMock()
+    romm_api.list_firmware.return_value = [
+        {
+            "id": index,
+            "file_name": name,
+            "file_path": f"bios/ps/{name}",
+            "file_size_bytes": 100,
+            "md5_hash": "",
+        }
+        for index, name in enumerate(_PSX_IMAGES, start=1)
+    ]
+    resolver = FakeFirmwareResolver(bios_root=str(bios_dir) if bios_dir is not None else None)
+    for name in _PSX_IMAGES:
+        resolver.declare(name, optional_for=[_id(core_so)], present=(name == held) or None)
+    resolver.record_system(_id(core_so), system_firmware=system_firmware, requirements_met=requirements_met)
+    fw = _make_firmware_service(
+        romm_api=romm_api,
+        firmware_resolver=resolver,
+        core_info=FakeCoreInfoProvider(
+            active_core=(core_so, "PS1 core"),
+            options=[libretro_option(core_so, "PS1 core")],
+        ),
+    )
+    _inline_executor(fw)
+    return fw
+
+
+class TestTheConsolesOwnFirmwareDemand:
+    """A requirement no ``.info`` can state, and no count may be asked to carry.
+
+    A libretro declaration marks each file required or optional, and nothing
+    else. So SwanStation, whose console will not boot without a BIOS image,
+    marks all of its images optional — and a PlayStation page read a green
+    "Nothing required (0/20 files held)" while not one game on it would start.
+    The demand is disjunctive: one of these, not each of these.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_console_needing_an_image_with_none_in_place_is_not_green(self):
+        fw = _psx_service()
+
+        result = await fw.check_platform_bios("psx")
+
+        assert result["required_count"] == 0
+        assert result["system_image"] == "absent"
+        assert result["bios_level"] == "missing"
+        # Never a required-file ratio: there are three files and one
+        # requirement, and "0/3 required" would state the wrong set.
+        assert result["bios_label"] == "Missing"
+
+    @pytest.mark.asyncio
+    async def test_one_image_in_place_answers_the_whole_demand(self, tmp_path):
+        # ``requirements_met`` stays at the default ``False`` deliberately: the
+        # answer is a reading of the rows, so the resolver's own verdict over the
+        # core's whole declaration cannot take a held image back off the page.
+        bios_dir = tmp_path / "bios"
+        bios_dir.mkdir()
+        (bios_dir / "scph5501.bin").write_bytes(b"bios")
+        fw = _psx_service(held="scph5501.bin", bios_dir=bios_dir)
+
+        result = await fw.check_platform_bios("psx")
+
+        assert result["system_image"] == "held"
+        assert result["bios_level"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_the_verdict_flips_with_the_core_the_game_launches_with(self):
+        """PCSX ReARMed carries its own HLE BIOS over the identical machine.
+
+        The two cores see the same three files and the same empty BIOS
+        directory; the only thing that has ever separated their answers is a
+        fact no file list holds.
+        """
+        needs = await _psx_service(core_so=_PSX_CORE).check_platform_bios("psx")
+        carries = await _psx_service(
+            core_so=_PSX_ALTERNATIVE_CORE,
+            system_firmware=SYSTEM_FIRMWARE_CORE_ALTERNATIVE,
+            requirements_met=True,
+        ).check_platform_bios("psx")
+
+        assert (needs["system_image"], needs["bios_level"]) == ("absent", "missing")
+        assert (carries["system_image"], carries["bios_level"]) == ("not_demanded", "ok")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "state", [SYSTEM_FIRMWARE_RUNS_WITHOUT, SYSTEM_FIRMWARE_OPEN, SYSTEM_FIRMWARE_CORE_ALTERNATIVE, None]
+    )
+    async def test_every_other_recording_leaves_todays_answer_standing(self, state):
+        """Including ``None`` — nothing recorded about this console.
+
+        It is an unasked question, so it changes nothing here; what it must
+        never become is a green claim of its own, which is what the ``absent``
+        case above would otherwise be indistinguishable from.
+        """
+        fw = _psx_service(system_firmware=state, requirements_met=None)
+
+        result = await fw.check_platform_bios("psx")
+
+        assert result["system_image"] == "not_demanded"
+        assert result["bios_level"] == "ok"
+        assert result["bios_label"] == "OK"
+
+    @pytest.mark.asyncio
+    async def test_a_demand_nothing_could_settle_declines_rather_than_clearing(self):
+        """No row to read the disjunction off — grey, and never "nothing required"."""
+        romm_api = MagicMock()
+        romm_api.list_firmware.return_value = []
+        resolver = FakeFirmwareResolver()
+        resolver.record_system(
+            _id(_PSX_CORE), system_firmware=SYSTEM_FIRMWARE_CANNOT_RUN_WITHOUT, requirements_met=None
+        )
+        fw = _make_firmware_service(
+            romm_api=romm_api,
+            firmware_resolver=resolver,
+            core_info=FakeCoreInfoProvider(
+                active_core=(_PSX_CORE, "PS1 core"), options=[libretro_option(_PSX_CORE, "PS1 core")]
+            ),
+        )
+        _inline_executor(fw)
+
+        result = await fw.check_platform_bios("psx")
+
+        assert result == {"needs_bios": False, "bios_status_unknown": True}
+
+    @pytest.mark.asyncio
+    async def test_the_overview_stamps_the_same_answer_the_game_page_reads(self):
+        """One builder, so a platform and its games cannot disagree about it."""
+        fw = _psx_service()
+
+        overview = await _overview(fw)
+        page = await fw.check_platform_bios("psx")
+
+        platform = next(p for p in overview["platforms"] if p["platform_slug"] == "ps")
+        assert platform["system_image"] == page["system_image"] == "absent"
+        assert platform["bios_level"] == page["bios_level"] == "missing"
+        assert platform["required_count"] == 0
+
+
+# The four PlayStation cores as the pinned resolver answers for them on the
+# reference device. Two of them mark files required and two mark nothing
+# required; three of the four declare for a console that will not start without
+# an image. Only one core is in both halves at once, and that is the shape the
+# disjunction is about.
+_PSX_HW_CORE = "mednafen_psx_hw_libretro"
+_PSX_REQUIRING_CORE = "mednafen_psx_libretro"
+_PSX_DECLARED_IMAGES = ("ps1_rom.bin", "psxonpsp660.bin", "scph5500.bin", "scph5501.bin", "scph5502.bin")
+_PSX_HARD_REQUIRED = ("scph5500.bin", "scph5501.bin", "scph5502.bin")
+
+
+def _psx_four_core_service(active_core_so: str) -> FirmwareService:
+    """One PlayStation, four cores, and the launching one decides what a row is.
+
+    Measured from the pinned resolver: Beetle PSX and Beetle PSX HW both declare
+    all five images and mark the three ``scph`` dumps required; SwanStation
+    declares the same five and marks every one of them optional; PCSX ReARMed
+    declares them and carries its own substitute. Three of the four are for a
+    console that will not start without an image, and only SwanStation states
+    that as a disjunction, because it is the only one whose declaration says
+    nothing else.
+    """
+    romm_api = MagicMock()
+    romm_api.list_firmware.return_value = [
+        {
+            "id": index,
+            "file_name": name,
+            "file_path": f"bios/psx/{name}",
+            "file_size_bytes": 100,
+            "md5_hash": "",
+        }
+        for index, name in enumerate(_PSX_DECLARED_IMAGES, start=1)
+    ]
+    resolver = FakeFirmwareResolver()
+    for name in _PSX_DECLARED_IMAGES:
+        hard = name in _PSX_HARD_REQUIRED
+        resolver.declare(
+            name,
+            required_by=[_id(_PSX_REQUIRING_CORE), _id(_PSX_HW_CORE)] if hard else [],
+            optional_for=[_id(_PSX_CORE), _id(_PSX_ALTERNATIVE_CORE)]
+            + ([] if hard else [_id(_PSX_REQUIRING_CORE), _id(_PSX_HW_CORE)]),
+        )
+    for core_so in (_PSX_CORE, _PSX_REQUIRING_CORE, _PSX_HW_CORE):
+        resolver.record_system(_id(core_so), system_firmware=SYSTEM_FIRMWARE_CANNOT_RUN_WITHOUT, requirements_met=False)
+    resolver.record_system(
+        _id(_PSX_ALTERNATIVE_CORE), system_firmware=SYSTEM_FIRMWARE_CORE_ALTERNATIVE, requirements_met=True
+    )
+    fw = _make_firmware_service(
+        romm_api=romm_api,
+        firmware_resolver=resolver,
+        core_info=FakeCoreInfoProvider(
+            active_core=(active_core_so, active_core_so),
+            options=[libretro_option(core_so, core_so) for core_so in (active_core_so,)],
+        ),
+    )
+    _inline_executor(fw)
+    return fw
+
+
+class TestWhichRowsCanAnswerTheConsole:
+    """Which rows are marked as ways to satisfy the console's own demand.
+
+    The device pass this comes from: with SwanStation launching, no row was
+    ``required_by_active`` — the core marks all five images optional — so every
+    row in the PlayStation table drew the muted "missing, not required" mark
+    under a red headline saying the console needs at least one. The mark now has
+    a state for it, and it is set only where "one of these" is the whole of what
+    the core says.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("core_so", "marked"),
+        [
+            (_PSX_CORE, True),
+            (_PSX_REQUIRING_CORE, False),
+            (_PSX_HW_CORE, False),
+            (_PSX_ALTERNATIVE_CORE, False),
+        ],
+    )
+    async def test_only_a_core_that_states_the_disjunction_marks_its_rows(self, core_so: str, marked: bool):
+        page = await _psx_four_core_service(core_so).check_platform_bios("psx")
+
+        assert {f["file_name"]: f["system_image_candidate"] for f in page["files"]} == dict.fromkeys(
+            _PSX_DECLARED_IMAGES, marked
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_core_that_does_require_files_states_the_demand_on_those_rows_instead(self):
+        """Beetle PSX, and why the flag is silent for it rather than missing.
+
+        Its console needs an image too. What it says about that is three
+        required rows, which every count and every surface already carries — so
+        a second mark beside them would state one requirement twice.
+        """
+        page = await _psx_four_core_service(_PSX_REQUIRING_CORE).check_platform_bios("psx")
+
+        assert {f["file_name"] for f in page["files"] if f["required_by_active"]} == set(_PSX_HARD_REQUIRED)
+        assert not any(f["system_image_candidate"] for f in page["files"])
+
+    @pytest.mark.asyncio
+    async def test_a_row_carries_each_cores_own_answer_side_by_side(self):
+        """``ps1_rom.bin``: optional to all four, and a disjunction for one of them.
+
+        The row the misworded annotation landed on. Beetle PSX marks this file
+        optional while hard-requiring three others, so its entry says exactly
+        that and nothing about the console — which is what stopped the line
+        reading "the console will not start without one" under a core that
+        demands three named files.
+        """
+        page = await _psx_four_core_service(_PSX_CORE).check_platform_bios("psx")
+
+        cores = next(f for f in page["files"] if f["file_name"] == "ps1_rom.bin")["cores"]
+        assert cores[_id(_PSX_CORE)] == {"required": False, "needs_one_of": len(_PSX_DECLARED_IMAGES)}
+        assert cores[_id(_PSX_REQUIRING_CORE)] == {"required": False, "needs_one_of": None}
+        assert cores[_id(_PSX_HW_CORE)] == {"required": False, "needs_one_of": None}
+        assert cores[_id(_PSX_ALTERNATIVE_CORE)] == {"required": False, "needs_one_of": None}
+
+    @pytest.mark.asyncio
+    async def test_the_overview_stamps_the_same_marks_the_game_page_reads(self):
+        """One builder, so the platform table and the game page cannot disagree."""
+        fw = _psx_four_core_service(_PSX_CORE)
+
+        overview = await _overview(fw)
+        page = await fw.check_platform_bios("psx")
+
+        platform = next(p for p in overview["platforms"] if p["platform_slug"] == "psx")
+        assert {f["file_name"]: f["system_image_candidate"] for f in platform["files"]} == {
+            f["file_name"]: f["system_image_candidate"] for f in page["files"]
+        }
+        assert all(f["system_image_candidate"] for f in platform["files"])
+        assert platform["system_image"] == "absent"
+
+
+_PSX_DEFAULT_LABEL = "SwanStation"
+_PSX_ALTERNATIVE_LABEL = "PCSX ReARMed"
+_PSX_STANDALONE_LABEL = "DuckStation (Standalone)"
+
+
+def _psx_emulators() -> list[EmulatorOption]:
+    """The three ES-DE lists for a PlayStation, in document order."""
+    return [
+        libretro_option(_PSX_CORE, _PSX_DEFAULT_LABEL),
+        libretro_option(_PSX_ALTERNATIVE_CORE, _PSX_ALTERNATIVE_LABEL),
+        standalone_option("%EMULATOR_DUCKSTATION% %ROM%", _PSX_STANDALONE_LABEL),
+    ]
+
+
+class _DeclaredDefaultCoreInfo(FakeCoreInfoProvider):
+    """ES-DE's own default, rendered the way the live adapter renders it.
+
+    :class:`FakeCoreInfoProvider` builds the default invocation out of its
+    ``active_core`` tuple, which carries no identity — and the identity is the
+    one field a firmware answer is keyed on, so a fixture on the bare fake
+    resolves an unpinned ROM to a ``None`` where production resolves it to an
+    emulator. The live adapter renders the first bakeable OPTION instead
+    (``AtlasCatalogueAdapter.get_default_emulator``), identity and all.
+    """
+
+    def get_default_emulator(self, system_name: str) -> EmulatorInvocation | None:
+        self.emulator_options_calls.append(system_name)
+        return option_to_invocation(select_default_option(self.options))
+
+
+def _psx_platform_service(
+    *, platform_core: str | None = None, options: list[EmulatorOption] | None = None
+) -> FirmwareService:
+    """A PlayStation ES-DE lists three emulators for, one of them standalone.
+
+    SwanStation is the es_systems default — first bakeable in document order —
+    and its console will not start without one of the images it declares. PCSX
+    ReARMed declares the same three and carries its own substitute. DuckStation
+    is standalone, so it names no core and nothing here can answer for it. The
+    files, the empty BIOS directory and the reading are identical under all
+    three: the only thing that moves is which emulator the platform resolves to,
+    which is what makes a disagreement between two surfaces attributable.
+
+    *options* replaces the emulator list for a test about a pin that no longer
+    bakes; every other caller takes ES-DE's three.
+
+    The listing is filed under ``bios/psx/`` so the overview's entry is keyed by
+    the same slug the game page asks about. A RomM firmware directory named
+    differently from the platform slug puts the two on different keys, which is
+    a separate defect and not what these tests are about.
+    """
+    romm_api = MagicMock()
+    romm_api.list_firmware.return_value = [
+        {
+            "id": index,
+            "file_name": name,
+            "file_path": f"bios/psx/{name}",
+            "file_size_bytes": 100,
+            "md5_hash": "",
+        }
+        for index, name in enumerate(_PSX_IMAGES, start=1)
+    ]
+    resolver = FakeFirmwareResolver()
+    for name in _PSX_IMAGES:
+        resolver.declare(name, optional_for=[_id(_PSX_CORE), _id(_PSX_ALTERNATIVE_CORE)])
+    resolver.record_system(_id(_PSX_CORE), system_firmware=SYSTEM_FIRMWARE_CANNOT_RUN_WITHOUT, requirements_met=False)
+    resolver.record_system(
+        _id(_PSX_ALTERNATIVE_CORE), system_firmware=SYSTEM_FIRMWARE_CORE_ALTERNATIVE, requirements_met=True
+    )
+    fw = _make_firmware_service(
+        romm_api=romm_api,
+        firmware_resolver=resolver,
+        core_info=_DeclaredDefaultCoreInfo(
+            active_core=(_PSX_CORE, _PSX_DEFAULT_LABEL),
+            options=options if options is not None else _psx_emulators(),
+        ),
+        platform_core_reader=FakePlatformCoreReader({"psx": platform_core} if platform_core is not None else None),
+    )
+    _inline_executor(fw)
+    return fw
+
+
+def _emulator_dependent(payload: dict[str, Any]) -> dict[str, Any]:
+    """The part of a BIOS answer that moves with the emulator the platform is about."""
+    return {
+        "system_image": payload["system_image"],
+        "bios_level": payload["bios_level"],
+        "required_count": payload["required_count"],
+        "required_by_active": {f["file_name"]: f["required_by_active"] for f in payload["files"]},
+    }
+
+
+# Every way a platform can arrive at an emulator: no pick at all, a pick that is
+# each of the three ES-DE offers, and the two pins that no longer resolve — one
+# naming an emulator the catalogue does not list, one naming an installed
+# emulator whose command cannot be baked. The last two degrade to the default,
+# and the whole point is that they degrade the same way on both surfaces.
+_PLATFORM_PICKS = [
+    None,
+    _PSX_DEFAULT_LABEL,
+    _PSX_ALTERNATIVE_LABEL,
+    _PSX_STANDALONE_LABEL,
+    "An emulator ES-DE no longer lists",
+]
+
+
+class TestAStandaloneEmulatorIsAskedLikeAnyOther:
+    """The identity is what makes a standalone pick answerable, and what scopes the doubt.
+
+    Measured on the reference device before this: a PlayStation launching
+    DuckStation read a red ``0 / 3 required files ready`` naming three files
+    Beetle PSX requires and DuckStation does not, because a standalone pick named
+    no core and the rows fell back to every declaring emulator. PS2 read a green
+    "All required ready" for the opposite reason — LRPS2's folder was satisfied,
+    and nobody had asked PCSX2.
+    """
+
+    _CARDED = "DUCKSTATION"
+    _UNCARDED = "PCSX2"
+    _CORE = "mednafen_psx_libretro"
+
+    def _service(
+        self, *, pick_label: str, resolver: FakeFirmwareResolver, uow: FakeUnitOfWork | None = None
+    ) -> FirmwareService:
+        fw = _make_firmware_service(
+            firmware_resolver=resolver,
+            core_info=FakeCoreInfoProvider(
+                options=[
+                    standalone_option("%EMULATOR_DUCKSTATION% %ROM%", "DuckStation", emulator=self._CARDED),
+                    standalone_option("%EMULATOR_PCSX2% %ROM%", "PCSX2", emulator=self._UNCARDED),
+                    libretro_option(self._CORE, "Beetle PSX"),
+                ]
+            ),
+            platform_core_reader=FakePlatformCoreReader({"psx": pick_label}),
+            uow_factory=FakeUnitOfWorkFactory(uow) if uow is not None else None,
+        )
+        _inline_executor(fw)
+        _stub_listing(fw, [])
+        return fw
+
+    def _resolver(self) -> FakeFirmwareResolver:
+        """One console, three emulators: one carded, one that established nothing, one core."""
+        resolver = FakeFirmwareResolver(unread_emulators=frozenset({self._UNCARDED}))
+        resolver.declare("ps2-0200a.bin", required_by=[self._CARDED], present=True)
+        for name in ("scph5500.bin", "scph5501.bin", "scph5502.bin"):
+            resolver.declare(name, required_by=[_id(self._CORE)], present=False)
+        return resolver
+
+    @pytest.mark.asyncio
+    async def test_a_carded_standalone_pick_answers_for_its_own_declaration(self):
+        """Its file, and only its file — the libretro core's three are not this launch's."""
+        result = await self._service(pick_label="DuckStation", resolver=self._resolver()).check_platform_bios("psx")
+
+        assert result["required_count"] == 1
+        assert result["required_downloaded"] == 1
+        assert result["bios_level"] == "ok"
+        rows = {row["file_name"]: row for row in result["files"]}
+        assert rows["ps2-0200a.bin"]["required_by_active"] is True
+        assert rows["scph5500.bin"]["required_by_active"] is False
+
+    @pytest.mark.asyncio
+    async def test_the_libretro_core_beside_it_still_answers_for_itself(self):
+        """Same platform, same reading, the other emulator picked — three required, none held."""
+        result = await self._service(pick_label="Beetle PSX", resolver=self._resolver()).check_platform_bios("psx")
+
+        assert (result["required_count"], result["required_downloaded"]) == (3, 0)
+        assert result["bios_level"] == "missing"
+
+    @pytest.mark.asyncio
+    async def test_a_standalone_pick_nothing_could_answer_for_declines(self):
+        """The other emulators' rows are on the page and are not an all-clear.
+
+        Nothing established what PCSX2 wants, so ``required_by_active`` is zero
+        by construction and the counts would read "nothing required" over a
+        console nobody asked about.
+        """
+        result = await self._service(pick_label="PCSX2", resolver=self._resolver()).check_platform_bios("psx")
+
+        assert result["required_count"] == 0
+        assert result["bios_level"] == "unknown"
+        assert result["bios_label"] == "Unknown"
+
+    @pytest.mark.asyncio
+    async def test_an_emulator_the_resolver_could_not_identify_declines_too(self):
+        """No identity, so nothing can be scoped to it — the same silence, said the same way."""
+        fw = _make_firmware_service(
+            firmware_resolver=self._resolver(),
+            core_info=FakeCoreInfoProvider(
+                options=[standalone_option("%EMULATOR_CITRA% %ROM%", "Citra", emulator=None)]
+            ),
+        )
+        _inline_executor(fw)
+        _stub_listing(fw, [])
+
+        result = await fw.check_platform_bios("psx")
+
+        assert result["bios_level"] == "unknown"
+
+    @pytest.mark.asyncio
+    async def test_an_unread_emulator_the_launch_does_not_use_leaves_the_answer_alone(self):
+        """PCSX2 is unreadable and irrelevant: this game launches with DuckStation."""
+        result = await self._service(pick_label="DuckStation", resolver=self._resolver()).check_platform_bios("psx")
+
+        assert result["bios_level"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_the_overview_and_the_game_page_agree_on_the_standalone_pick(self):
+        """One pick, one reading — the pane names DuckStation and judges by it."""
+        uow = FakeUnitOfWork()
+        _seed_rom(uow, rom_id=9, platform_slug="psx")
+        fw = self._service(pick_label="DuckStation", resolver=self._resolver(), uow=uow)
+
+        overview = await _overview(fw)
+        platform = next(p for p in overview["platforms"] if p["platform_slug"] == "psx")
+        page = await fw.check_platform_bios("psx")
+
+        assert platform["active_core"] == self._CARDED
+        assert platform["active_core_label"] == "DuckStation"
+        assert (platform["required_count"], platform["required_downloaded"]) == (
+            page["required_count"],
+            page["required_downloaded"],
+        )
+        assert platform["bios_level"] == page["bios_level"]
+
+
+class TestOnePlatformOneEmulator:
+    """A platform's surfaces answer for ONE emulator, whichever way it was picked.
+
+    The device pass that found this: with the PlayStation's emulator set to PCSX
+    ReARMed, the game page read ``not_demanded`` / ``ok`` — the core carries its
+    own HLE BIOS — while the platform pane read ``absent`` / ``missing`` and
+    displayed "PCSX ReARMed" in its own header. One platform, two surfaces,
+    opposite answers, because the pane named the resolved pick and judged by the
+    system default beside it.
+
+    Pinning the corrected value alone would not hold: a third resolution added
+    anywhere here would answer today's value for today's configuration and
+    diverge on some other one. So each case is asserted as an AGREEMENT — every
+    way of arriving at an emulator, both surfaces, one answer — and the pane is
+    additionally held to judging by the emulator it names.
+    """
+
+    @staticmethod
+    async def _both(platform_core: str | None) -> tuple[dict[str, Any], dict[str, Any]]:
+        """The overview's entry for the platform, and the game page's answer for it."""
+        fw = _psx_platform_service(platform_core=platform_core)
+        overview = await _overview(fw)
+        page = await fw.check_platform_bios("psx")
+        return next(p for p in overview["platforms"] if p["platform_slug"] == "psx"), page
+
+    @pytest.mark.parametrize("platform_core", _PLATFORM_PICKS)
+    @pytest.mark.asyncio
+    async def test_the_pane_and_the_game_page_answer_for_one_emulator(self, platform_core):
+        platform, page = await self._both(platform_core)
+
+        assert _emulator_dependent(platform) == _emulator_dependent(page)
+
+    @pytest.mark.parametrize("platform_core", _PLATFORM_PICKS)
+    @pytest.mark.asyncio
+    async def test_the_pane_judges_by_the_emulator_it_names(self, platform_core):
+        """The header's name and the filter's identity are two projections of one pick.
+
+        Read off the pane's own emulator list rather than off a constant, so the
+        assertion is the RELATION rather than today's value — which is what makes
+        it hold for a standalone pick too, where there is no core to name and the
+        identity is the only field that answers.
+        """
+        platform, _ = await self._both(platform_core)
+
+        named = next(e for e in platform["emulators"] if e["label"] == platform["active_core_label"])
+        assert platform["active_core"] == named["emulator"]
+
+    @pytest.mark.asyncio
+    async def test_the_pick_moves_the_answer_on_both_surfaces(self):
+        """The measurement itself: picking PCSX ReARMed clears the console's demand.
+
+        Without it the platform resolves to SwanStation, whose console will not
+        start without an image and holds none. Both surfaces have to move
+        together, and the pane moving alone is what a green agreement over an
+        unmoved answer would hide.
+        """
+        default_platform, default_page = await self._both(None)
+        picked_platform, picked_page = await self._both(_PSX_ALTERNATIVE_LABEL)
+
+        for payload in (default_platform, default_page):
+            assert (payload["system_image"], payload["bios_level"]) == ("absent", "missing")
+        for payload in (picked_platform, picked_page):
+            assert (payload["system_image"], payload["bios_level"]) == ("not_demanded", "ok")
+
+    @pytest.mark.asyncio
+    async def test_a_pin_that_no_longer_bakes_degrades_rather_than_answering_for_it(self):
+        """A ``needs_setup`` emulator is not a pick — the platform falls back to its default."""
+        fw = _psx_platform_service(
+            platform_core="Vita3K (Standalone)",
+            options=[
+                libretro_option(_PSX_CORE, _PSX_DEFAULT_LABEL),
+                standalone_option(
+                    "%EMULATOR_VITA3K% %INJECT%", "Vita3K (Standalone)", status="needs_setup", reason="inject"
+                ),
+            ],
+        )
+
+        overview = await _overview(fw)
+        page = await fw.check_platform_bios("psx")
+
+        platform = next(p for p in overview["platforms"] if p["platform_slug"] == "psx")
+        assert platform["active_core_label"] == _PSX_DEFAULT_LABEL
+        assert platform["active_core"] == _id(_PSX_CORE)
+        assert _emulator_dependent(platform) == _emulator_dependent(page)
+
+    @pytest.mark.asyncio
+    async def test_the_per_core_lines_carry_the_declaration_and_the_consoles_demand(self):
+        """Each core's entry on a row says its own word AND what its console needs.
+
+        The pair is the informative case and the reason it cannot be folded:
+        both cores mark every image ``optional`` — a libretro ``.info`` has
+        nothing else to say — and only one of the two consoles will not start
+        without one. The count is that core's whole declaration, which is what a
+        surface says "one of its N BIOS files" with.
+        """
+        _, page = await self._both(None)
+
+        cores = next(f for f in page["files"] if f["file_name"] == _PSX_IMAGES[0])["cores"]
+        assert cores[_id(_PSX_CORE)] == {"required": False, "needs_one_of": len(_PSX_IMAGES)}
+        assert cores[_id(_PSX_ALTERNATIVE_CORE)] == {"required": False, "needs_one_of": None}
+
+
+class TestTheAnswerNamesTheEmulatorItJudgedBy:
+    """The BIOS answer carries the NAME of the pick its counts were filtered by.
+
+    The game page heads its BIOS section with a sentence about what "the
+    launching emulator" requires, and had no way to say which one: the payload
+    carried the filter's identity nowhere and no name at all, so a name there
+    would have had to come from the core read beside it on the page — a second
+    resolution of the same question, and the split that once had a pane display
+    PCSX ReARMed while judging the platform by the libretro default.
+
+    So the label is a projection of the pick this very answer was scoped to, and
+    the tests below assert that RELATION rather than today's value: the name has
+    to move when the pick does, and it has to follow the pick the caller handed
+    in even where the platform would have resolved to somebody else.
+    """
+
+    @staticmethod
+    async def _page(platform_core: str | None = None, pick: EmulatorInvocation | None = None) -> dict[str, Any]:
+        return await _psx_platform_service(platform_core=platform_core).check_platform_bios("psx", pick)
+
+    @pytest.mark.asyncio
+    async def test_it_names_the_platforms_own_pick(self):
+        assert (await self._page())["active_core_label"] == _PSX_DEFAULT_LABEL
+
+    @pytest.mark.asyncio
+    async def test_the_name_moves_with_the_pick(self):
+        """The non-vacuity check: a page that hardcoded the default would pass the first."""
+        assert (await self._page(_PSX_ALTERNATIVE_LABEL))["active_core_label"] == _PSX_ALTERNATIVE_LABEL
+
+    @pytest.mark.asyncio
+    async def test_a_pick_that_could_not_be_made_names_nobody(self):
+        """ES-DE offers this platform nothing bakeable, so there is no name to print.
+
+        The field is still stated: the surface words its sentence without a name,
+        and an absent key and an absent name are the same thing to it.
+        """
+        page = await _psx_platform_service(platform_core=None, options=[]).check_platform_bios("psx")
+
+        assert page["active_core_label"] is None
+
+    @pytest.mark.asyncio
+    async def test_the_name_and_the_identity_it_judged_by_are_one_pick(self):
+        """Two labels can be one emulator, so the pair cannot be assembled from two calls.
+
+        ES-DE lists one ``pcsx2_libretro.so`` as both ``LRPS2`` and ``PCSX2``,
+        which is why a label names a launch row and never an emulator. Handed a
+        pick the platform itself would not have made, the answer has to print
+        THAT pick's name and judge by THAT pick's identity — the platform's own
+        resolution is a third emulator here, so a name taken from it, or an
+        identity taken from it, shows up immediately.
+
+        The two picks below differ only in their label, which is what makes the
+        second assertion say something: the name moves, the judgment does not.
+        """
+        alternative = _id(_PSX_ALTERNATIVE_CORE)
+        under_one_name = await self._page(pick=_pick(alternative, "PCSX ReARMed"))
+        under_another = await self._page(pick=_pick(alternative, "PCSX-ReARMed (Interpreter)"))
+        platforms_own = await self._page()
+
+        assert under_one_name["active_core_label"] == "PCSX ReARMed"
+        assert under_another["active_core_label"] == "PCSX-ReARMed (Interpreter)"
+        assert platforms_own["active_core_label"] == _PSX_DEFAULT_LABEL
+        # One emulator under two names: the answer is the same one, and it is
+        # not the one the platform would have resolved to on its own.
+        assert _emulator_dependent(under_one_name) == _emulator_dependent(under_another)
+        assert _emulator_dependent(under_one_name) != _emulator_dependent(platforms_own)
+
+    def test_the_seam_carries_the_pick_and_never_a_name_beside_it(self):
+        """There is one emulator argument, which is what makes the pair unrepresentable.
+
+        The test above shows both projections following one pick; this is why
+        they must — a second parameter for the name is all it would take to hand
+        the filter one emulator and the sentence another, and the caller that
+        did so would be perfectly well typed.
+        """
+        parameters = list(inspect.signature(FirmwareStatusReader.check_platform_bios).parameters)
+
+        assert parameters == ["self", "platform_slug", "launching_emulator"]
+
+
+_PSX_ROM_ID = 501
+_PSX_STANDALONE_ID = "DUCKSTATION"
+
+# Every way a ROM arrives at an emulator, as ``(per-game pin, platform pick)``:
+# nothing pinned anywhere, the platform's own pick, a per-game override, the
+# override winning over a platform pick that names something else, a standalone
+# pick, and a stale pin that no longer resolves. The last degrades to the layer
+# below, and the point is that it degrades the same way on both halves.
+_ROM_PICKS = [
+    (None, None),
+    (None, _PSX_ALTERNATIVE_LABEL),
+    (_PSX_ALTERNATIVE_LABEL, None),
+    (_PSX_DEFAULT_LABEL, _PSX_ALTERNATIVE_LABEL),
+    (_PSX_STANDALONE_LABEL, None),
+    ("An emulator ES-DE no longer lists", None),
+]
+
+
+def _rom_scoped_surfaces(
+    *, game_pick: str | None, platform_pick: str | None
+) -> tuple[CoreService, GameDetailService, FirmwareService]:
+    """The game page's two halves over one PlayStation, one ROM, one resolution.
+
+    Both halves resolve the ROM's emulator through the real
+    :class:`ActiveCoreResolver` — the seam they share in production — reading one
+    emulator list, one per-platform override map and one ROM row. So the only
+    thing a disagreement between them can come from is one half reading a
+    different field of the one answer, which is exactly the defect this pins.
+    """
+    import decky
+
+    # ES-DE's three, but with the standalone one IDENTIFIED. The platform-scoped
+    # fixture leaves it unidentified on purpose, which makes a standalone pick
+    # and an unresolvable one the same ``None`` — and a ROM pinned to it would
+    # then agree with the picker vacuously, both halves holding nothing.
+    fw = _psx_platform_service(
+        platform_core=platform_pick,
+        options=[
+            libretro_option(_PSX_CORE, _PSX_DEFAULT_LABEL),
+            libretro_option(_PSX_ALTERNATIVE_CORE, _PSX_ALTERNATIVE_LABEL),
+            standalone_option("%EMULATOR_DUCKSTATION% %ROM%", _PSX_STANDALONE_LABEL, emulator=_PSX_STANDALONE_ID),
+        ],
+    )
+    core_info = _core_info(fw)
+    uow = FakeUnitOfWork()
+    uow.roms.save(
+        Rom(
+            rom_id=_PSX_ROM_ID,
+            platform_slug="psx",
+            name=f"rom-{_PSX_ROM_ID}",
+            fs_name=f"rom-{_PSX_ROM_ID}.chd",
+            shortcut_app_id=1,
+            last_synced_at="2026-01-01T00:00:00+00:00",
+            emulator_override=game_pick,
+        )
+    )
+    uow_factory = FakeUnitOfWorkFactory(uow)
+    resolve_system = FakeSystemResolver()
+    active_core = ActiveCoreResolver(
+        config=ActiveCoreResolverConfig(
+            uow_factory=uow_factory,
+            core_info=core_info,
+            sandbox_launcher=FakeSandboxLauncher(),
+            platform_core_reader=_platform_core_reader(fw),
+            resolve_system=resolve_system,
+            logger=decky.logger,
+        )
+    )
+    cores = CoreService(
+        config=CoreServiceConfig(
+            loop=asyncio.get_running_loop(),
+            logger=decky.logger,
+            core_info=core_info,
+            resolve_system=resolve_system,
+            settings={},
+            settings_persister=FakeSettingsPersister(),
+            bios_checker=fw,
+            uow_factory=uow_factory,
+            active_core=active_core,
+            disc_resolver=FakeDiscResolver(),
+        )
+    )
+    detail = GameDetailService(
+        config=GameDetailServiceConfig(
+            settings={},
+            logger=decky.logger,
+            clock=_make_clock(),
+            uow_factory=uow_factory,
+            bios_checker=fw,
+            achievements=MagicMock(),
+            active_core=active_core,
+            path_exists=FakePathExistsReader(),
+            retrodeck_paths=FakeRetroDeckPaths(),
+            resolve_system=resolve_system,
+            candidate_probe=lambda platform_slug, fs_name: False,
+        )
+    )
+    return cores, detail, fw
+
+
+class TestOneRomOneEmulator:
+    """A ROM's two halves answer for ONE emulator, whichever way the ROM arrived at it.
+
+    The ROM-scoped sibling of :class:`TestOnePlatformOneEmulator`. The game page
+    is assembled from two services that each ask "which emulator launches this
+    ROM?" for themselves: ``services/cores.py`` names it in the picker, and
+    ``services/game_detail.py`` scopes the BIOS question to it. They read one
+    seam today, and nothing said they must — the picker reading
+    ``active_core_for_rom`` instead would answer ``None`` for every standalone
+    pick and send the BIOS rows back to the platform's own, which is the
+    platform-scoped defect one layer in.
+
+    Asserted as an AGREEMENT rather than as today's value, for the reason its
+    sibling is: a second resolution added on either side would answer today's
+    value for today's configuration and diverge on some other one.
+    """
+
+    @staticmethod
+    async def _both(game_pick: str | None, platform_pick: str | None) -> tuple[dict[str, Any], dict[str, Any], Any]:
+        """The picker payload, the BIOS half's answer, and the firmware service behind them."""
+        cores, detail, fw = _rom_scoped_surfaces(game_pick=game_pick, platform_pick=platform_pick)
+        picker = await cores.get_platform_core_info(_PSX_ROM_ID)
+        bios = (await detail.get_bios_status(_PSX_ROM_ID))["bios_status"]
+        return picker, bios, fw
+
+    @pytest.mark.parametrize(("game_pick", "platform_pick"), _ROM_PICKS)
+    @pytest.mark.asyncio
+    async def test_the_bios_half_answers_for_the_emulator_the_picker_names(self, game_pick, platform_pick):
+        picker, bios, fw = await self._both(game_pick, platform_pick)
+
+        # Asked with the pick the picker itself published — its two projections,
+        # which the rule above says are one resolution, handed over as one value.
+        named = await fw.check_platform_bios("psx", _pick(picker["active_core"], picker["active_core_label"]))
+        assert _emulator_dependent(bios) == _emulator_dependent(named)
+
+    @pytest.mark.parametrize(("game_pick", "platform_pick"), _ROM_PICKS)
+    @pytest.mark.asyncio
+    async def test_the_picker_keys_on_the_emulator_it_names(self, game_pick, platform_pick):
+        """The page's label and the identity its BIOS answer is scoped to are one pick.
+
+        Read off the payload's own emulator list rather than off a constant, so
+        what is asserted is the RELATION — which is what makes it hold for the
+        standalone pick, where there is no core to name and the identity is the
+        only field that answers.
+        """
+        picker, _, _ = await self._both(game_pick, platform_pick)
+
+        named = next(e for e in picker["emulators"] if e["label"] == picker["active_core_label"])
+        assert picker["active_core"] == named["emulator"]
+
+    @pytest.mark.asyncio
+    async def test_a_per_game_pin_moves_the_answer_on_both_halves(self):
+        """The non-vacuity check: the two agree about an answer that actually moves.
+
+        Unpinned, the ROM launches with the es_systems default, whose console
+        will not start without an image and holds none. Pinned to PCSX ReARMed —
+        which carries its own substitute — the same three files stop being a
+        requirement. Both halves have to move together, and an agreement over an
+        answer that never moved would hide either of them standing still.
+        """
+        default_picker, default_bios, _ = await self._both(None, None)
+        pinned_picker, pinned_bios, _ = await self._both(_PSX_ALTERNATIVE_LABEL, None)
+
+        assert default_picker["active_core_label"] == _PSX_DEFAULT_LABEL
+        assert (default_bios["system_image"], default_bios["bios_level"]) == ("absent", "missing")
+        assert pinned_picker["active_core_label"] == _PSX_ALTERNATIVE_LABEL
+        assert (pinned_bios["system_image"], pinned_bios["bios_level"]) == ("not_demanded", "ok")
+
+    @pytest.mark.asyncio
+    async def test_a_standalone_pin_is_carried_by_the_identity_alone(self):
+        """The pick both halves would lose by reading the core rather than the identity.
+
+        DuckStation has no ``core_so``, so the ``.so``-space projection answers
+        ``None`` for it — which is the platform's own pick, a different emulator
+        and a different answer.
+        """
+        picker, bios, fw = await self._both(_PSX_STANDALONE_LABEL, None)
+
+        assert picker["active_core_label"] == _PSX_STANDALONE_LABEL
+        assert picker["active_core"] is not None
+        platform_pick = await fw.check_platform_bios("psx", None)
+        assert _emulator_dependent(bios) != _emulator_dependent(platform_pick)
+
+
+class TestDownloadFirmware:
+    @pytest.mark.asyncio
+    async def test_downloads_and_verifies_md5(self, plugin, fw, tmp_path):
+        import hashlib
+
+        content = b"firmware data here"
+        expected_md5 = hashlib.md5(content).hexdigest()
+
+        fw_detail = {
+            "id": 10,
+            "file_name": "bios.bin",
+            "file_path": "bios/n64/bios.bin",
+            "file_size_bytes": len(content),
+            "md5_hash": expected_md5,
+        }
+
+        bios_dir = tmp_path / "bios"
+        bios_dir.mkdir()
+
+        def fake_download(firmware_id, filename, dest):
+            with open(dest, "wb") as f:
+                f.write(content)
+
+        fw._demand._retrodeck_paths = FakeRetroDeckPaths(bios=str(bios_dir))
+        _set_loop(fw, asyncio.get_running_loop())
+
+        with (
+            patch.object(plugin._romm_api, "get_firmware", return_value=fw_detail),
+            patch.object(plugin._romm_api, "download_firmware", side_effect=fake_download),
+        ):
+            result = await fw.download_firmware(10)
+
+        assert result["success"] is True
+        assert result["md5_match"] is True
+        assert os.path.exists(result["file_path"])
+        # Verify BIOS record persisted via the Unit of Work. n64/bios.bin parses
+        # to firmware slug "n64".
+        record = plugin._uow.bios_files.get("n64", "bios.bin")
+        assert record is not None
+        assert record.firmware_id == 10
+        assert record.file_path == result["file_path"]
+        assert record.platform_slug == "n64"
+
+    @pytest.mark.asyncio
+    async def test_handles_download_error(self, plugin, fw, tmp_path):
+
+        fw_detail = {
+            "id": 10,
+            "file_name": "bios.bin",
+            "file_path": "bios/n64/bios.bin",
+            "file_size_bytes": 100,
+            "md5_hash": "",
+        }
+
+        _set_loop(fw, asyncio.get_running_loop())
+
+        with (
+            patch.object(plugin._romm_api, "get_firmware", return_value=fw_detail),
+            patch.object(plugin._romm_api, "download_firmware", side_effect=OSError("Connection reset")),
+        ):
+            result = await fw.download_firmware(10)
+
+        assert result["success"] is False
+        assert "reason" in result
+
+    @pytest.mark.asyncio
+    async def test_rejects_traversal_in_server_file_name(self, plugin, fw, tmp_path):
+        """#966: a server ``file_name`` of ``../evil.desktop`` is rejected, nothing written outside BIOS."""
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        # The traversal target lives a sibling of the bios dir.
+        escape_target = tmp_path / "retrodeck" / "evil.desktop"
+
+        fw_detail = {
+            "id": 10,
+            "file_name": "../evil.desktop",
+            "file_path": "bios/n64/evil.desktop",
+            "file_size_bytes": 10,
+            "md5_hash": "",
+        }
+
+        fw._demand._retrodeck_paths = FakeRetroDeckPaths(bios=str(bios_dir))
+        _set_loop(fw, asyncio.get_running_loop())
+
+        download_called = []
+
+        def fake_download(firmware_id, filename, dest):
+            download_called.append(dest)
+            with open(dest, "wb") as f:
+                f.write(b"evil")
+
+        with (
+            patch.object(plugin._romm_api, "get_firmware", return_value=fw_detail),
+            patch.object(plugin._romm_api, "download_firmware", side_effect=fake_download),
+        ):
+            result = await fw.download_firmware(10)
+
+        # Canonical path_traversal failure shape.
+        assert result["success"] is False
+        assert result["reason"] == "path_traversal"
+        assert "message" in result
+        # No download was ever attempted (rejected before make_dirs / fetch).
+        assert download_called == []
+        # Nothing written outside the BIOS directory.
+        assert not escape_target.exists()
+        # No BIOS record persisted.
+        assert plugin._uow.bios_files.get("n64", "../evil.desktop") is None
+
+
+class TestDownloadAllFirmware:
+    @pytest.mark.asyncio
+    async def test_downloads_missing_only(self, plugin, fw, tmp_path):
+
+        # Pre-create one file so it's skipped (flat in bios root — no declared placement)
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        (bios_dir / "existing.bin").write_bytes(b"\x00" * 50)
+
+        firmware_list = [
+            {
+                "id": 1,
+                "file_name": "existing.bin",
+                "file_path": "bios/dc/existing.bin",
+                "file_size_bytes": 50,
+                "md5_hash": "",
+            },
+            {
+                "id": 2,
+                "file_name": "missing.bin",
+                "file_path": "bios/dc/missing.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
+        ]
+
+        _set_loop(fw, asyncio.get_running_loop())
+
+        download_called_ids = []
+
+        async def fake_download_firmware(fw_id, _placements):
+            download_called_ids.append(fw_id)
+            return {"success": True}
+
+        with (
+            patch.object(plugin._romm_api, "list_firmware", return_value=firmware_list),
+            patch.object(fw._downloads, "_download_one", side_effect=fake_download_firmware),
+            patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
+        ):
+            result = await fw.download_all_firmware("dc")
+
+        assert result["success"] is True
+        assert result["downloaded"] == 1
+        assert 2 in download_called_ids
+        assert 1 not in download_called_ids
+
+    @pytest.mark.asyncio
+    async def test_a_folder_declaration_is_never_fetched(self, plugin, fw, tmp_path):
+        """The emulator lists that name, so there is no file to fetch into it.
+
+        The folder is ABSENT here, which is the case the already-there skip
+        would let through: a download would write a file where the core opens a
+        directory, and stage its ``.tmp`` beside the BIOS root.
+        """
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        firmware_list = [
+            {"id": 3, "file_name": "bios", "file_path": "bios/ps2/bios", "file_size_bytes": 0, "md5_hash": ""}
+        ]
+        resolver = _resolver(fw)
+        resolver.declare(
+            "bios",
+            required_by=[_id("pcsx2_libretro")],
+            relative_path="pcsx2/bios",
+            present=False,
+            declares_directory=True,
+            folder=FolderVerdict(satisfied=False),
+        )
+        _set_loop(fw, asyncio.get_running_loop())
+        download_called_ids = []
+
+        async def fake_download_firmware(fw_id, _placements):
+            download_called_ids.append(fw_id)
+            return {"success": True}
+
+        with (
+            patch.object(plugin._romm_api, "list_firmware", return_value=firmware_list),
+            patch.object(fw._downloads, "_download_one", side_effect=fake_download_firmware),
+            patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
+        ):
+            result = await fw.download_all_firmware("ps2")
+
+        assert download_called_ids == []
+        assert result["downloaded"] == 0
+
+
+class TestDownloadPlatformFirmwareFile:
+    """The per-row Download button (#164): one named file, scoped to its platform."""
+
+    @staticmethod
+    def _listing() -> list[dict[str, Any]]:
+        return [
+            {
+                "id": 1,
+                "file_name": "existing.bin",
+                "file_path": "bios/dc/existing.bin",
+                "file_size_bytes": 50,
+                "md5_hash": "",
+            },
+            {
+                "id": 2,
+                "file_name": "missing.bin",
+                "file_path": "bios/dc/missing.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
+            {
+                "id": 3,
+                "file_name": "missing.bin",
+                "file_path": "bios/n64/missing.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
+        ]
+
+    @pytest.mark.asyncio
+    async def test_downloads_the_named_file_of_that_platform(self, plugin, fw, tmp_path):
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        _set_loop(fw, asyncio.get_running_loop())
+        fetched = []
+
+        async def fake_download_one(fw_id, _placements):
+            fetched.append(fw_id)
+            return {"success": True, "file_path": "/bios/dc/missing.bin", "md5_match": None}
+
+        with (
+            patch.object(plugin._romm_api, "list_firmware", return_value=self._listing()),
+            patch.object(fw._downloads, "_download_one", side_effect=fake_download_one),
+            patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
+        ):
+            result = await fw.download_platform_firmware_file("dc", "missing.bin")
+
+        assert result["success"] is True
+        assert result["downloaded"] == 1
+        # id 3 carries the same file name under another platform's folder.
+        assert fetched == [2]
+
+    @pytest.mark.asyncio
+    async def test_a_file_already_at_its_destination_is_not_refetched(self, plugin, fw, tmp_path):
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        (bios_dir / "existing.bin").write_bytes(b"\x00" * 50)
+        _set_loop(fw, asyncio.get_running_loop())
+
+        async def fake_download_one(fw_id, _placements):
+            raise AssertionError(f"nothing to fetch, but firmware {fw_id} was requested")
+
+        with (
+            patch.object(plugin._romm_api, "list_firmware", return_value=self._listing()),
+            patch.object(fw._downloads, "_download_one", side_effect=fake_download_one),
+            patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
+        ):
+            result = await fw.download_platform_firmware_file("dc", "existing.bin")
+
+        assert result["success"] is True
+        assert result["downloaded"] == 0
+        assert "already here" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_a_name_the_platform_does_not_hold_is_refused(self, plugin, fw, tmp_path):
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        _set_loop(fw, asyncio.get_running_loop())
+
+        async def fake_download_one(fw_id, _placements):
+            raise AssertionError(f"nothing to fetch, but firmware {fw_id} was requested")
+
+        with (
+            patch.object(plugin._romm_api, "list_firmware", return_value=self._listing()),
+            patch.object(fw._downloads, "_download_one", side_effect=fake_download_one),
+            patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
+        ):
+            result = await fw.download_platform_firmware_file("dc", "nowhere.bin")
+
+        assert result["success"] is False
+        assert result["reason"] == "not_in_library"
+        assert result["downloaded"] == 0
+
+    @pytest.mark.asyncio
+    async def test_the_one_fetch_s_own_failure_is_surfaced(self, plugin, fw, tmp_path):
+        # One press wants the reason: the single fetch's failure shape reaches
+        # the caller intact rather than folded into a count of errors.
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        _set_loop(fw, asyncio.get_running_loop())
+
+        async def fake_download_one(_fw_id, _placements):
+            return {"success": False, "reason": "server_unreachable", "message": "RomM is unreachable"}
+
+        with (
+            patch.object(plugin._romm_api, "list_firmware", return_value=self._listing()),
+            patch.object(fw._downloads, "_download_one", side_effect=fake_download_one),
+            patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
+        ):
+            result = await fw.download_platform_firmware_file("dc", "missing.bin")
+
+        assert result["success"] is False
+        assert result["reason"] == "server_unreachable"
+        assert result["message"] == "RomM is unreachable"
+        assert result["downloaded"] == 0
+
+    @pytest.mark.asyncio
+    async def test_a_folder_declaration_is_refused_rather_than_fetched(self, plugin, fw, tmp_path):
+        """The emulator opens that name as a directory, so there is no file to fetch.
+
+        The folder is ABSENT here, which is the case the already-there skip would
+        let through: a download would write a file where the core opens a
+        directory, and stage its ``.tmp`` beside the BIOS root. Where the batch
+        passes over such a row, one press asks for one named file, so this
+        answers why instead of reporting a success nothing happened in.
+        """
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        firmware_list = [
+            {"id": 3, "file_name": "bios", "file_path": "bios/ps2/bios", "file_size_bytes": 0, "md5_hash": ""}
+        ]
+        _resolver(fw).declare(
+            "bios",
+            required_by=[_id("pcsx2_libretro")],
+            relative_path="pcsx2/bios",
+            present=False,
+            declares_directory=True,
+            folder=FolderVerdict(satisfied=False),
+        )
+        _set_loop(fw, asyncio.get_running_loop())
+
+        async def fake_download_one(fw_id, _placements):
+            raise AssertionError(f"a folder declaration must not be fetched, but firmware {fw_id} was requested")
+
+        with (
+            patch.object(plugin._romm_api, "list_firmware", return_value=firmware_list),
+            patch.object(fw._downloads, "_download_one", side_effect=fake_download_one),
+            patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
+        ):
+            result = await fw.download_platform_firmware_file("ps2", "bios")
+
+        assert result["success"] is False
+        assert result["reason"] == "declares_directory"
+        assert result["downloaded"] == 0
+
+    @pytest.mark.asyncio
+    async def test_a_failed_listing_fetch_answers_with_zero(self, plugin, fw):
+        _set_loop(fw, asyncio.get_running_loop())
+        fw._listing._firmware_cache = None
+        with patch.object(plugin._romm_api, "list_firmware", side_effect=OSError("Connection reset")):
+            result = await fw.download_platform_firmware_file("dc", "missing.bin")
+
+        assert result["success"] is False
+        assert result["reason"] == "unknown"
+        assert "Connection reset" in result["message"]
+        assert result["downloaded"] == 0
+        assert fw._listing._firmware_cache is None
+
+
+class TestDeleteOneBiosFile:
+    """The per-row Delete button's backend half: one file, or one folder's contents.
+
+    Both run the platform-wide worker under a predicate, so what is pinned here
+    is which records each one selects — the authority itself is the same loop
+    ``TestDeletePlatformBios`` covers.
+    """
+
+    @pytest.mark.asyncio
+    async def test_deletes_our_own_download_at_the_recorded_path(self, plugin, fw, tmp_path):
+        """The record names the file and the path, and both are what is used."""
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        ours = bios_dir / "gc-pal-12.bin"
+        ours.write_bytes(b"\x00" * 512)
+        plugin._uow.bios_files.save(
+            BiosFile.mark_downloaded(
+                platform_slug="gc",
+                file_name="gc-pal-12.bin",
+                file_path=str(ours),
+                downloaded_at="2026-01-01T00:00:00+00:00",
+                firmware_id=7,
+            )
+        )
+
+        result = await fw.delete_bios_file("gc", "gc-pal-12.bin")
+
+        assert result["success"] is True
+        assert result["deleted_count"] == 1
+        assert not ours.exists()
+        assert plugin._uow.bios_files.get("gc", "gc-pal-12.bin") is None
+
+    @pytest.mark.asyncio
+    async def test_takes_only_the_named_record_of_several(self, plugin, fw, tmp_path):
+        """One row's button removes one file, not the platform's other downloads.
+
+        The platform-wide delete is the one that takes them all; this is the
+        per-row twin and the name is the whole of the difference between them.
+        """
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        for name in ("gc-pal-12.bin", "gc-ntsc-12.bin"):
+            path = bios_dir / name
+            path.write_bytes(b"\x00" * 32)
+            plugin._uow.bios_files.save(
+                BiosFile.mark_downloaded(
+                    platform_slug="gc",
+                    file_name=name,
+                    file_path=str(path),
+                    downloaded_at="2026-01-01T00:00:00+00:00",
+                    firmware_id=1,
+                )
+            )
+
+        result = await fw.delete_bios_file("gc", "gc-pal-12.bin")
+
+        assert result["deleted_count"] == 1
+        assert not (bios_dir / "gc-pal-12.bin").exists()
+        assert (bios_dir / "gc-ntsc-12.bin").exists()
+        assert plugin._uow.bios_files.get("gc", "gc-ntsc-12.bin") is not None
+
+    @pytest.mark.asyncio
+    async def test_an_empty_folder_path_selects_nothing(self, plugin, fw, tmp_path):
+        """The narrowing claim has to hold for a degenerate path too.
+
+        `"".rstrip("/") + "/"` is `"/"`, which every absolute recorded path
+        starts with — the folder button would then take the platform-wide set.
+        Unreachable from the pane, refused here so the sentence stays true.
+        """
+        bios = tmp_path / "retrodeck" / "bios"
+        bios.mkdir(parents=True)
+        ours = bios / "scph5501.bin"
+        ours.write_bytes(b"\x00" * 16)
+        plugin._uow.bios_files.save(
+            BiosFile.mark_downloaded(
+                platform_slug="ps2",
+                file_name="scph5501.bin",
+                file_path=str(ours),
+                downloaded_at="2026-01-01T00:00:00+00:00",
+                firmware_id=5,
+            )
+        )
+
+        result = await fw.delete_bios_folder("ps2", "")
+
+        assert result["deleted_count"] == 0
+        assert ours.exists()
+
+    @pytest.mark.asyncio
+    async def test_deletes_our_downloads_inside_a_declared_folder(self, plugin, fw, tmp_path):
+        """PS2's `pcsx2/bios` is a folder declaration, and what we put in it is ours.
+
+        Two rules, not one: a folder is never offered as a DOWNLOAD, because
+        there is no file to fetch into a name the emulator lists — that says
+        nothing about the files already inside it. A recorded download under the
+        folder must be removable, and a file we never placed must not be.
+        """
+        folder = tmp_path / "retrodeck" / "bios" / "pcsx2" / "bios"
+        folder.mkdir(parents=True)
+        ours = folder / "scph39001.bin"
+        ours.write_bytes(b"\x00" * 128)
+        theirs = folder / "scph70012.bin"
+        theirs.write_bytes(b"\x01" * 128)
+        plugin._uow.bios_files.save(
+            BiosFile.mark_downloaded(
+                platform_slug="ps2",
+                file_name="scph39001.bin",
+                file_path=str(ours),
+                downloaded_at="2026-01-01T00:00:00+00:00",
+                firmware_id=3,
+            )
+        )
+
+        result = await fw.delete_bios_folder("ps2", str(folder))
+
+        assert result["success"] is True
+        assert result["deleted_count"] == 1
+        assert not ours.exists()
+        # The hand-placed file, and the folder itself, are not ours to remove.
+        assert theirs.exists()
+        assert folder.is_dir()
+
+    @pytest.mark.asyncio
+    async def test_a_folder_path_narrows_and_never_widens(self, plugin, fw, tmp_path):
+        """A record outside the folder is out of reach of that folder's button."""
+        bios = tmp_path / "retrodeck" / "bios"
+        (bios / "pcsx2" / "bios").mkdir(parents=True)
+        outside = bios / "scph5501.bin"
+        outside.write_bytes(b"\x02" * 64)
+        plugin._uow.bios_files.save(
+            BiosFile.mark_downloaded(
+                platform_slug="ps2",
+                file_name="scph5501.bin",
+                file_path=str(outside),
+                downloaded_at="2026-01-01T00:00:00+00:00",
+                firmware_id=4,
+            )
+        )
+
+        result = await fw.delete_bios_folder("ps2", str(bios / "pcsx2" / "bios"))
+
+        assert result["deleted_count"] == 0
+        assert outside.exists()
+
+    @pytest.mark.asyncio
+    async def test_a_file_with_no_record_is_never_touched(self, plugin, fw, tmp_path):
+        """The GameCube pane's other row: RetroDECK's own copy, present on disk.
+
+        It sits one row above a real download, it is `downloaded: True`, and no
+        RomM library can hand it back — authorising on presence deleted exactly
+        this file on a real device. With no record naming it, the delete must
+        remove nothing and report nothing removed.
+        """
+        sys_dir = tmp_path / "retrodeck" / "bios" / "dolphin-emu" / "Sys"
+        sys_dir.mkdir(parents=True)
+        theirs = sys_dir / "codehandler.bin"
+        theirs.write_bytes(b"\x01" * 64)
+
+        result = await fw.delete_bios_file("gc", "codehandler.bin")
+
+        assert result["success"] is True
+        assert result["deleted_count"] == 0
+        assert theirs.exists()
+
+    @pytest.mark.asyncio
+    async def test_unlinks_where_the_record_points_not_where_the_row_would(self, plugin, fw, tmp_path):
+        """A placement that moved after the download: the record still rules.
+
+        The row's ``local_path`` is recomputed from today's placement, so for a
+        file fetched before an emu-atlas bump it names whatever now occupies the
+        new destination. Only the recorded path may be unlinked.
+        """
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        (bios_dir / "dc").mkdir(parents=True)
+        written = bios_dir / "dc_boot.bin"
+        written.write_bytes(b"\x02" * 16)
+        elsewhere = bios_dir / "dc" / "dc_boot.bin"
+        elsewhere.write_bytes(b"\x03" * 16)
+        plugin._uow.bios_files.save(
+            BiosFile.mark_downloaded(
+                platform_slug="dc",
+                file_name="dc_boot.bin",
+                file_path=str(written),
+                downloaded_at="2026-01-01T00:00:00+00:00",
+                firmware_id=9,
+            )
+        )
+
+        result = await fw.delete_bios_file("dc", "dc_boot.bin")
+
+        assert result["deleted_count"] == 1
+        assert not written.exists()
+        assert elsewhere.exists()
+
+
+class TestDeletePlatformBios:
+    @pytest.mark.asyncio
+    async def test_delete_platform_bios_happy_path(self, plugin, fw, tmp_path):
+        """Deleting platform BIOS removes downloaded files and state entries.
+
+        ``check_platform_bios`` returns its ``files`` as ``asdict`` dicts
+        (``[asdict(f) for f in files]``), so the mock mirrors that shape — not
+        bare ``BiosFileEntry`` objects. Driving the real output shape is what
+        guards the delete path against the #750 dict/attribute mismatch.
+        """
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        bios_file = bios_dir / "scph5501.bin"
+        bios_file.write_bytes(b"\x00" * 512)
+
+        # Pre-populate the BIOS registry via the Unit of Work
+        plugin._uow.bios_files.save(
+            BiosFile.mark_downloaded(
+                platform_slug="psx",
+                file_name="scph5501.bin",
+                file_path=str(bios_file),
+                downloaded_at="2026-01-01T00:00:00+00:00",
+                firmware_id=42,
+            )
+        )
+
+        # Mock check_platform_bios with the REAL output shape: asdict dicts.
+        async def mock_check(slug, launching_emulator=None):
+            return {
+                "needs_bios": True,
+                "server_count": 1,
+                "local_count": 1,
+                "all_downloaded": True,
+                "files": [
+                    asdict(
+                        BiosFileEntry(
+                            file_name="scph5501.bin",
+                            downloaded=True,
+                            local_path=str(bios_file),
+                            declared_path="scph5501.bin",
+                            description="PS1 BIOS",
+                            wanted="needed",
+                            required_by_active=True,
+                            cores={},
+                            used_by_active=True,
+                        )
+                    ),
+                ],
+            }
+
+        fw.check_platform_bios = mock_check
+
+        result = await fw.delete_platform_bios("psx")
+        assert result["success"] is True
+        assert result["deleted_count"] == 1
+        assert not bios_file.exists()
+        # Verify BIOS record removed from the registry
+        assert plugin._uow.bios_files.get("psx", "scph5501.bin") is None
+
+    @pytest.mark.asyncio
+    async def test_delete_platform_bios_real_check_output_shape(self, plugin, tmp_path):
+        """Regression for #750: delete works against the real asdict dict shape.
+
+        Drives ``delete_platform_bios`` end-to-end through the *real*
+        ``check_platform_bios`` (server-offline registry fallback), so the
+        ``files`` list is the genuine ``[asdict(f) for f in files]`` payload
+        the callable hands to the removal worker (``_delete_recorded_io``).
+        Before the fix that worker read ``f.downloaded`` / ``f.local_path`` /
+        ``f.file_name`` as
+        attributes on those dicts, raising ``AttributeError`` in the executor
+        and deleting nothing — the "Failed to delete BIOS files" the modal showed.
+        """
+        bios_dir = tmp_path / "bios"
+        bios_dir.mkdir(parents=True)
+        # One downloaded file (store sees it) + one never-downloaded.
+        store = FakeFirmwareFileStore({str(bios_dir / "scph5501.bin"): b"\x00" * 512})
+
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            firmware_file_store=store,
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(bios_dir)),
+        )
+        _set_loop(fw, asyncio.get_running_loop())
+        _declare(fw, ("scph5501.bin", "PS1 US BIOS", True), ("scph5502.bin", "PS1 EU BIOS", True))
+
+        # The downloaded file has a BiosFile record to prune (firmware slug "ps").
+        plugin._uow.bios_files.save(
+            BiosFile.mark_downloaded(
+                platform_slug="ps",
+                file_name="scph5501.bin",
+                file_path=str(bios_dir / "scph5501.bin"),
+                downloaded_at="2026-01-01T00:00:00+00:00",
+                firmware_id=42,
+            )
+        )
+
+        firmware_list = [
+            {
+                "id": 1,
+                "file_name": "scph5501.bin",
+                "file_path": "bios/ps/scph5501.bin",
+                "file_size_bytes": 512,
+                "md5_hash": "",
+            },
+            {
+                "id": 2,
+                "file_name": "scph5502.bin",
+                "file_path": "bios/ps/scph5502.bin",
+                "file_size_bytes": 512,
+                "md5_hash": "",
+            },
+        ]
+        with patch.object(plugin._romm_api, "list_firmware", return_value=firmware_list):
+            # Precondition: files really are dicts, not BiosFileEntry objects —
+            # subscripting a string key would raise on a BiosFileEntry instance.
+            status: dict[str, Any] = await fw.check_platform_bios("psx")
+            assert status["files"][0]["file_name"] == "scph5501.bin"
+            assert status["files"][0]["downloaded"] is True
+
+            result = await fw.delete_platform_bios("psx")
+
+        # (b) success/deleted_count response is correct: only the one downloaded.
+        assert result["success"] is True
+        assert result["deleted_count"] == 1
+        # (a) the downloaded file is removed via the firmware file store...
+        assert str(bios_dir / "scph5501.bin") not in store.files
+        # ...and its BiosFile record is pruned (matched under firmware slug "ps").
+        assert plugin._uow.bios_files.get("ps", "scph5501.bin") is None
+
+    @staticmethod
+    def _gamecube_service(plugin, tmp_path):
+        """A GameCube platform whose BIOS folder holds one of each kind of file.
+
+        ``IPL.bin`` is in the RomM library; ``codehandler.bin`` is what RetroDECK
+        ships beside its RetroArch component, wanted by the same core and held by
+        no library. Both are declared, so both reach the delete as rows marked
+        downloaded — which is the whole of what the old guard looked at.
+
+        No download record is written here. Which file the plugin is supposed to
+        have fetched is the axis under test, so each case states its own records
+        (``_record_download``) — including the one that deliberately states none.
+        """
+        bios_dir = tmp_path / "bios"
+        shipped = os.path.join(str(bios_dir), "dolphin-emu", "Sys", "codehandler.bin")
+        ipl = os.path.join(str(bios_dir), "IPL.bin")
+        store = FakeFirmwareFileStore({shipped: b"\x00" * 8, ipl: b"\x00" * 8})
+
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            firmware_file_store=store,
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(bios_dir)),
+            core_info=_test_core_info(),
+        )
+        _set_loop(fw, asyncio.get_running_loop())
+        _resolver(fw).declare("IPL.bin", required_by=[_id(_TEST_CORE)], description="GameCube IPL")
+        _resolver(fw).declare(
+            "codehandler.bin",
+            optional_for=[_id(_TEST_CORE)],
+            relative_path="dolphin-emu/Sys/codehandler.bin",
+            description="Dolphin code handler",
+        )
+        return fw, store, shipped, ipl
+
+    @staticmethod
+    def _gamecube_listing() -> list[dict[str, Any]]:
+        return [
+            {
+                "id": 7,
+                "file_name": "IPL.bin",
+                "file_path": "bios/gc/IPL.bin",
+                "file_size_bytes": 8,
+                "md5_hash": "",
+            },
+        ]
+
+    @staticmethod
+    def _record_download(plugin, file_name: str, file_path: str) -> None:
+        plugin._uow.bios_files.save(
+            BiosFile.mark_downloaded(
+                platform_slug="gc",
+                file_name=file_name,
+                file_path=file_path,
+                downloaded_at="2026-01-01T00:00:00+00:00",
+                firmware_id=7,
+            )
+        )
+
+    @pytest.mark.asyncio
+    async def test_an_emulator_shipped_file_survives_the_delete(self, plugin, tmp_path):
+        """Deleting a platform's BIOS never touches a file the plugin did not fetch.
+
+        The reported data loss: pressing Delete BIOS on GameCube removed
+        ``dolphin-emu/Sys/codehandler.bin``, which RetroDECK ships with its own
+        RetroArch component. It is on the list because an installed core asks for
+        it, and its ``downloaded`` flag is nothing but ``os.path.exists`` — so the
+        old guard, which read that flag alone, deleted a file nothing here could
+        ever fetch back.
+        """
+        fw, store, shipped, ipl = self._gamecube_service(plugin, tmp_path)
+        self._record_download(plugin, "IPL.bin", ipl)
+
+        with patch.object(plugin._romm_api, "list_firmware", return_value=self._gamecube_listing()):
+            status: dict[str, Any] = await fw.check_platform_bios("gc")
+            # Precondition: the shipped file reaches the delete looking deletable.
+            row = next(f for f in status["files"] if f["file_name"] == "codehandler.bin")
+            assert row["downloaded"] is True
+
+            result = await fw.delete_platform_bios("gc")
+
+        assert result["success"] is True
+        assert result["deleted_count"] == 1
+        assert shipped in store.files
+        # The plugin's own download still goes, record and all.
+        assert ipl not in store.files
+        assert plugin._uow.bios_files.get("gc", "IPL.bin") is None
+
+    @pytest.mark.asyncio
+    async def test_a_file_with_no_download_record_survives_the_delete(self, plugin, tmp_path):
+        """A hand-placed file is not the plugin's to delete, even under a server name.
+
+        This file IS in the RomM library, so it looks like every other
+        downloadable row and a guard reading the library would remove it.
+        Nothing here put it on disk, so nothing here removes it.
+        """
+        fw, store, shipped, ipl = self._gamecube_service(plugin, tmp_path)
+
+        with patch.object(plugin._romm_api, "list_firmware", return_value=self._gamecube_listing()):
+            status: dict[str, Any] = await fw.check_platform_bios("gc")
+            row = next(f for f in status["files"] if f["file_name"] == "IPL.bin")
+            assert row["downloaded"] is True
+            assert row["on_server"] is True
+
+            result = await fw.delete_platform_bios("gc")
+
+        assert result["success"] is True
+        assert result["deleted_count"] == 0
+        assert ipl in store.files
+        assert shipped in store.files
+
+    @pytest.mark.asyncio
+    async def test_our_own_download_still_goes_after_it_leaves_the_library(self, plugin, tmp_path):
+        """A file we downloaded stays deletable once RomM no longer holds it.
+
+        The library is not the authority here — the record is. Dropping a
+        firmware file from RomM flips its row to ``on_server: False``, and a
+        guard that also demanded ``on_server`` would strand our own download on
+        disk with nothing in the UI able to remove it. The row is otherwise
+        indistinguishable from the emulator-shipped one beside it; only the
+        record tells them apart, and only the record decides.
+        """
+        fw, store, shipped, ipl = self._gamecube_service(plugin, tmp_path)
+        self._record_download(plugin, "IPL.bin", ipl)
+
+        with patch.object(plugin._romm_api, "list_firmware", return_value=[]):
+            status: dict[str, Any] = await fw.check_platform_bios("gc")
+            # Both rows now come off the machine's demand, not the listing.
+            assert {f["file_name"]: f["on_server"] for f in status["files"]} == {
+                "IPL.bin": False,
+                "codehandler.bin": False,
+            }
+
+            result = await fw.delete_platform_bios("gc")
+
+        assert result["success"] is True
+        assert result["deleted_count"] == 1
+        assert ipl not in store.files
+        assert plugin._uow.bios_files.get("gc", "IPL.bin") is None
+        # The one without a record is still not ours.
+        assert shipped in store.files
+
+    @pytest.mark.asyncio
+    async def test_a_moved_placement_does_not_redirect_the_delete(self, plugin, tmp_path):
+        """The delete unlinks where the download wrote, never where the placement now points.
+
+        ``codehandler.bin`` was fetched while nothing declared it, so it landed
+        flat in the BIOS root and the record says so. A later emu-atlas bump
+        gives the file a subdirectory — the very path RetroDECK's own copy
+        occupies. A delete that recomputed the destination would still match our
+        record by name, unlink RetroDECK's file, drop the row, and leave ours on
+        disk with nothing left that could remove it.
+        """
+        fw, store, shipped, _ipl = self._gamecube_service(plugin, tmp_path)
+        flat = os.path.join(str(tmp_path / "bios"), "codehandler.bin")
+        store.files[flat] = b"\x00" * 8
+        self._record_download(plugin, "codehandler.bin", flat)
+
+        with patch.object(plugin._romm_api, "list_firmware", return_value=self._gamecube_listing()):
+            status: dict[str, Any] = await fw.check_platform_bios("gc")
+            # Precondition: today's placement puts the row on the shipped copy.
+            row = next(f for f in status["files"] if f["file_name"] == "codehandler.bin")
+            assert row["local_path"] == shipped
+
+            result = await fw.delete_platform_bios("gc")
+
+        assert result["success"] is True
+        assert result["deleted_count"] == 1
+        assert flat not in store.files
+        assert shipped in store.files
+        assert plugin._uow.bios_files.get("gc", "codehandler.bin") is None
+
+    @pytest.mark.asyncio
+    async def test_a_record_whose_file_is_gone_is_pruned_without_a_deletion(self, plugin, tmp_path):
+        """A row standing over an absent file is dropped, counted as nothing, reported as no error.
+
+        The user deleted it by hand, or a previous run took it. There is nothing
+        to unlink, and leaving the row would keep offering a file that is not
+        there.
+        """
+        fw, store, shipped, ipl = self._gamecube_service(plugin, tmp_path)
+        self._record_download(plugin, "IPL.bin", ipl)
+        del store.files[ipl]
+
+        with patch.object(plugin._romm_api, "list_firmware", return_value=self._gamecube_listing()):
+            result = await fw.delete_platform_bios("gc")
+
+        assert result["success"] is True
+        assert result["deleted_count"] == 0
+        assert plugin._uow.bios_files.get("gc", "IPL.bin") is None
+        assert shipped in store.files
+
+    @pytest.mark.asyncio
+    async def test_two_records_for_one_file_are_one_deletion(self, plugin, tmp_path):
+        """A platform holding the same file under two firmware slugs deletes it once.
+
+        ``psx`` reads both ``psx`` and ``ps``. Two rows naming one path is one
+        unlink: the first takes the file, the second finds it gone and prunes
+        over the absence, so neither the count nor the error list doubles.
+        """
+        bios_dir = tmp_path / "bios"
+        path = os.path.join(str(bios_dir), "scph5501.bin")
+        store = FakeFirmwareFileStore({path: b"\x00" * 8})
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            firmware_file_store=store,
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(bios_dir)),
+            core_info=_test_core_info(),
+        )
+        _set_loop(fw, asyncio.get_running_loop())
+        for slug in ("psx", "ps"):
+            plugin._uow.bios_files.save(
+                BiosFile.mark_downloaded(
+                    platform_slug=slug,
+                    file_name="scph5501.bin",
+                    file_path=path,
+                    downloaded_at="2026-01-01T00:00:00+00:00",
+                    firmware_id=1,
+                )
+            )
+
+        with patch.object(plugin._romm_api, "list_firmware", return_value=[]):
+            result = await fw.delete_platform_bios("psx")
+
+        assert result["success"] is True
+        assert result["deleted_count"] == 1
+        assert path not in store.files
+        assert plugin._uow.bios_files.get("psx", "scph5501.bin") is None
+        assert plugin._uow.bios_files.get("ps", "scph5501.bin") is None
+
+    @pytest.mark.asyncio
+    async def test_delete_platform_bios_no_files(self, fw):
+        """Deleting BIOS when none exist returns success with 0."""
+
+        async def mock_check(slug, launching_emulator=None):
+            return {"needs_bios": False}
+
+        fw.check_platform_bios = mock_check
+
+        result = await fw.delete_platform_bios("snes")
+        assert result["success"] is True
+        assert result["deleted_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_delete_platform_bios_skips_not_downloaded(self, fw, tmp_path):
+        """Only files with downloaded=True are deleted (real asdict dict shape)."""
+
+        async def mock_check(slug, launching_emulator=None):
+            return {
+                "needs_bios": True,
+                "server_count": 2,
+                "local_count": 0,
+                "all_downloaded": False,
+                "files": [
+                    asdict(
+                        BiosFileEntry(
+                            file_name="bios1.bin",
+                            downloaded=False,
+                            local_path="/fake/path1",
+                            declared_path="bios1.bin",
+                            description="bios1.bin",
+                            wanted="unknown",
+                            required_by_active=False,
+                            cores={},
+                            used_by_active=True,
+                        )
+                    ),
+                    asdict(
+                        BiosFileEntry(
+                            file_name="bios2.bin",
+                            downloaded=False,
+                            local_path="/fake/path2",
+                            declared_path="bios2.bin",
+                            description="bios2.bin",
+                            wanted="unknown",
+                            required_by_active=False,
+                            cores={},
+                            used_by_active=True,
+                        )
+                    ),
+                ],
+            }
+
+        fw.check_platform_bios = mock_check
+
+        result = await fw.delete_platform_bios("psx")
+        assert result["success"] is True
+        assert result["deleted_count"] == 0
+
+
+class TestCheckPlatformBiosRequired:
+    @pytest.mark.asyncio
+    async def test_required_counts(self, fw, tmp_path):
+        """check_platform_bios includes required_count/required_downloaded."""
+        firmware_list = [
+            {
+                "id": 1,
+                "file_name": "required1.bin",
+                "file_path": "bios/dc/required1.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
+            {
+                "id": 2,
+                "file_name": "required2.bin",
+                "file_path": "bios/dc/required2.bin",
+                "file_size_bytes": 200,
+                "md5_hash": "",
+            },
+            {
+                "id": 3,
+                "file_name": "optional1.bin",
+                "file_path": "bios/dc/optional1.bin",
+                "file_size_bytes": 300,
+                "md5_hash": "",
+            },
+        ]
+
+        _declare(
+            fw,
+            ("required1.bin", "Required BIOS 1", True),
+            ("required2.bin", "Required BIOS 2", True),
+            ("optional1.bin", "Optional firmware", False),
+        )
+
+        _stub_listing(fw, firmware_list)
+        _inline_executor(fw)
+
+        result = await fw.check_platform_bios("dc")
+        assert result["needs_bios"] is True
+        assert result["required_count"] == 2
+        assert result["required_downloaded"] == 0
+        assert result["server_count"] == 3
+        # No required file downloaded → bios_level 'missing' (single source of
+        # truth: domain.bios_status.compute_bios_level, threaded off this payload, #461).
+        assert result["bios_level"] == "missing"
+
+    @pytest.mark.asyncio
+    async def test_all_required_downloaded(self, fw, tmp_path):
+        """When all required files are downloaded, counts reflect this."""
+        # Flat in the bios root: the declarations below name no subdirectory.
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        (bios_dir / "required1.bin").write_bytes(b"\x00" * 100)
+        (bios_dir / "required2.bin").write_bytes(b"\x00" * 200)
+        _resolver_reads(fw, bios_dir)
+        # Leave optional1.bin not downloaded
+
+        firmware_list = [
+            {
+                "id": 1,
+                "file_name": "required1.bin",
+                "file_path": "bios/dc/required1.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
+            {
+                "id": 2,
+                "file_name": "required2.bin",
+                "file_path": "bios/dc/required2.bin",
+                "file_size_bytes": 200,
+                "md5_hash": "",
+            },
+            {
+                "id": 3,
+                "file_name": "optional1.bin",
+                "file_path": "bios/dc/optional1.bin",
+                "file_size_bytes": 300,
+                "md5_hash": "",
+            },
+        ]
+
+        _declare(
+            fw,
+            ("required1.bin", "Required BIOS 1", True),
+            ("required2.bin", "Required BIOS 2", True),
+            ("optional1.bin", "Optional firmware", False),
+        )
+
+        _stub_listing(fw, firmware_list)
+        _inline_executor(fw)
+
+        with patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))):
+            result = await fw.check_platform_bios("dc")
+        assert result["needs_bios"] is True
+        assert result["required_count"] == 2
+        assert result["required_downloaded"] == 2
+        assert result["local_count"] == 2
+        # all_downloaded is False because optional1.bin is not downloaded
+        assert result["all_downloaded"] is False
+        # All required files present → bios_level 'ok' (the required-file branch
+        # of compute_bios_level wins over all_downloaded, #461).
+        assert result["bios_level"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_some_required_downloaded_bios_level_partial(self, fw, tmp_path):
+        """One of two required files downloaded → bios_level 'partial' (#461)."""
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        (bios_dir / "required1.bin").write_bytes(b"\x00" * 100)
+        _resolver_reads(fw, bios_dir)
+        # Leave required2.bin not downloaded
+
+        firmware_list = [
+            {
+                "id": 1,
+                "file_name": "required1.bin",
+                "file_path": "bios/dc/required1.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
+            {
+                "id": 2,
+                "file_name": "required2.bin",
+                "file_path": "bios/dc/required2.bin",
+                "file_size_bytes": 200,
+                "md5_hash": "",
+            },
+        ]
+
+        _declare(fw, ("required1.bin", "Required BIOS 1", True), ("required2.bin", "Required BIOS 2", True))
+
+        _stub_listing(fw, firmware_list)
+        _inline_executor(fw)
+
+        with patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))):
+            result = await fw.check_platform_bios("dc")
+        assert result["needs_bios"] is True
+        assert result["required_count"] == 2
+        assert result["required_downloaded"] == 1
+        # One required file present, the other missing → bios_level 'partial'.
+        assert result["bios_level"] == "partial"
+
+    @pytest.mark.asyncio
+    async def test_per_file_required_and_description(self, fw, tmp_path):
+        """Individual files carry the declaring core's required flag and description."""
+        firmware_list = [
+            {"id": 1, "file_name": "bios.bin", "file_path": "bios/dc/bios.bin", "file_size_bytes": 100, "md5_hash": ""},
+        ]
+
+        _declare(fw, ("bios.bin", "Dreamcast BIOS", True))
+
+        _stub_listing(fw, firmware_list)
+        _inline_executor(fw)
+
+        result = await fw.check_platform_bios("dc")
+        assert result["files"][0]["required_by_active"] is True
+        assert result["files"][0]["description"] == "Dreamcast BIOS"
+
+    @pytest.mark.asyncio
+    async def test_files_no_emulator_asks_for_are_answered_not_unknown(self, fw, tmp_path):
+        """Every emulator read and two files unclaimed → they are answered for.
+
+        The ``fw`` fixture's ES-DE offers exactly the libretro core ``_declare``
+        attributes its wants to, so the scope is real and complete — which is
+        what makes ``not_needed`` the honest answer here. On an empty scope the
+        same listing must read ``unknown``
+        (:meth:`test_a_platform_with_no_libretro_core_answers_for_nothing`), and
+        this assertion would hold vacuously.
+        """
+        firmware_list = [
+            {
+                "id": 1,
+                "file_name": "known.bin",
+                "file_path": "bios/dc/known.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
+            {
+                "id": 2,
+                "file_name": "mystery.bin",
+                "file_path": "bios/dc/mystery.bin",
+                "file_size_bytes": 200,
+                "md5_hash": "",
+            },
+            {
+                "id": 3,
+                "file_name": "alien.bin",
+                "file_path": "bios/dc/alien.bin",
+                "file_size_bytes": 300,
+                "md5_hash": "",
+            },
+        ]
+
+        # Only "known.bin" is declared by an installed emulator.
+        _declare(fw, ("known.bin", "Known BIOS", True))
+
+        _stub_listing(fw, firmware_list)
+        _inline_executor(fw)
+
+        result = await fw.check_platform_bios("dc")
+        assert result["needs_bios"] is True
+        assert result["unknown_count"] == 0
+        assert result["known_count"] == 1
+        wanted = {f["file_name"]: f["wanted"] for f in result["files"]}
+        assert wanted["known.bin"] == "needed"
+        assert wanted["mystery.bin"] == "not_needed"
+        assert wanted["alien.bin"] == "not_needed"
+
+    @pytest.mark.asyncio
+    async def test_the_same_files_read_unknown_when_an_emulator_could_not_be_asked(self, tmp_path):
+        """The identical listing, answered against a platform with an unread emulator.
+
+        Same server files, same declarations — only the reading changes, and the
+        two unclaimed files go from a finished "nothing needs these" to "nothing
+        could be established". Under the collapsed boolean both said the same
+        thing.
+        """
+        from tests.fakes.fake_core_info_provider import libretro_option
+
+        romm_api = MagicMock()
+        romm_api.list_firmware.return_value = [
+            {"id": 1, "file_name": "known.bin", "file_path": "bios/dc/known.bin", "file_size_bytes": 1, "md5_hash": ""},
+            {
+                "id": 2,
+                "file_name": "mystery.bin",
+                "file_path": "bios/dc/mystery.bin",
+                "file_size_bytes": 1,
+                "md5_hash": "",
+            },
+        ]
+        fw = _make_firmware_service(
+            romm_api=romm_api,
+            core_info=FakeCoreInfoProvider(options=[libretro_option("flycast_libretro", "Flycast")]),
+            firmware_resolver=FakeFirmwareResolver(unread_emulators=frozenset({_id("flycast_libretro")})),
+        )
+        _declare(fw, ("known.bin", "Known BIOS", True))
+        _inline_executor(fw)
+
+        result = await fw.check_platform_bios("dc")
+
+        wanted = {f["file_name"]: f["wanted"] for f in result["files"]}
+        assert wanted["known.bin"] == "needed"
+        assert wanted["mystery.bin"] == "unknown"
+        assert result["unknown_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_a_platform_with_no_libretro_core_answers_for_nothing(self, tmp_path):
+        """A standalone-only system reads grey, never a green "nothing needs these".
+
+        ES-DE is readable and offers this system one emulator — a standalone
+        one, so the libretro scope is empty. 35 of ES-DE's 172 systems are in
+        that position, ``ps3`` (RPCS3) among them, and it is a mapped RomM
+        platform: answering the empty scope as a complete reading classified
+        every server file ``not_needed``, put ``required_count`` at 0 and
+        reported a green "Nothing required" over firmware RPCS3 will not boot
+        without.
+        """
+        from tests.fakes.fake_core_info_provider import standalone_option
+
+        romm_api = MagicMock()
+        romm_api.list_firmware.return_value = [
+            {"id": 1, "file_name": "PS3UPDAT.PUP", "file_path": "bios/ps3/PS3UPDAT.PUP", "file_size_bytes": 1},
+        ]
+        fw = _make_firmware_service(
+            romm_api=romm_api,
+            core_info=FakeCoreInfoProvider(options=[standalone_option("%EMULATOR_RPCS3% %ROM%", "RPCS3")]),
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(tmp_path / "bios")),
+        )
+        _inline_executor(fw)
+
+        result = await fw.check_platform_bios("ps3")
+
+        assert [f["wanted"] for f in result["files"]] == ["unknown"]
+        assert result["known_count"] == 0
+        assert result["unknown_count"] == 1
+        assert result["bios_level"] == "unknown"
+
+
+class TestCheckPlatformBiosSlugNormalization:
+    """check_platform_bios resolves slug→system for the active-core INPUT, keeps raw slug for BIOS.
+
+    The firmware ``file_path`` and bios registry are keyed on the raw RomM
+    platform slug (BIOS-folder vocabulary, ADR-0010 §4). The active-core read used
+    to filter the firmware list must instead receive the resolved RetroDECK system.
+    The method no longer reads ``get_available_cores`` — core info is served via the
+    dedicated ``get_platform_core_info`` path (#923).
+    """
+
+    @pytest.mark.parametrize(
+        ("slug", "system"),
+        [
+            ("dc", "dreamcast"),
+            ("sms", "mastersystem"),
+            ("neo-geo-pocket", "ngp"),
+            ("gba", "gba"),  # identity: slug already equals system
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_resolves_system_for_cores_keeps_raw_slug_for_bios(self, slug, system):
+        core_info = FakeCoreInfoProvider(
+            active_core=("flycast_libretro", "Flycast"),
+            available_cores=[{"label": "Flycast", "so": "flycast_libretro"}],
+        )
+        resolver = FakeSystemResolver(mapping={"dc": "dreamcast", "sms": "mastersystem", "neo-geo-pocket": "ngp"})
+        fw = _make_firmware_service(core_info=core_info, resolve_system=resolver)
+
+        firmware_list = [
+            {
+                "id": 1,
+                "file_name": "boot.bin",
+                "file_path": f"bios/{slug}/boot.bin",
+                "file_size_bytes": 512,
+                "md5_hash": "",
+            },
+        ]
+        _declare(fw, ("boot.bin", "Boot", True))
+
+        _stub_listing(fw, firmware_list)
+        _inline_executor(fw)
+
+        result = await fw.check_platform_bios(slug)
+
+        # RAW slug matched the firmware file_path, so a file is found.
+        assert result["needs_bios"] is True
+        assert result["server_count"] == 1
+        # The core read seam received the NORMALIZED system.
+        assert core_info.emulator_options_calls == [system]
+        assert resolver.calls == [(slug, None)]
+
+
+class TestCheckPlatformBiosNoCoreFields:
+    """check_platform_bios returns BIOS status only — never the picker's data (#923).
+
+    Which emulators a platform offers, and which of them it launches with, are
+    served through the dedicated ``get_platform_core_info`` path and never from
+    the BIOS payload: ``active_core`` and ``available_cores`` are absent from
+    every branch.
+
+    The one field that does ride along is ``active_core_label``, and it is not an
+    exception to that rule but the answer's own: it is the NAME of the pick THIS
+    payload's counts were filtered by, so the sentence over them can say which
+    emulator they are about without a second resolution of the question. It is
+    stamped only where there is an answer to name — the two ``needs_bios: False``
+    branches below carry nothing at all.
+    """
+
+    @pytest.mark.asyncio
+    async def test_server_reachable_no_firmware_omits_core_fields(self):
+        """Server reachable, no firmware for the platform → no core fields."""
+        core_info = FakeCoreInfoProvider(
+            active_core=("genesisplusgx_libretro", "Genesis Plus GX"),
+            available_cores=[
+                {"label": "Genesis Plus GX", "core_so": "genesisplusgx_libretro"},
+                {"label": "PicoDrive", "core_so": "picodrive_libretro"},
+            ],
+        )
+        fw = _make_firmware_service(core_info=core_info)
+        # no emulator declares anything here
+
+        # No firmware on the server matches the platform → collect_firmware_status
+        # returns nothing, hitting the empty-files needs_bios=False branch.
+        _stub_listing(fw, [])
+        _inline_executor(fw)
+
+        result = await fw.check_platform_bios("sms")
+
+        assert result == {"needs_bios": False}
+        assert "active_core" not in result
+        assert "active_core_label" not in result
+        assert "available_cores" not in result
+
+    @pytest.mark.asyncio
+    async def test_offline_with_no_demand_omits_core_fields(self, plugin, fw):
+        """Server unreachable and no emulator wants anything → no core fields."""
+        core_info = FakeCoreInfoProvider(
+            active_core=("genesisplusgx_libretro", "Genesis Plus GX"),
+            available_cores=[
+                {"label": "Genesis Plus GX", "core_so": "genesisplusgx_libretro"},
+                {"label": "PicoDrive", "core_so": "picodrive_libretro"},
+            ],
+        )
+        fw = _make_firmware_service(romm_api=plugin._romm_api, core_info=core_info)
+        # no emulator declares anything here
+        _set_loop(fw, asyncio.get_running_loop())
+
+        with patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")):
+            result = await fw.check_platform_bios("sms")
+
+        # No emulator wants anything and the whole scope was read, so "needs
+        # none" is a real answer even with the listing unavailable — and it
+        # still carries no core fields.
+        assert result == {"needs_bios": False}
+        assert "active_core" not in result
+        assert "available_cores" not in result
+
+    @pytest.mark.asyncio
+    async def test_needs_bios_true_omits_core_fields(self, tmp_path):
+        """needs_bios=True branch carries BIOS counts/files only — no core fields."""
+        core_info = FakeCoreInfoProvider(
+            active_core=("gpsp_libretro", "gpSP"),
+            available_cores=[
+                {"label": "gpSP", "so": "gpsp_libretro"},
+                {"label": "mGBA", "so": "mgba_libretro"},
+            ],
+        )
+        fw = _make_firmware_service(core_info=core_info)
+
+        firmware_list = [
+            {
+                "id": 1,
+                "file_name": "gba_bios.bin",
+                "file_path": "bios/gba/gba_bios.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
+        ]
+        _declare(fw, ("gba_bios.bin", "GBA BIOS", True))
+        _stub_listing(fw, firmware_list)
+        _inline_executor(fw)
+
+        with patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path / "bios"))):
+            result = await fw.check_platform_bios("gba")
+
+        assert result["needs_bios"] is True
+        assert result["server_count"] == 1
+        assert "active_core" not in result
+        assert "available_cores" not in result
+        # ES-DE offers this platform no command here, so no pick could be made
+        # and there is no name to print — stated as an empty answer rather than
+        # left out, because the surface words the nameless sentence for it.
+        assert result["active_core_label"] is None
+
+
+class TestDownloadRequiredFirmware:
+    @pytest.mark.asyncio
+    async def test_downloads_required_only(self, plugin, fw, tmp_path):
+        """Only downloads files marked required, skips optional."""
+
+        firmware_list = [
+            {
+                "id": 1,
+                "file_name": "required.bin",
+                "file_path": "bios/dc/required.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
+            {
+                "id": 2,
+                "file_name": "optional.bin",
+                "file_path": "bios/dc/optional.bin",
+                "file_size_bytes": 200,
+                "md5_hash": "",
+            },
+        ]
+
+        fw._config.core_info.active_core = (_TEST_CORE, "Test Core")
+        _declare(fw, ("required.bin", "Required BIOS", True), ("optional.bin", "Optional firmware", False))
+
+        _set_loop(fw, asyncio.get_running_loop())
+
+        download_called_ids = []
+
+        async def fake_download_firmware(fw_id, _placements):
+            download_called_ids.append(fw_id)
+            return {"success": True}
+
+        with (
+            patch.object(plugin._romm_api, "list_firmware", return_value=firmware_list),
+            patch.object(fw._downloads, "_download_one", side_effect=fake_download_firmware),
+        ):
+            result = await fw.download_required_firmware("dc")
+
+        assert result["success"] is True
+        assert result["downloaded"] == 1
+        assert 1 in download_called_ids
+        assert 2 not in download_called_ids
+
+    @staticmethod
+    async def _download_under(platform_core: str | None) -> tuple[list[int], int]:
+        """Fetch the required set for a gba platform picked *platform_core*, and the pane's count.
+
+        gpSP will not run without the GBA BIOS and mGBA will, so which of the two
+        the platform resolves to decides the whole answer.
+        """
+        romm_api = MagicMock()
+        romm_api.list_firmware.return_value = [
+            {
+                "id": 1,
+                "file_name": "gba_bios.bin",
+                "file_path": "bios/gba/gba_bios.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
+        ]
+        resolver = FakeFirmwareResolver()
+        resolver.declare(
+            "gba_bios.bin",
+            required_by=[_id("gpsp_libretro")],
+            optional_for=[_id("mgba_libretro")],
+            description="GBA BIOS",
+        )
+        fw = _make_firmware_service(
+            romm_api=romm_api,
+            firmware_resolver=resolver,
+            core_info=FakeCoreInfoProvider(
+                options=[libretro_option("gpsp_libretro", "gpSP"), libretro_option("mgba_libretro", "mGBA")],
+            ),
+            platform_core_reader=FakePlatformCoreReader({"gba": platform_core} if platform_core is not None else None),
+        )
+        _inline_executor(fw)
+
+        asked: list[int] = []
+
+        async def fake_download_firmware(fw_id, _placements):
+            asked.append(fw_id)
+            return {"success": True}
+
+        with patch.object(fw._downloads, "_download_one", side_effect=fake_download_firmware):
+            await fw.download_required_firmware("gba")
+        page = await fw.check_platform_bios("gba")
+        return asked, page["required_count"]
+
+    @pytest.mark.asyncio
+    async def test_it_fetches_what_the_platforms_own_pick_calls_required(self):
+        """The button and the count above it read one emulator.
+
+        The button sits on the pane that states the requirement, so a resolution
+        of its own would offer to fetch a set the page never showed — or, under
+        the pick that needs nothing, offer to fetch anything at all.
+        """
+        assert await self._download_under(None) == ([1], 1)
+        assert await self._download_under("gpSP") == ([1], 1)
+        assert await self._download_under("mGBA") == ([], 0)
+
+    @pytest.mark.asyncio
+    async def test_resolves_system_for_active_core_keeps_raw_slug_for_filter(self):
+        """Active-core read gets the NORMALIZED system; the firmware filter stays raw.
+
+        ``download_required_firmware`` keys the firmware-slug filter on the raw
+        RomM/BIOS-folder slug (ADR-0010 §4) but must resolve the slug to a
+        RetroDECK system before reading the platform's emulators (ADR-0010 §2) so
+        the per-core required flags use the correct active core.
+        """
+        core_info = FakeCoreInfoProvider(active_core=("flycast_libretro", "Flycast"))
+        resolver = FakeSystemResolver(mapping={"dc": "dreamcast"})
+        fw = _make_firmware_service(core_info=core_info, resolve_system=resolver)
+
+        firmware_list = [
+            {
+                "id": 1,
+                "file_name": "boot.bin",
+                "file_path": "bios/dc/boot.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
+        ]
+        # The requiring core is the one the NORMALIZED system resolves to, in the
+        # plugin's own bare identifier space (no ".so").
+        _resolver(fw).declare("boot.bin", required_by=[_id("flycast_libretro")], description="Boot")
+        _stub_listing(fw, firmware_list)
+        _inline_executor(fw)
+
+        download_called_ids: list[int] = []
+
+        async def fake_download_firmware(fw_id, _placements):
+            download_called_ids.append(fw_id)
+            return {"success": True}
+
+        with patch.object(fw._downloads, "_download_one", side_effect=fake_download_firmware):
+            result = await fw.download_required_firmware("dc")
+
+        # RAW slug matched the firmware file_path filter, so the file is considered.
+        # The per-core required flag (keyed on the active core from the NORMALIZED
+        # system) marked it required, so it was downloaded.
+        assert result["downloaded"] == 1
+        assert download_called_ids == [1]
+        # The core read the required-only filter resolves through received the
+        # NORMALIZED system, not the raw slug.
+        assert core_info.emulator_options_calls == ["dreamcast"]
+        assert resolver.calls == [("dc", None)]
+
+    @pytest.mark.asyncio
+    async def test_skips_already_downloaded_required(self, plugin, fw, tmp_path):
+        """Skips required files that are already downloaded."""
+
+        # Pre-create one required file so it's skipped (flat in bios root)
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        (bios_dir / "existing.bin").write_bytes(b"\x00" * 100)
+
+        firmware_list = [
+            {
+                "id": 1,
+                "file_name": "existing.bin",
+                "file_path": "bios/dc/existing.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
+            {
+                "id": 2,
+                "file_name": "missing.bin",
+                "file_path": "bios/dc/missing.bin",
+                "file_size_bytes": 200,
+                "md5_hash": "",
+            },
+        ]
+
+        _declare(fw, ("existing.bin", "Already downloaded", True), ("missing.bin", "Not yet downloaded", True))
+
+        _set_loop(fw, asyncio.get_running_loop())
+
+        download_called_ids = []
+
+        async def fake_download_firmware(fw_id, _placements):
+            download_called_ids.append(fw_id)
+            return {"success": True}
+
+        with (
+            patch.object(plugin._romm_api, "list_firmware", return_value=firmware_list),
+            patch.object(fw._downloads, "_download_one", side_effect=fake_download_firmware),
+            patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
+        ):
+            result = await fw.download_required_firmware("dc")
+
+        assert result["success"] is True
+        assert result["downloaded"] == 1
+        assert 2 in download_called_ids
+        assert 1 not in download_called_ids
+
+
+class TestCheckPlatformBiosOffline:
+    """What ``check_platform_bios`` answers when the RomM listing cannot be fetched.
+
+    Readiness is assembled from three local inputs — which emulator is active
+    (ES-DE), what it wants (the resolver), what is on disk — so an unreachable
+    server does not take the answer away. It takes away the files only the server
+    knows about, and the ability to download anything.
+    """
+
+    @pytest.mark.asyncio
+    async def test_offline_still_answers_from_the_machine(self, plugin, tmp_path):
+        """The emulators' demand is local, so the requirement survives the outage."""
+        bios_dir = tmp_path / "bios"
+        bios_dir.mkdir(parents=True)
+        (bios_dir / "req1.bin").write_bytes(b"\x00" * 512)
+
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            firmware_resolver=_dc_resolver(),
+            core_info=_dc_core_info(),
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(bios_dir)),
+        )
+        _set_loop(fw, asyncio.get_running_loop())
+
+        with patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")):
+            result = await fw.check_platform_bios("dc")
+
+        assert result["needs_bios"] is True
+        assert result["required_count"] == 2
+        assert result["required_downloaded"] == 1
+        assert result["bios_level"] == "partial"
+        # Every row came from the machine, so none of them can be fetched.
+        assert all(f["on_server"] is False for f in result["files"])
+        # The answer is real, so nothing is flagged as unestablished (#1693).
+        assert "bios_status_unknown" not in result
+
+    @pytest.mark.asyncio
+    async def test_offline_with_a_complete_reading_and_no_demand_is_a_real_negative(self, plugin, fw, tmp_path):
+        """Every emulator read, none wants anything — "needs none" is an answer.
+
+        The server could still be holding files for this platform, but none of
+        them is a requirement, so there is no warning to withhold.
+        """
+        with (
+            patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")),
+            patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path / "bios"))),
+        ):
+            result = await fw.check_platform_bios("n64")
+
+        assert result == {"needs_bios": False}
+
+    @pytest.mark.asyncio
+    async def test_offline_with_an_incomplete_reading_says_it_does_not_know(self, plugin, tmp_path):
+        """Nothing to show AND nothing established — the one payload that answers nothing.
+
+        Reporting a confident "needs none" here would clear a shown requirement
+        on ignorance (#1693).
+        """
+        from tests.fakes.fake_core_info_provider import libretro_option
+
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            firmware_resolver=FakeFirmwareResolver(unread_emulators=frozenset({_id("n64_libretro")})),
+            core_info=FakeCoreInfoProvider(options=[libretro_option("n64_libretro", "Mupen64")]),
+        )
+        _set_loop(fw, asyncio.get_running_loop())
+
+        with patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")):
+            result = await fw.check_platform_bios("n64")
+
+        assert result == {"needs_bios": False, "bios_status_unknown": True}
+
+    @pytest.mark.asyncio
+    async def test_a_cached_listing_still_contributes_its_own_files(self, plugin, fw, tmp_path):
+        """The listing cache is what keeps the server-only rows available offline."""
+        fw._listing._firmware_cache = [
+            {
+                "id": 1,
+                "file_name": "scph5501.bin",
+                "file_path": "bios/ps/scph5501.bin",
+                "file_size_bytes": 512,
+                "md5_hash": "",
+            },
+        ]
+        fw._listing._firmware_cache_epoch = fw._config.clock.time()
+        _declare(fw, ("scph5501.bin", "PS1 US BIOS", True))
+
+        with patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")):
+            result = await fw.check_platform_bios("psx")
+
+        assert result["needs_bios"] is True
+        assert result["required_count"] == 1
+        assert result["files"][0]["on_server"] is True
+
+    @pytest.mark.asyncio
+    async def test_online_no_firmware_is_a_real_negative(self, plugin, fw, tmp_path):
+        """A successful fetch finding no firmware answers needs_bios False, unflagged.
+
+        The counterpart to the offline cases above: this negative IS an answer, so
+        it stays unflagged and consumers may clear a shown requirement on it.
+        """
+        with (
+            patch.object(plugin._romm_api, "list_firmware", return_value=[]),
+            patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path / "bios"))),
+        ):
+            result = await fw.check_platform_bios("n64")
+
+        assert result["needs_bios"] is False
+        assert "bios_status_unknown" not in result
+
+
+class TestPerCoreFiltering:
+    """Per-core BIOS filtering: what the machine wants vs. what THIS launch needs.
+
+    The two axes travel together on every file. ``wanted`` is the machine's
+    answer and does not move with the core the user picked; ``required_by_active``
+    and ``used_by_active`` are the launching core's, and they are what the
+    missing-BIOS badge counts. A file three other cores demand is not a missing
+    prerequisite for a launch on a core that never opens it.
+    """
+
+    @staticmethod
+    def _gba_resolver() -> FakeFirmwareResolver:
+        """The real GBA shape: gpSP will not run without the BIOS, mGBA will."""
+        resolver = FakeFirmwareResolver()
+        resolver.declare(
+            "gba_bios.bin",
+            required_by=[_id("gpsp_libretro")],
+            optional_for=[_id("mgba_libretro")],
+            description="GBA BIOS",
+        )
+        resolver.declare(
+            "gb_bios.bin",
+            optional_for=[_id("gambatte_libretro"), _id("mgba_libretro")],
+            description="GB BIOS",
+        )
+        resolver.declare("sgb_bios.bin", optional_for=[_id("mgba_libretro")], description="SGB BIOS")
+        return resolver
+
+    @staticmethod
+    def _gba_firmware() -> list[dict[str, Any]]:
+        return [
+            {
+                "id": i + 1,
+                "file_name": name,
+                "file_path": f"bios/gba/{name}",
+                "file_size_bytes": 100 * (i + 1),
+                "md5_hash": "",
+            }
+            for i, name in enumerate(("gba_bios.bin", "gb_bios.bin", "sgb_bios.bin"))
+        ]
+
+    def _service(self, active_core: tuple[str, str] | tuple[None, None]) -> FirmwareService:
+        """A gba platform whose one emulator is *active_core*, or none at all.
+
+        Seeded on both of the fake's inputs, because the service reads both and
+        they answer different questions: ``options`` is the emulator list the
+        platform's own pick is resolved from, ``active_core`` the libretro-only
+        system reading. A test meaning "this platform launches with gpSP" has to
+        say it in the list. ``(None, None)`` is the platform ES-DE offers nothing
+        bakeable for, which is an empty list rather than a named emulator.
+        """
+        romm_api = MagicMock()
+        romm_api.list_firmware.return_value = self._gba_firmware()
+        core_so, label = active_core
+        options = [libretro_option(core_so, label)] if core_so is not None and label is not None else []
+        fw = _make_firmware_service(
+            romm_api=romm_api,
+            firmware_resolver=self._gba_resolver(),
+            core_info=FakeCoreInfoProvider(active_core=active_core, options=options),
+        )
+        _inline_executor(fw)
+        return fw
+
+    @pytest.mark.asyncio
+    async def test_the_launching_core_decides_what_counts_as_required(self, tmp_path):
+        """gpSP requires the GBA BIOS, and only the files gpSP opens are counted."""
+        fw = self._service(("gpsp_libretro", "gpSP"))
+        with patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path / "bios"))):
+            result = await fw.check_platform_bios("gba")
+
+        assert result["needs_bios"] is True
+        assert result["server_count"] == 3
+        # The picker's data is never served from the BIOS payload (#923). The
+        # label beside it is: it names the pick these very counts were filtered
+        # by, which is this answer's own field rather than the picker's.
+        assert "active_core" not in result
+        assert result["active_core_label"] == "gpSP"
+
+        gba_file = next(f for f in result["files"] if f["file_name"] == "gba_bios.bin")
+        assert gba_file["required_by_active"] is True
+        assert gba_file["used_by_active"] is True
+        assert gba_file["wanted"] == "needed"
+
+        gb_file = next(f for f in result["files"] if f["file_name"] == "gb_bios.bin")
+        assert gb_file["used_by_active"] is False
+        assert gb_file["required_by_active"] is False
+        # Each core's entry states both halves: its own declaration, and whether
+        # its console is one that will not start without an image (#1858).
+        assert gb_file["cores"] == {
+            _id("gambatte_libretro"): {"required": False, "needs_one_of": None},
+            _id("mgba_libretro"): {"required": False, "needs_one_of": None},
+        }
+
+        assert result["required_count"] == 1
+        assert result["required_downloaded"] == 0
+
+    @pytest.mark.asyncio
+    async def test_a_core_that_needs_none_of_them_counts_none(self):
+        """mGBA opens all three and demands none — nothing is a prerequisite."""
+        fw = self._service(("mgba_libretro", "mGBA"))
+        result = await fw.check_platform_bios("gba")
+
+        assert result["server_count"] == 3
+        assert result["required_count"] == 0
+        for f in result["files"]:
+            assert f["required_by_active"] is False
+            assert f["used_by_active"] is True
+
+    @pytest.mark.asyncio
+    async def test_wanted_does_not_move_with_the_active_core(self):
+        """The machine's answer about a file is the same whichever core is picked.
+
+        This is what stops one file reading "known" on one surface and "unknown"
+        on another: only the launch-scoped fields differ between the two runs.
+        """
+        gpsp = await self._service(("gpsp_libretro", "gpSP")).check_platform_bios("gba")
+        mgba = await self._service(("mgba_libretro", "mGBA")).check_platform_bios("gba")
+
+        assert {f["file_name"]: f["wanted"] for f in gpsp["files"]} == {
+            f["file_name"]: f["wanted"] for f in mgba["files"]
+        }
+        assert gpsp["required_count"] != mgba["required_count"]
+
+    @pytest.mark.asyncio
+    async def test_an_unresolved_core_falls_back_to_every_declaring_emulator(self):
+        """No resolvable core → a file any emulator requires counts as required.
+
+        The documented safe default: with nothing to filter by, the platform
+        shows what it would need in the worst case rather than clearing the
+        warning.
+        """
+        fw = self._service((None, None))
+        result = await fw.check_platform_bios("gba")
+
+        assert result["server_count"] == 3
+        assert "active_core" not in result
+        gba_file = next(f for f in result["files"] if f["file_name"] == "gba_bios.bin")
+        assert gba_file["required_by_active"] is True
+        assert gba_file["used_by_active"] is True
+        assert result["required_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_a_core_no_declaration_names_requires_nothing(self):
+        """An active core no placement mentions opens none of these files."""
+        fw = self._service(("snes9x_libretro", "Snes9x"))
+        result = await fw.check_platform_bios("gba")
+
+        assert result["required_count"] == 0
+        for f in result["files"]:
+            assert f["used_by_active"] is False
+            assert f["required_by_active"] is False
+
+
+class TestCheckPlatformBiosPreResolvedCore:
+    """R8: ``check_platform_bios`` takes a pre-resolved ``active_core_so``.
+
+    The per-game game-detail path resolves the active ``.so`` upstream (folding
+    the ``emulator_override`` pin) and passes it in; the platform-level callers
+    pass ``None`` to mean "use the system default". The filter's ``required_count``
+    must follow the pre-resolved core, not the system default.
+    """
+
+    def _gba_two_core_service(self, fw, firmware_list):
+        """Wire a gba demand where gpSP requires gba_bios.bin and mGBA does not."""
+        _resolver(fw).declare(
+            "gba_bios.bin",
+            required_by=[_id("gpsp_libretro")],
+            optional_for=[_id("mgba_libretro")],
+            description="GBA BIOS",
+        )
+        _stub_listing(fw, firmware_list)
+        _inline_executor(fw)
+
+    @pytest.mark.asyncio
+    async def test_pre_resolved_core_drives_filter_over_system_default(self, fw, tmp_path):
+        """A passed-in ``active_core_so`` overrides the system default for required_count.
+
+        The system default (set on the fake) is mGBA — which treats gba_bios.bin as
+        optional. Passing the per-game override ``gpsp_libretro`` flips the file to
+        required, proving the pre-resolved core (not the system default) feeds the
+        filter and that ``get_active_core`` is NOT consulted when a core is supplied.
+        """
+        firmware_list = [
+            {"id": 1, "file_name": "gba_bios.bin", "file_path": "bios/gba/gba_bios.bin", "md5_hash": ""},
+        ]
+        self._gba_two_core_service(fw, firmware_list)
+        # System default = mGBA (optional). The per-game override should win.
+        fw._config.core_info.active_core = ("mgba_libretro", "mGBA")
+
+        with patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path / "bios"))):
+            result = await fw.check_platform_bios("gba", launching_emulator=_pick(_id("gpsp_libretro"), "gpSP"))
+
+        assert result["needs_bios"] is True
+        assert result["required_count"] == 1  # gpSP requires gba_bios.bin
+        # The pre-resolved core short-circuits the system-default read entirely.
+        assert fw._config.core_info.active_core_calls == []
+
+    @pytest.mark.asyncio
+    async def test_none_falls_back_to_system_default(self, fw, tmp_path):
+        """``launching_emulator=None`` resolves the platform's own emulator.
+
+        Same declarations, no per-game core: the platform-level path resolves the
+        platform's pick (mGBA → optional) so ``required_count`` is 0 — the
+        opposite of the override case, locking in the result-flip.
+        """
+        firmware_list = [
+            {"id": 1, "file_name": "gba_bios.bin", "file_path": "bios/gba/gba_bios.bin", "md5_hash": ""},
+        ]
+        self._gba_two_core_service(fw, firmware_list)
+        _set_platform_emulator(fw, "mgba_libretro", "mGBA")
+
+        with patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path / "bios"))):
+            result = await fw.check_platform_bios("gba")
+
+        assert result["needs_bios"] is True
+        assert result["required_count"] == 0  # mGBA treats gba_bios.bin as optional
+        # None → the platform's emulators were read once, for the system "gba".
+        assert _core_info(fw).emulator_options_calls == ["gba"]
+
+
+class TestDownloadFirmwareErrors:
+    """Tests for download_firmware error handling."""
+
+    @pytest.mark.asyncio
+    async def test_fetch_metadata_error(self, fw):
+        """Fetch firmware metadata failure returns error."""
+        assert isinstance(fw._config.romm_api, MagicMock)
+        fw._config.romm_api.get_firmware.side_effect = Exception("not found")
+        _inline_executor(fw)
+
+        result = await fw.download_firmware(999)
+        assert result["success"] is False
+
+    @pytest.mark.asyncio
+    async def test_malformed_file_path_returns_failure_and_persists_nothing(self, plugin, fw, tmp_path):
+        """A firmware whose file_path yields an empty slug fails the BiosFile invariant.
+
+        The service catches the aggregate's ValueError, returns the canonical
+        download-failure shape, removes the renamed file, and persists no record
+        — no exception escapes.
+        """
+        content = b"firmware bytes"
+        # file_path has a single segment → parse_firmware_slug returns "" →
+        # BiosFile.mark_downloaded raises ValueError("platform_slug ... required").
+        fw_detail = {
+            "id": 7,
+            "file_name": "orphan.bin",
+            "file_path": "orphan.bin",
+            "file_size_bytes": len(content),
+            "md5_hash": "",
+        }
+
+        bios_dir = tmp_path / "bios"
+        bios_dir.mkdir()
+
+        def fake_download(firmware_id, filename, dest):
+            with open(dest, "wb") as f:
+                f.write(content)
+
+        fw._demand._retrodeck_paths = FakeRetroDeckPaths(bios=str(bios_dir))
+        _set_loop(fw, asyncio.get_running_loop())
+
+        with (
+            patch.object(plugin._romm_api, "get_firmware", return_value=fw_detail),
+            patch.object(plugin._romm_api, "download_firmware", side_effect=fake_download),
+        ):
+            result = await fw.download_firmware(7)
+
+        # Canonical failure shape, no exception escaped.
+        assert result["success"] is False
+        assert "reason" in result
+        assert "Invalid firmware metadata" in result["message"]
+        # The renamed/downloaded file was cleaned up — nothing left dangling.
+        assert not os.path.exists(os.path.join(str(bios_dir), "orphan.bin"))
+        # No BiosFile record persisted (empty slug key would be ("", "orphan.bin")).
+        assert plugin._uow.bios_files.get("", "orphan.bin") is None
+        assert list(plugin._uow.bios_files.iter_all()) == []
+
+
+# ── Firmware list cache tests ─────────────────────────────
+
+
+class TestFirmwareListCache:
+    """Tests for _get_firmware_list caching behaviour."""
+
+    def _make_service(self, romm_api, uow_factory=None):
+        return _make_firmware_service(romm_api=romm_api, uow_factory=uow_factory)
+
+    def test_firmware_list_cached(self):
+        """Second call returns cached data without hitting the API again."""
+        api = MagicMock()
+        api.list_firmware.return_value = [{"id": 1, "file_name": "bios.bin"}]
+        fw = self._make_service(api)
+
+        result1 = fw._listing.get_firmware_list()
+        result2 = fw._listing.get_firmware_list()
+
+        assert result1 == [{"id": 1, "file_name": "bios.bin"}]
+        assert result2 == result1
+        assert api.list_firmware.call_count == 1
+
+    def test_firmware_cache_ttl_expired(self):
+        """After TTL expires, _get_firmware_list re-fetches from the API."""
+        api = MagicMock()
+        api.list_firmware.side_effect = [
+            [{"id": 1}],
+            [{"id": 1}, {"id": 2}],
+        ]
+        fw = self._make_service(api)
+
+        result1 = fw._listing.get_firmware_list()
+        assert len(result1) == 1
+        assert api.list_firmware.call_count == 1
+
+        # Simulate TTL expiry by backdating the wall-clock cache epoch
+        fw._listing._firmware_cache_epoch = fw._config.clock.time() - 3601
+
+        result2 = fw._listing.get_firmware_list()
+        assert len(result2) == 2
+        assert api.list_firmware.call_count == 2
+
+    def test_firmware_cache_ttl_uses_wall_clock_across_restart(self):
+        """Cache restored from the DB with stale ``cached_at`` must re-fetch.
+
+        Regression for #344: monotonic-based TTL reset on every plugin
+        restart, making a restored cache appear fresh forever.
+        """
+        clock = _make_clock()
+        # Pin the cache epoch two hours before the clock's current wall time —
+        # well past _FIRMWARE_CACHE_TTL (1 h).
+        stale_epoch = clock.time() - 7200
+        uow = FakeUnitOfWork()
+        _seed_firmware_cache(
+            uow,
+            [
+                FirmwareCacheEntry.cached(
+                    id=1, name="bios.bin", platform_slug="dc", file_size_bytes=2048, cached_at=stale_epoch
+                )
+            ],
+        )
+
+        api = MagicMock()
+        api.list_firmware.return_value = [{"id": 2, "file_name": "fresh.bin"}]
+        fw = _make_firmware_service(romm_api=api, uow_factory=FakeUnitOfWorkFactory(uow), clock=clock)
+
+        # The restored in-memory cache is reconstructed from the thin aggregate:
+        # synthetic file_path round-trips through parse_firmware_slug, md5 dropped.
+        assert fw._listing._firmware_cache == [
+            {
+                "id": 1,
+                "file_name": "bios.bin",
+                "file_path": "bios/dc/bios.bin",
+                "file_size_bytes": 2048,
+                "md5_hash": "",
+            }
+        ]
+        assert fw._listing._firmware_cache_epoch == stale_epoch
+
+        result = fw._listing.get_firmware_list()
+
+        assert result == [{"id": 2, "file_name": "fresh.bin"}]
+        assert api.list_firmware.call_count == 1
+
+    def test_firmware_cache_invalidate(self):
+        """Explicit invalidation triggers a re-fetch on next call."""
+        api = MagicMock()
+        api.list_firmware.side_effect = [
+            [{"id": 1}],
+            [{"id": 1}, {"id": 2}],
+        ]
+        fw = self._make_service(api)
+
+        fw._listing.get_firmware_list()
+        assert api.list_firmware.call_count == 1
+
+        fw.invalidate_firmware_cache()
+        result = fw._listing.get_firmware_list()
+        assert len(result) == 2
+        assert api.list_firmware.call_count == 2
+
+    def test_firmware_cache_fallback_on_error(self):
+        """HTTP error returns stale cached data instead of raising."""
+        api = MagicMock()
+        api.list_firmware.side_effect = [
+            [{"id": 1, "file_name": "bios.bin"}],
+            Exception("connection refused"),
+        ]
+        fw = self._make_service(api)
+
+        result1 = fw._listing.get_firmware_list()
+        assert len(result1) == 1
+
+        # Expire the cache so it tries to re-fetch (must be far enough in the past
+        # to exceed TTL even when system uptime is short)
+        fw._listing._firmware_cache_epoch = fw._config.clock.time() - 7200
+
+        result2 = fw._listing.get_firmware_list()
+        assert result2 == result1  # Falls back to stale cache
+        assert api.list_firmware.call_count == 2
+
+    def test_firmware_cache_error_no_cache_raises(self):
+        """HTTP error with no prior cache re-raises so callers can detect offline."""
+        api = MagicMock()
+        api.list_firmware.side_effect = Exception("connection refused")
+        fw = self._make_service(api)
+
+        with pytest.raises(Exception, match="connection refused"):
+            fw._listing.get_firmware_list()
+
+
+class TestFirmwareCachePersistence:
+    """Tests for the SQLite firmware-cache round-trip via the Unit of Work."""
+
+    def test_cache_loaded_from_db_on_init(self):
+        """Firmware cache restored from the DB when entries are present."""
+        uow = FakeUnitOfWork()
+        _seed_firmware_cache(
+            uow,
+            [
+                FirmwareCacheEntry.cached(
+                    id=1, name="bios.bin", platform_slug="dc", file_size_bytes=512, cached_at=1000.0
+                )
+            ],
+        )
+
+        fw = _make_firmware_service(uow_factory=FakeUnitOfWorkFactory(uow))
+
+        # Reconstructed thin dict: synthetic file_path, md5 dropped.
+        assert fw._listing._firmware_cache == [
+            {
+                "id": 1,
+                "file_name": "bios.bin",
+                "file_path": "bios/dc/bios.bin",
+                "file_size_bytes": 512,
+                "md5_hash": "",
+            }
+        ]
+        assert fw._listing._firmware_cache_epoch == 1000.0
+
+    def test_empty_db_cache_leaves_memory_none(self):
+        """Empty DB cache doesn't populate the in-memory cache."""
+        fw = _make_firmware_service(uow_factory=FakeUnitOfWorkFactory(FakeUnitOfWork()))
+        assert fw._listing._firmware_cache is None
+
+    def test_db_read_failure_handled_gracefully(self):
+        """A repo error during restore doesn't crash init."""
+        uow = FakeUnitOfWork()
+        with patch.object(uow.firmware_cache, "iter_all", side_effect=OSError("db locked")):
+            fw = _make_firmware_service(uow_factory=FakeUnitOfWorkFactory(uow))
+        assert fw._listing._firmware_cache is None
+
+    def test_cache_persisted_after_http_fetch(self, plugin, fw):
+        """Firmware cache written to the DB after a successful HTTP fetch."""
+        firmware_list = [{"id": 1, "file_name": "bios.bin", "file_path": "bios/dc/bios.bin", "file_size_bytes": 512}]
+        _stub_listing(fw, firmware_list)
+        fw._listing._firmware_cache = None  # Force refetch
+
+        result = fw._listing.get_firmware_list()
+
+        assert result == firmware_list
+        assert plugin._uow.firmware_cache.replace_count == 1
+        # The thin aggregate carries the parsed slug ("dc") and name.
+        stored = plugin._uow.firmware_cache.get("dc", "bios.bin")
+        assert stored is not None
+        assert stored.id == 1
+        assert stored.file_size_bytes == 512
+        assert stored.cached_at == fw._listing._firmware_cache_epoch
+
+    def test_invalidate_clears_persisted_cache(self, plugin, fw):
+        """invalidate_firmware_cache drops every DB cache row."""
+        _seed_firmware_cache(
+            plugin._uow,
+            [FirmwareCacheEntry.cached(id=1, name="x.bin", platform_slug="dc", file_size_bytes=10, cached_at=1.0)],
+        )
+        fw._listing._firmware_cache = [{"id": 1}]
+        fw._listing._firmware_cache_epoch = 1.0
+
+        fw.invalidate_firmware_cache()
+
+        assert fw._listing._firmware_cache is None
+        assert list(plugin._uow.firmware_cache.iter_all()) == []
+
+    def test_persist_failure_does_not_crash_fetch(self, plugin, fw):
+        """A DB write failure during fetch doesn't break the return value."""
+        firmware_list = [{"id": 1, "file_name": "bios.bin", "file_path": "bios/dc/bios.bin", "file_size_bytes": 512}]
+        _stub_listing(fw, firmware_list)
+        fw._listing._firmware_cache = None
+
+        with patch.object(plugin._uow.firmware_cache, "replace_all", side_effect=OSError("disk full")):
+            result = fw._listing.get_firmware_list()
+
+        assert result == firmware_list
+        assert fw._listing._firmware_cache == firmware_list
+
+
+class TestDeletePlatformBiosIOLogsWarnings:
+    """Coverage for the OSError-warning path in ``_delete_recorded_io``.
+
+    Reached here through the platform-wide button, and shared with the row and
+    folder ones — all three run that loop under different record predicates.
+    """
+
+    @pytest.mark.asyncio
+    async def test_logs_warning_and_collects_error_when_remove_fails(self, plugin, fw, caplog):
+        """A per-file OSError surfaces as a logger.warning and an error entry."""
+        import logging
+
+        fake_files = FakeFirmwareFileStore({"/fake/bios/scph5501.bin": b"\x00", "/fake/bios/scph5502.bin": b"\x00"})
+        fake_files.remove_failures.add("/fake/bios/scph5501.bin")
+        fw._deletion._firmware_file_store = fake_files
+
+        for name in ("scph5501.bin", "scph5502.bin"):
+            plugin._uow.bios_files.save(
+                BiosFile.mark_downloaded(
+                    platform_slug="psx",
+                    file_name=name,
+                    file_path=f"/fake/bios/{name}",
+                    downloaded_at="2026-01-01T00:00:00+00:00",
+                    firmware_id=None,
+                )
+            )
+
+        with caplog.at_level(logging.WARNING):
+            result = await fw.delete_platform_bios("psx")
+
+        # One file deleted (the second), one failed with a logged warning.
+        assert result["success"] is False
+        assert result["deleted_count"] == 1
+        assert any("scph5501.bin" in record.getMessage() for record in caplog.records)
+        # The failing file's BIOS record must remain (it wasn't actually removed).
+        assert plugin._uow.bios_files.get("psx", "scph5501.bin") is not None
+        # The successful file's BIOS record is cleared.
+        assert plugin._uow.bios_files.get("psx", "scph5502.bin") is None
+
+
+class TestBadPathFirmwareCallables:
+    """Coverage for the three previously-untested firmware-callable error paths.
+
+    Each test wires a fresh ``FirmwareService`` against the seeded
+    ``FakeRommApi`` fixture instead of the plugin's ``MagicMock`` so the
+    failure injection runs through the real Protocol surface.
+    """
+
+    def _build_service(self, fake_romm_api, *, uow=None):
+        """Build a fresh ``FirmwareService`` wired against the supplied fake API."""
+        if uow is None:
+            uow = FakeUnitOfWork()
+        return _make_firmware_service(
+            romm_api=fake_romm_api,
+            uow_factory=FakeUnitOfWorkFactory(uow),
+            firmware_file_store=FakeFirmwareFileStore(),
+        )
+
+    def test_invalidate_cache_logs_warning_when_db_clear_fails(self, fake_romm_api, caplog):
+        """A DB clear raising ``OSError`` is swallowed with a warning log."""
+        import logging
+
+        uow = FakeUnitOfWork()
+        fw = self._build_service(fake_romm_api, uow=uow)
+        fw._listing._firmware_cache = [{"id": 1, "file_name": "bios.bin"}]
+        fw._listing._firmware_cache_epoch = 1.0
+
+        with (
+            patch.object(uow.firmware_cache, "clear", side_effect=OSError("disk full")),
+            caplog.at_level(logging.WARNING),
+        ):
+            fw.invalidate_firmware_cache()  # must not raise
+
+        # In-memory cache cleared regardless of DB failure.
+        assert fw._listing._firmware_cache is None
+        assert fw._listing._firmware_cache_epoch == 0
+        # The failure surfaced as a warning.
+        assert any("disk full" in record.getMessage() for record in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_download_all_firmware_returns_error_with_zero_when_list_fetch_fails(self, fake_romm_api, caplog):
+        """Initial ``list_firmware`` failure short-circuits with ``downloaded=0``."""
+        import logging
+
+        fw = self._build_service(fake_romm_api)
+        _set_loop(fw, asyncio.get_running_loop())
+        fake_romm_api.fail_on_next(OSError("connection reset"))
+
+        with caplog.at_level(logging.ERROR):
+            result = await fw.download_all_firmware("dc")
+
+        assert result["success"] is False
+        assert result["downloaded"] == 0
+        assert "message" in result
+        # The cache was not populated by the failed fetch.
+        assert fw._listing._firmware_cache is None
+
+    @pytest.mark.asyncio
+    async def test_download_required_firmware_returns_error_with_zero_when_list_fetch_fails(
+        self, fake_romm_api, caplog
+    ):
+        """Initial ``list_firmware`` failure short-circuits with ``downloaded=0``."""
+        import logging
+
+        fw = self._build_service(fake_romm_api)
+        _set_loop(fw, asyncio.get_running_loop())
+        fake_romm_api.fail_on_next(OSError("connection reset"))
+
+        with caplog.at_level(logging.ERROR):
+            result = await fw.download_required_firmware("dc")
+
+        assert result["success"] is False
+        assert result["downloaded"] == 0
+        assert "message" in result
+        # The cache was not populated by the failed fetch.
+        assert fw._listing._firmware_cache is None

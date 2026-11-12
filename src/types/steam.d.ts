@@ -1,0 +1,175 @@
+declare var SteamClient: {
+  Apps: {
+    AddShortcut(appName: string, exePath: string, startDir: string, launchArgs: string): Promise<number>;
+    RemoveShortcut(appId: number): void;
+    SetShortcutName(appId: number, name: string): void;
+    SetShortcutExe(appId: number, exePath: string): void;
+    SetShortcutStartDir(appId: number, startDir: string): void;
+    SetShortcutIcon(appId: number, path: string): void;
+    SetAppLaunchOptions(appId: number, options: string): void;
+    OpenAppSettingsDialog(appId: number, section: string): void;
+    SetCustomArtworkForApp(
+      appId: number,
+      base64Data: string,
+      imageType: "jpg" | "png",
+      assetType: number,
+    ): Promise<void>;
+    ClearCustomArtworkForApp(appId: number, assetType: number): Promise<void>;
+    // The runtime may invoke the callback with no details before the app's
+    // data is loaded — `details` is genuinely absent on early fires.
+    RegisterForAppDetails(
+      appId: number,
+      callback: (details: SteamAppDetails | undefined) => void,
+    ): { unregister: () => void };
+    RunGame(gameId: string | number, launchId: string, param2: number, param3: number): void;
+    TerminateApp(appId: number, force: boolean): void;
+    RegisterForGameActionStart(
+      callback: (gameActionId: number, appIdStr: string, action: string, launchSource: number) => void,
+    ): { unregister: () => void };
+    CancelGameAction(gameActionId: number): void;
+  };
+  GameSessions: {
+    RegisterForAppLifetimeNotifications(
+      callback: (update: { unAppID: number; nInstanceID: number; bRunning: boolean }) => void,
+    ): { unregister: () => void };
+  };
+  System: {
+    GetSystemInfo(): Promise<{ sHostname: string; [key: string]: any }>;
+    // Restart the DEVICE — a full reboot, not a client restart. Takes no
+    // arguments. Optional because a future Steam build may not carry it, and
+    // every call site feature-detects rather than offering a button that would
+    // do nothing.
+    //
+    // The data-location notice needs it and `User.StartRestart` will not do:
+    // restarting the Steam client reloads the frontend but does not start the
+    // plugin's backend again, and the move that notice is about happens on the
+    // plugin's next start.
+    RestartPC?: () => void;
+  };
+  User: {
+    // Restart the whole Steam client (closes and reopens Steam). `force` skips the
+    // "are you sure" path. Used as the deterministic "free memory" action — a full
+    // client restart resets the renderer's per-session heap budget (#1383).
+    StartRestart(force: boolean): void;
+  };
+};
+
+interface SteamAppDetails {
+  // The two launch-options fields the runtime exposes — keys vary by Steam
+  // build, so we accept either. Anything else is intentionally untyped here:
+  // consumers should narrow before reading.
+  strLaunchOptions?: string;
+  LaunchOptions?: string;
+  // The shortcut's executable path. Used as the RomM ownership marker:
+  // shortcuts whose exe ends in `/bin/rom-launcher` are ours.
+  strShortcutExe?: string;
+  strDisplayName?: string;
+  strShortcutStartDir?: string;
+}
+
+interface SteamPerClientData {
+  clientid: string;
+  client_name: string;
+  installed: boolean;
+  streaming_to_local_client?: boolean;
+}
+
+interface SteamAppOverview {
+  appid: number;
+  display_name: string;
+  strDisplayName: string;
+  app_type?: number;
+  controller_support?: number;
+  metacritic_score?: number;
+  minutes_playtime_forever?: number;
+  minutes_playtime_last_two_weeks?: number;
+  rt_last_time_played?: number;
+  rt_last_time_played_or_installed?: number;
+  // Epoch-seconds cache-buster for the library tile's custom-image URL
+  // (`/customimage/{appid}?v={rt_custom_image_mtime}`). Steam stamps it itself
+  // when artwork is set through SetCustomArtworkForApp or on a client restart.
+  rt_custom_image_mtime?: number;
+  m_setStoreCategories?: Set<number>;
+  local_per_client_data?: SteamPerClientData;
+  per_client_data?: SteamPerClientData[];
+  GetCanonicalReleaseDate?(): number;
+  BHasStoreCategory?(category: number): boolean;
+  BIsModOrShortcut?(): boolean;
+  BHasRecentlyLaunched?(): boolean;
+  GetGameID?(): string;
+  GetPrimaryAppID?(): number;
+}
+
+// Keep the old name as an alias for backwards compatibility with existing code
+type AppStoreOverview = SteamAppOverview;
+
+interface SteamCollection {
+  AsDragDropCollection(): {
+    AddApps(overviews: SteamAppOverview[]): void;
+    RemoveApps(overviews: SteamAppOverview[]): void;
+  };
+  Save(): Promise<void>;
+  Delete(): Promise<void>;
+  allApps: SteamAppOverview[];
+  apps: { keys(): IterableIterator<number>; has(appId: number): boolean };
+  displayName: string;
+  id: string;
+}
+
+declare var collectionStore: {
+  // Populated asynchronously by Steam — absent until the desktop-apps
+  // collection is built, so reads must guard.
+  deckDesktopApps?: { apps: Map<number, any> };
+  localGamesCollection?: { apps: Map<number, any> };
+  userCollections: SteamCollection[];
+  GetCollection(id: string): SteamCollection | undefined;
+  GetCollectionIDByUserTag(tag: string): string | null;
+  GetUserCollectionsByName(name: string): SteamCollection[];
+  NewUnsavedCollection(tag: string, filter?: unknown, overviews?: SteamAppOverview[]): SteamCollection;
+};
+
+declare var appStore: {
+  GetAppOverviewByAppID(appId: number): SteamAppOverview | null;
+  allApps: SteamAppOverview[];
+};
+
+// `SteamUIStore` — a Steam SP global, genuinely absent (hence `undefined`) or
+// `null` on some builds/timing, so every read guards. `RunningApps` is optional
+// for the same reason; it is the running-app surface behind `utils/runningApps`,
+// and its head is the foreground app (Steam's `MainRunningApp` is `RunningApps[0]`).
+declare var SteamUIStore:
+  | {
+      RunningApps?: SteamAppOverview[];
+      // Focus a running app in gamescope — pure UI selection, not a launch. The
+      // state-aware Resume button (#1313) calls this + NavigateToRunningApp to
+      // foreground a live session (Steam's own "Resume Game" path).
+      SetRunningApp(appId: number): void;
+      // Navigate to the running-app screen. Optional — absent on older SteamUI
+      // builds, where the Resume path falls back to Navigation.Navigate("/apprunning").
+      NavigateToRunningApp?(force?: boolean): void;
+    }
+  | null
+  | undefined;
+
+declare var appDetailsStore: {
+  GetDescriptions(appId: number): any;
+  GetAssociations(appId: number): any;
+  GetAppData(appId: number): any;
+  SaveCustomLogoPosition(overview: any, position: any): void;
+};
+
+declare var appDetailsCache: {
+  SetCachedDataForApp(appId: number, key: string, num: number, data: any): void;
+};
+
+interface MobxGlobals {
+  /** Mobx safety gate — flipped true around state mutations on Steam's stores. */
+  allowStateChanges: boolean;
+}
+
+/**
+ * Steam injects mobx onto the page; `__mobxGlobals` is the singleton state
+ * holder. Declared on `globalThis` so callers can read it without an
+ * unchecked cast.
+ */
+declare var __mobxGlobals: MobxGlobals | undefined;

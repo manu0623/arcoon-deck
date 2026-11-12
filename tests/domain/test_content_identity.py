@@ -1,0 +1,130 @@
+"""Parsing a game's own identity out of its bytes.
+
+Every case here builds the bytes by hand rather than shipping a ROM: the point is the
+format's layout, and a fixture states exactly which offsets a reader depends on.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from domain.content_identity import (
+    ContentIdentity,
+    IdentityKind,
+    disc_serial,
+    dreamcast_product_number,
+    gamecube_game_code,
+    n3ds_partition_offset,
+    n3ds_title_id,
+)
+
+
+def _ncsd_head(*, units: int = 0x20) -> bytes:
+    """A 3DS cart header: NCSD magic at 0x100, first partition offset at 0x120."""
+    head = bytearray(0x200)
+    head[0x100:0x104] = b"NCSD"
+    head[0x120:0x124] = units.to_bytes(4, "little")
+    return bytes(head)
+
+
+def _ncch_head(program_id: int, *, magic: bytes = b"NCCH") -> bytes:
+    head = bytearray(0x400)
+    head[0x100:0x104] = magic
+    head[0x118:0x120] = program_id.to_bytes(8, "little")
+    return bytes(head)
+
+
+class TestDiscSerial:
+    def test_a_ps2_boot_line_yields_the_hyphenated_serial(self) -> None:
+        text = "BOOT2 = cdrom0:\\SLUS_203.12;1\nVER = 1.00\nVMODE = NTSC\n"
+
+        assert disc_serial(text) == ContentIdentity("SLUS-20312", IdentityKind.DISC_SERIAL, "PS2 BOOT2 line")
+
+    def test_a_ps1_boot_line_is_read_too(self) -> None:
+        text = "BOOT = cdrom:\\SCES_123.45;1\nTCB = 4\nEVENT = 10\n"
+
+        assert disc_serial(text) == ContentIdentity("SCES-12345", IdentityKind.DISC_SERIAL, "PS1 BOOT line")
+
+    def test_a_hyphenated_boot_serial_is_normalised_the_same_way(self) -> None:
+        # Publishers and regions spell the separator both ways; one id comes out.
+        assert disc_serial("BOOT2 = cdrom0:\\SLPS-01234;1\n").save_id == "SLPS-01234"
+
+    def test_a_serial_shaped_token_off_the_boot_line_is_ignored(self) -> None:
+        # Licence text and padding are full of serial-like strings; the boot line is the
+        # one the console itself follows, so only it may answer.
+        text = "Copyright SCUS_944.26 and SLUS_999.99\nVER = 1.00\n"
+
+        assert disc_serial(text) is None
+
+    def test_no_boot_line_at_all_refuses(self) -> None:
+        assert disc_serial("") is None
+        assert disc_serial("BOOT2 = cdrom0:\\NOTASERIAL;1\n") is None
+
+
+class TestDreamcastProductNumber:
+    def _ip_bin(self, product: bytes) -> bytes:
+        head = bytearray(0x100)
+        head[0:16] = b"SEGA SEGAKATANA "
+        head[0x40 : 0x40 + len(product)] = product
+        return bytes(head)
+
+    def test_the_product_number_is_the_id(self) -> None:
+        identity = dreamcast_product_number(self._ip_bin(b"T-97063D  "))
+
+        assert identity is not None
+        assert identity.save_id == "T-97063D"
+        assert identity.kind == IdentityKind.PRODUCT_NUMBER
+
+    def test_an_image_without_the_ip_bin_magic_refuses(self) -> None:
+        # Otherwise ten bytes of any header would be read as a product number.
+        assert dreamcast_product_number(b"\x00" * 0x100) is None
+
+    def test_a_header_too_short_to_hold_the_field_refuses(self) -> None:
+        assert dreamcast_product_number(b"SEGA SEGAKATANA " + b"\x00" * 0x20) is None
+
+
+class TestGamecubeGameCode:
+    def test_the_four_character_code_is_the_id(self) -> None:
+        identity = gamecube_game_code(b"GMSE01" + b"\x00" * 0x1A)
+
+        assert identity is not None
+        assert identity.save_id == "GMSE"
+        assert identity.kind == IdentityKind.GAME_CODE
+
+    def test_a_non_gamecube_console_byte_refuses(self) -> None:
+        assert gamecube_game_code(b"XXXX01" + b"\x00" * 0x1A) is None
+
+    def test_an_unknown_region_refuses(self) -> None:
+        # The region byte is the only thing separating a real header from four printable
+        # bytes at the front of an unrelated file.
+        assert gamecube_game_code(b"GMZZ01" + b"\x00" * 0x1A) is None
+
+
+class TestN3ds:
+    def test_the_partition_offset_is_stated_in_media_units(self) -> None:
+        assert n3ds_partition_offset(_ncsd_head(units=0x20)) == 0x4000
+
+    def test_a_bare_ncch_has_no_partition_offset(self) -> None:
+        assert n3ds_partition_offset(_ncch_head(0x0004000000054000)) is None
+
+    def test_a_zero_partition_offset_refuses(self) -> None:
+        assert n3ds_partition_offset(_ncsd_head(units=0)) is None
+
+    def test_the_program_id_is_the_title_id(self) -> None:
+        identity = n3ds_title_id(_ncch_head(0x0004000000054000))
+
+        assert identity is not None
+        assert identity.save_id == "0004000000054000"
+        assert identity.kind == IdentityKind.TITLE_ID
+
+    def test_a_title_outside_the_application_category_refuses(self) -> None:
+        # A system title has no save this bank could place, and reporting its id would
+        # point the caller at a folder the emulator never writes.
+        assert n3ds_title_id(_ncch_head(0x0004013000001A02)) is None
+
+    def test_a_non_ncch_blob_refuses(self) -> None:
+        assert n3ds_title_id(b"\x00" * 0x200) is None
+
+    @pytest.mark.parametrize("size", [0, 4, 0x118, 0x11F])
+    def test_a_header_too_short_for_the_field_refuses(self, size: int) -> None:
+        assert n3ds_title_id(b"NCCH" + b"\x00" * max(size - 4, 0)) is None

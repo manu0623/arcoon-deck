@@ -1,0 +1,50 @@
+/* Site palette, taken from the plugin mark: a deep Steam-blue shell with a
+   lighter blue for interactive accents. Material's named palettes have nothing
+   in this range, so both schemes are set as custom colours. */
+
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: #2d5876;
+  --md-primary-fg-color--light: #4795c9;
+  --md-primary-fg-color--dark: #1b3549;
+  --md-accent-fg-color: #2a6f9e;
+  --md-accent-fg-color--transparent: #2a6f9e1a;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #1a3549;
+  --md-primary-fg-color--light: #2d5876;
+  --md-primary-fg-color--dark: #12222f;
+  --md-accent-fg-color: #66c0f4;
+  --md-accent-fg-color--transparent: #66c0f41a;
+  --md-typeset-a-color: #8fd0f7;
+}
+
+/* The landing page's mark sits beside its heading rather than above it, so the
+   two read as one line.
+
+   It comes in through ::before rather than as an <img> in the Markdown. The mark
+   is decorative — the heading it sits next to already says the name — and a CSS
+   background is decorative by construction: nothing to give alt text to, and
+   nothing for a screen reader to announce twice. It also keeps the Markdown a
+   plain heading, so the page title, the nav label and the anchor are untouched.
+
+   Sized in em so it tracks the heading, which Material already scales down on
+   narrow viewports; a px height would drift out of proportion there. Flex does
+   the centring, because the offset that would centre it by hand depends on the
+   font's cap height and would need re-deriving if the heading font changed. */
+.md-typeset h1.hero-title {
+  display: flex;
+  align-items: center;
+}
+
+.md-typeset h1.hero-title::before {
+  content: "";
+  background-image: url("../assets/logo-animated.gif");
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+  width: 1.9em;
+  height: 1.9em;
+  margin-right: 0.28em;
+  flex: none;
+}

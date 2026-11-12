@@ -1,0 +1,22 @@
+{
+  "first-line-heading": false,
+  "MD013": false,
+  "MD018": false,
+  "MD046": false,
+  "MD033": {
+    "allowed_elements": [
+      "a",
+      "b",
+      "code",
+      "details",
+      "div",
+      "h3",
+      "img",
+      "p",
+      "picture",
+      "source",
+      "sub",
+      "summary"
+    ]
+  }
+}

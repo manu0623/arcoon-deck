@@ -1,0 +1,357 @@
+[tools]
+node = "24"      # major pin — "lts" is a moving alias that silently jumps majors; CI uses node 24
+pnpm = "10.29.3" # exact — must match package.json "packageManager"; bump both together
+python = "3.11"  # match Decky Loader's embedded Python (libpython3.11)
+uv = "0.10.2"    # exact — uv creates the venv AND compiles the dependency locks; pin so the local resolver == the lock author
+deno = "2.8"     # minor pin — deno fmt is a formatter; a version jump can reformat Markdown (the CI drift we're killing)
+
+[env]
+_.python.venv = { path = ".venv", create = true }
+
+[tasks.setup]
+description = "Install JS and Python dependencies"
+run = ["pnpm install", "uv pip install -r requirements-dev.lock", "git config core.hooksPath .githooks"]
+
+[tasks.lock-update]
+description = "Recompile the pinned Python dependency locks from the requirements-*.txt sources (run after editing a source or bumping a pin)"
+# `--output-file=` (not `-o`): Renovate's pip-compile manager parses the uv
+# command recorded in each lock header and only recognizes the long `--output-file`
+# form with an `=`. `-o` makes it bail with "Option -o not supported (yet)", so it
+# can't recompile the lock on a dependency-update PR.
+run = [
+    "uv pip compile requirements-dev.txt --output-file=requirements-dev.lock",
+    "uv pip compile requirements-docs.txt --output-file=requirements-docs.lock",
+]
+
+[tasks.build]
+description = "Build frontend (dev: with source maps)"
+run = "pnpm build:dev"
+depends = ["setup"]
+
+[tasks.test]
+description = "Run Python tests"
+run = "python -m pytest tests/ -q"
+
+[tasks."test:frontend"]
+description = "Run frontend tests"
+run = "pnpm test"
+
+[tasks."test:frontend:coverage"]
+description = "Run frontend tests with coverage report"
+run = "pnpm test:coverage"
+
+[tasks."lint:md"]
+description = "Lint Markdown with markdownlint-cli2 (CI parity)"
+run = "pnpm exec markdownlint-cli2 \"**/*.md\" \"!node_modules\" \"!.worktrees\" \"!.venv\" \"!CHANGELOG.md\" \"!site\""
+
+[tasks.lint]
+description = "Check Cosmic Python architecture rules (layer imports + forbidden service calls) and Markdown"
+depends = ["lint:md"]
+run = [
+    "PYTHONPATH=py_modules lint-imports",
+    "python scripts/check_service_independence_contract.py",
+    "python scripts/check_callable_manifest.py",
+    "bash scripts/check_cosmic_call_bans.sh",
+    "python scripts/check_module_size.py",
+    "python scripts/check_aggregate_field_assignment.py",
+    "python scripts/check_uow_seam_nesting.py",
+    "python scripts/check_failure_shape.py --check",
+    "python scripts/check_404_not_unreachable.py --check",
+    "python scripts/check_urlopen_choke_point.py",
+    "bash scripts/check_no_bare_ignores.sh",
+    "python scripts/check_event_parity.py",
+    "python scripts/check_settings_owner.py",
+    "python scripts/check_sync_lifecycle_owner.py",
+    "python scripts/check_seam_owner.py",
+    "python scripts/check_read_only_module.py",
+    "python scripts/check_lock_sync.py",
+    "python scripts/check_markdown_links.py",
+    "python scripts/check_romm_min_version.py",
+    "cd py_modules/native && sha256sum -c libgavel-x86_64-linux.so.sha256",
+    "python scripts/check_vendored_trees.py",
+]
+
+[tasks.gate]
+description = "Run the full CI battery locally — every PR check in ci.yml, in one command (slow: full pytest + frontend build)"
+# depends: `test` (pytest) + `lint` (import-linter, the check_* scripts, markdownlint)
+# cover the Python-test and architecture-gate CI jobs. The run list below adds the
+# rest of ci.yml: the ruff/basedpyright half of the `lint` job, the whole `build`
+# job (eslint/prettier/build/typecheck/size), the `frontend-test` job (`pnpm test`
+# stands in for CI's `pnpm test:coverage` — pass/fail parity), and `markdown-format`
+# (`deno fmt --check`). `pnpm build` precedes `pnpm size` because size-limit measures
+# the built bundle. Not reproducible locally, so omitted: the SonarCloud scan +
+# sonar-gate (need SONAR_TOKEN and CI coverage artifacts).
+depends = ["test", "lint"]
+run = [
+    "ruff check .",
+    "ruff format --check .",
+    "basedpyright",
+    "pnpm lint",
+    "pnpm format:check",
+    "pnpm build",
+    "pnpm typecheck",
+    "pnpm size",
+    "pnpm test",
+    "deno fmt --check",
+]
+
+[tasks.deploy]
+description = "Deploy plugin files to Decky plugin directory"
+depends = ["build"]
+raw = true
+run = '''
+DEST="$HOME/homebrew/plugins/romm-tender"
+# The plugin dir is root-owned: Decky's root plugin_loader continuously re-owns the
+# dir + plugin.json back to root within ~1-2s as a tamper guard, so a plain
+# deck-owned rsync/cp hits "permission denied". The `dev` task makes this safe by
+# stopping plugin_loader and chowning the dir to deck around this deploy, so nothing
+# re-roots mid-flight. Run via `dev`, not `deploy` standalone, on a root-owned dir.
+# (After `mise run dev:setup` the tamper guard is off and the dir is deck-owned,
+# so standalone deploy — e.g. the initial push inside `dev:watch` — is safe.)
+mkdir -p "$DEST/dist" "$DEST/bin" "$DEST/defaults" "$DEST/py_modules"
+rsync -a --delete dist/ "$DEST/dist/"
+rsync -a --delete bin/ "$DEST/bin/"
+rsync -a --delete defaults/ "$DEST/defaults/"
+# A prior release install places the defaults/ files (config.json) at the plugin
+# ROOT, where the loaders look FIRST (root, then defaults/). A dev deploy only
+# refreshes defaults/, so a stale root copy from an earlier release would shadow
+# the freshly-deployed one.
+# Drop any root-level namesake so a dev deploy always reads the just-deployed defaults/.
+for f in defaults/*; do rm -f "$DEST/$(basename "$f")"; done
+rsync -a --delete py_modules/ "$DEST/py_modules/"
+cp -f main.py plugin.json package.json "$DEST/"
+# Every local deploy is a dev deploy — release zips are packaged in CI
+# (release.yml builds with the Decky CLI straight from the repo checkout), so
+# this deployed copy never feeds a release. decky-loader's file watcher runs on
+# every device — LIVE_RELOAD defaults to on and the shipped unit file sets no
+# value — but Loader.import_plugin re-loads only plugins carrying "debug" in
+# flags, and skips every other one. Injecting the flag into the DEPLOYED
+# plugin.json is what opts this plugin in. Never commit it to the repo
+# plugin.json: a release that shipped it would have every user's device restart
+# the plugin's backend and re-import its frontend whenever its dist/index.js
+# or main.py changed. Idempotent: re-deploys don't duplicate the flag.
+python3 - "$DEST/plugin.json" <<'PYEOF'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as f:
+    manifest = json.load(f)
+flags = manifest.setdefault("flags", [])
+if "debug" not in flags:
+    flags.append("debug")
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(manifest, f, indent=2)
+    f.write("\n")
+PYEOF
+'''
+
+[tasks.docs]
+description = "Serve the documentation site locally with live reload"
+run = "mkdocs serve"
+
+[tasks."docs:build"]
+description = "Build the documentation site (strict mode fails on broken links)"
+run = "mkdocs build --strict"
+
+[tasks.dev]
+description = "Build, deploy, and restart plugin loader; with a display arg also open windowed Big Picture on it"
+raw = true
+# The optional display arg reaches the script as $usage_display (mise exposes
+# usage-spec args as usage_<name> env vars); the complete directive feeds mise's
+# shell tab completion from the real outputs of this machine. Unlike dev:watch there
+# is NO default: omitted → $usage_display empty → dev stays deploy-only, no BPM.
+usage = '''
+arg "[display]" help="Monitor for the Big Picture window: 'internal' or an output name (dp2, DP-3, ...). Omit to deploy only, no BPM."
+complete "display" run="bash scripts/dev_open_bpm.sh --list"
+'''
+# A display target given? Fail fast on a typo before sudo / stopping the loader —
+# a bad name shouldn't prompt for sudo or kill the loader for nothing. Omitted →
+# $usage_display empty → this and the BPM open below are skipped (deploy-only).
+run = """
+if [ -n "${usage_display:-}" ]; then
+  bash scripts/dev_open_bpm.sh --resolve "$usage_display" >/dev/null
+fi
+sudo -v
+DEST="$HOME/homebrew/plugins/romm-tender"
+# plugin_loader runs as root and continuously re-owns the plugin dir + plugin.json
+# back to root within ~1-2s (Decky's tamper guard). A chown-then-deploy loses that
+# race: the rollup build between the chown and the cp is ~8s, so the dir is
+# root-owned again long before the copy runs ("permission denied"). Stop the loader
+# for the whole build+deploy so nothing re-roots mid-flight — then the chown sticks
+# and the deck-owned copy succeeds. The `trap` restarts the loader (loading the new
+# code) even if the build/deploy fails, so a failure never leaves the plugin dead.
+sudo systemctl stop plugin_loader
+trap 'sudo systemctl start plugin_loader' EXIT
+# The directory is made HERE rather than by the deploy: `~/homebrew/plugins` is
+# root-owned 0755, so `deck` cannot create anything in it, and since the
+# delivered folder name is pinned rather than inherited there may be no
+# Decky-installed directory of this name to fall into. sudo creates it, the
+# chown hands it over, and both are idempotent.
+sudo mkdir -p "$DEST"
+sudo chown -R "$(id -un):$(id -gn)" "$DEST"
+mise run deploy
+# With a display target, open windowed Big Picture on it after the deploy — plain
+# bash (not exec) so the EXIT trap still fires and restarts plugin_loader. The
+# helper is non-blocking and places the window on the chosen display.
+if [ -n "${usage_display:-}" ]; then
+  bash scripts/dev_open_bpm.sh "$usage_display"
+fi
+"""
+
+[tasks."dev:setup"]
+description = "One-time host setup for the live frontend dev loop (systemd drop-in + chown; uses sudo)"
+raw = true
+run = '''
+sudo -v
+DEST="$HOME/homebrew/plugins/romm-tender"
+# Decky's tamper guard (env CHOWN_PLUGIN_PATH, default "1") re-owns the plugin
+# dir + plugin.json back to root on every plugin load, so the deck user can't
+# write deploys into it while the loader runs. The drop-in turns the guard off
+# on this machine; drop-ins survive Decky self-updates (those rewrite only the
+# unit file). Every step below is idempotent — safe to re-run.
+sudo install -d /etc/systemd/system/plugin_loader.service.d
+printf '[Service]\nEnvironment=CHOWN_PLUGIN_PATH=0\n' | sudo tee /etc/systemd/system/plugin_loader.service.d/10-dev-loop.conf >/dev/null
+sudo systemctl daemon-reload
+sudo systemctl restart plugin_loader
+# Create the plugin dir if this machine has never deployed under this name —
+# `~/homebrew/plugins` is root-owned 0755, so `deck` cannot — and hand it (or an
+# existing root-owned one) to the deck user, so the watch loop's plain cp works
+# without sudo from here on.
+sudo mkdir -p "$DEST"
+sudo chown -R "$(id -un):$(id -gn)" "$DEST"
+# CEF DevTools (http://localhost:8080) need this marker file; warn, don't fail —
+# the hot-reload loop itself works without it.
+if [ ! -e "$HOME/.steam/steam/.cef-enable-remote-debugging" ]; then
+  echo "WARNING: ~/.steam/steam/.cef-enable-remote-debugging is missing — CEF DevTools on http://localhost:8080 won't work. Create the empty file and restart Steam to enable them."
+fi
+echo "Setup done. decky-loader's hot-reload watcher arms ~10 s after the restart."
+echo "Next: mise run dev:watch"
+'''
+
+[tasks."dev:watch"]
+description = "Live frontend dev loop: deploy, open windowed Big Picture, rebuild + hot-reload on every save"
+raw = true
+# The optional display arg reaches the script as $usage_display (mise exposes
+# usage-spec args as usage_<name> env vars); the complete directive feeds mise's
+# shell tab completion from the real outputs of this machine.
+usage = '''
+arg "[display]" help="Monitor for the Big Picture window: 'internal' or an output name (dp2, DP-3, ...)" default="internal"
+complete "display" run="bash scripts/dev_open_bpm.sh --list"
+'''
+run = '''
+DEST="$HOME/homebrew/plugins/romm-tender"
+# Preflight: without the dev:setup drop-in, plugin_loader re-owns the plugin dir
+# back to root within ~1-2s and every cp below dies with "permission denied".
+if ! systemctl show plugin_loader -p Environment | grep -q CHOWN_PLUGIN_PATH=0; then
+  echo "plugin_loader still runs Decky's tamper guard — run: mise run dev:setup" >&2
+  exit 1
+fi
+if [ ! -d "$DEST" ] || [ ! -w "$DEST" ]; then
+  echo "$DEST is missing or not writable — run: mise run dev:setup" >&2
+  exit 1
+fi
+# Fail fast on a typo'd display target before paying for the full deploy.
+bash scripts/dev_open_bpm.sh --resolve "$usage_display" >/dev/null
+# Full initial push (frontend build + rsync of everything). The `cp -f main.py`
+# inside deploy is itself a modify event on a watched file, so the watcher
+# hot-reloads the plugin with the fresh backend + frontend right away.
+mise run deploy
+# Open desktop Big Picture next to the editor — it renders the same gamepadui
+# React app as Game Mode, and Decky injects into desktop Steam too. Harmless
+# no-op if BPM is already open; if Steam isn't running, this starts it straight
+# into BPM. The helper also places the window on the chosen display (default:
+# internal panel) via a short-lived KWin script, and doesn't wait on Steam.
+bash scripts/dev_open_bpm.sh "$usage_display"
+# Rebuild on every src/ change, then cp the bundle into the deployed dist/.
+# cp (in-place modify), never mv/rsync: decky-loader's watcher reacts only to
+# create/modify events on dist/index.js + main.py — moves/renames are ignored.
+# The sourcemap goes first so the watched trigger file (index.js) lands last.
+exec pnpm exec rollup -c rollup.dev.config.js -w --watch.onEnd="cp -f dist/index.js.map '$DEST/dist/' && cp -f dist/index.js '$DEST/dist/'"
+'''
+
+[tasks."dev:push-backend"]
+description = "Push backend changes (py_modules/ + main.py) into the deployed plugin during a dev:watch session"
+raw = true
+run = '''
+DEST="$HOME/homebrew/plugins/romm-tender"
+# decky-loader's watcher matches only dist/index.js and main.py, so a
+# py_modules-only rsync never triggers a reload — that's why the cp of main.py
+# comes LAST: it's the modify event that makes the watcher reload the plugin
+# (backend subprocess restart + frontend re-import). For bin/ or defaults/
+# changes run the full `mise run deploy` instead.
+rsync -a --delete py_modules/ "$DEST/py_modules/"
+cp -f main.py "$DEST/main.py"
+'''
+
+[tasks."dev:ui-scale"]
+description = "Emulate Game Mode's metrics in Big Picture — size the window to the Deck's 1280x800 AND force its display scale (the dev loop otherwise lies about QAM height)"
+raw = true
+# The optional mode arg reaches the script as $usage_mode (mise exposes usage-spec
+# args as usage_<name> env vars).
+usage = '''
+arg "[mode]" help="'deck' (1.5, = Game Mode metrics), a bare factor (2.0-2.4 = 'Larger text', ~1.28 = docked 1080p, ~1.71 = docked 1440p), 'steam' (adopt the UI Scale set in Steam), or 'auto' (restore automatic scaling and exit)" default="deck"
+complete "mode" run="printf 'deck\\nsteam\\nauto\\n'"
+'''
+# Holds until Ctrl-C, then restores BOTH halves as they were BEFORE the run: the
+# scale (auto stays auto; a manual UI Scale is put back as it was, never flipped to
+# auto) and the Big Picture window's geometry + fullscreen state. Steam persists a
+# forced factor to config.vdf, so leaving it forced is not harmless.
+# `exec` so Ctrl-C / SIGTERM reach the script itself (mise is not left in the
+# signal path, which is what makes the restore reliable).
+run = '''
+exec python3 scripts/dev_ui_scale.py "$usage_mode"
+'''
+
+[tasks."dev:bpm"]
+description = "Open windowed Big Picture on a chosen monitor (no deploy, no watch loop)"
+raw = true
+usage = '''
+arg "[display]" help="Monitor for the Big Picture window: 'internal' or an output name (dp2, DP-3, ...)" default="internal"
+complete "display" run="bash scripts/dev_open_bpm.sh --list"
+'''
+# Opens BPM non-blocking (starting Steam straight into it if it isn't running)
+# and places the window on the chosen display via a short-lived KWin script —
+# the same helper dev:watch and dev:bpm-reset use, without their deploy /
+# restart halves. Pairs with a one-off `mise run dev` test build.
+run = '''
+exec bash scripts/dev_open_bpm.sh "$usage_display"
+'''
+
+[tasks."dev:bpm-reset"]
+description = "Restart Steam into windowed Big Picture (recovers the Decky UI after leaving and re-entering BPM)"
+raw = true
+usage = '''
+arg "[display]" help="Monitor for the Big Picture window: 'internal' or an output name (dp2, DP-3, ...)" default="internal"
+complete "display" run="bash scripts/dev_open_bpm.sh --list"
+'''
+# Fail fast on a typo'd display target before shutting Steam down.
+run = '''
+bash scripts/dev_open_bpm.sh --resolve "$usage_display" >/dev/null
+# Decky's UI survives only the FIRST Big Picture entry per Steam process:
+# leaving BPM and re-entering loses the Decky QAM until Steam restarts.
+echo "Shutting down Steam..."
+# Run steam through the user systemd manager, not this shell: mise + the venv
+# pollute PATH/VIRTUAL_ENV, which trips steam-jupiter's 32-bit runtime check.
+# systemd-run --user gives it the pristine session environment (see
+# scripts/dev_open_bpm.sh for the full rationale).
+if command -v systemd-run >/dev/null 2>&1; then
+  systemd-run --user --collect --quiet --wait -- steam -shutdown >/dev/null 2>&1 || true
+else
+  env -u VIRTUAL_ENV steam -shutdown >/dev/null 2>&1 || true
+fi
+# Wait for the running instance to actually exit (up to ~30 s) — reopening too
+# early just talks to the dying process.
+for _ in $(seq 1 30); do
+  if ! pgrep -x steam >/dev/null; then break; fi
+  sleep 1
+done
+if pgrep -x steam >/dev/null; then
+  echo "Steam is still running after 30 s — close it manually, then re-run this task." >&2
+  exit 1
+fi
+echo "Reopening Big Picture..."
+# The helper opens BPM non-blocking and places the window on the chosen
+# display (default: internal panel) via a short-lived KWin script.
+bash scripts/dev_open_bpm.sh "$usage_display"
+'''

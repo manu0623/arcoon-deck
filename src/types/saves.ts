@@ -1,0 +1,299 @@
+/**
+ * Save-sync types — per-file save status, sync conflicts, device attribution,
+ * slot-based browser shapes, and the initial save-setup wizard payload.
+ * Anything related to RomM save synchronization lives here.
+ */
+
+import type { RommErrorCode } from "./api";
+
+export interface SaveSyncSettings {
+  save_sync_enabled: boolean;
+  sync_before_launch: boolean;
+  sync_after_exit: boolean;
+  default_slot: string;
+  autocleanup_limit: number;
+}
+
+/** The `reason` slug the sync callables return when save sync is blocked because
+ *  RetroArch writes saves to the content directory (#239). A BENIGN SKIP — the
+ *  game still launches and no error is surfaced. Mirrors the backend
+ *  `SAVE_SYNC_IN_CONTENT_DIR_REASON`. */
+export const SAVEFILES_IN_CONTENT_DIR_REASON = "savefiles_in_content_dir";
+
+/** The `reason` slug the sync callables return when the game's emulator does not
+ *  keep a per-game save file set this plugin can carry — a shared card, a save
+ *  written inside the game file, a name with a hole in it, or a shape nobody has
+ *  established (#1858). A BENIGN SKIP for the same reason as the slug above:
+ *  nothing went wrong, there is simply nothing to carry, and the game still
+ *  launches. Mirrors the backend `SAVE_SHAPE_UNSUPPORTED`. */
+export const SAVE_SHAPE_UNSUPPORTED_REASON = "save_shape_unsupported";
+
+/** Every `reason` slug that means "sync did not run, and that is fine". A slug
+ *  outside this set is a real failure and surfaces the fallback-launch confirm,
+ *  so a new benign skip that forgets to join it nags the user on every launch.
+ *  The backend holds the same set in `domain/save_answer.py`; its
+ *  `TestTheBenignSkipListsAgreeAcrossTheWire` parses THIS array and fails if the
+ *  two disagree, so a slug added on either side alone is caught. */
+export const BENIGN_SYNC_SKIP_REASONS: readonly string[] = [
+  SAVEFILES_IN_CONTENT_DIR_REASON,
+  SAVE_SHAPE_UNSUPPORTED_REASON,
+];
+
+export interface SyncConflict {
+  type: "sync_conflict";
+  rom_id: number;
+  filename: string;
+  server_save_id: number;
+  server_updated_at: string;
+  server_size: number | null;
+  local_path: string | null;
+  local_hash: string | null;
+  local_mtime: string | null;
+  local_size: number | null;
+  created_at: string;
+}
+
+export interface DeviceSyncInfo {
+  device_id: string;
+  device_name: string;
+  is_current: boolean;
+  last_synced_at: string | null;
+}
+
+export interface SaveFileStatus {
+  filename: string;
+  local_path: string | null;
+  local_hash: string | null;
+  local_mtime: string | null;
+  local_size: number | null;
+  server_save_id: number | null;
+  server_file_name: string | null;
+  server_emulator: string | null;
+  server_updated_at: string | null;
+  server_size: number | null;
+  last_sync_at: string | null;
+  status: "skip" | "download" | "upload" | "conflict" | "synced" | "unknown";
+  device_syncs?: DeviceSyncInfo[];
+  is_current?: boolean;
+  uploaded_by_us?: boolean | null;
+}
+
+interface PlaytimeEntry {
+  total_seconds: number;
+  session_count: number;
+  last_session_start: string | null;
+  last_session_duration_sec: number | null;
+  last_played: string | null;
+}
+
+export interface SaveSyncDisplay {
+  status: "synced" | "pending" | "conflict" | "none";
+  /** Static label, e.g. "No saves" / "Conflict" / "Not synced" / "Local changes"
+   *  / "Server newer". `null` for the synced+recent-check case, where the
+   *  frontend formats a time-ago label from `last_sync_check_at`. */
+  label: string | null;
+  /** Raw ISO-8601 timestamp passed through from the backend for time-ago
+   *  formatting. `null` whenever `label` carries a fully-formed string. */
+  last_sync_check_at: string | null;
+}
+
+export interface SaveStatus {
+  rom_id: number;
+  files: SaveFileStatus[];
+  playtime: PlaytimeEntry;
+  device_id: string;
+  last_sync_check_at: string | null;
+  conflicts?: SyncConflict[];
+  active_slot?: string | null;
+  save_sync_display?: SaveSyncDisplay;
+  /** True when the backend's ``list_saves`` call raised before the matrix
+   *  ran. Every file row carries ``status: "unknown"`` in that case — the
+   *  empty server list would otherwise be classified as "ready to upload"
+   *  and surface a misleading uploads-pending indicator on what is in
+   *  fact a connectivity blip. */
+  server_query_failed?: boolean;
+  /** Why it failed (`null` when it didn't). The flag says the server's view is
+   *  unknown — true for a 404 as much as for an outage; this says why, so only
+   *  `"server_unreachable"` may drive the connection store (#1570). */
+  server_query_reason?: RommErrorCode | null;
+  /** True when the active slot's current save spans more than one distinct
+   *  file (e.g. Sega Saturn `.bkr`/`.bcr`/`.smpc`). Those siblings are
+   *  components of one game state, not prior versions — so the frontend
+   *  suppresses per-file version history + rollback and shows the component
+   *  list instead. Interim #908 guard. */
+  multi_file?: boolean;
+  /** The N filenames that together make up the current save (sorted). Set
+   *  alongside `multi_file`; one entry for a single-file slot. */
+  component_files?: string[];
+  /** False when per-version rollback is unavailable for the slot — currently
+   *  only for multi-file saves (mirrors `!multi_file`). */
+  rollback_supported?: boolean;
+  /** True when RetroArch's `savefiles_in_content_dir=true` — saves are written
+   *  next to the ROM, outside the saves tree the plugin syncs, so save sync is
+   *  unsupported. Derived from a LOCAL retroarch.cfg read, so it is correct even
+   *  when the server is unreachable (independent of `server_query_failed`). In
+   *  this case `files` is `[]` and `save_sync_display` reports the "off" state
+   *  (#239). */
+  savefiles_in_content_dir?: boolean;
+}
+
+export interface SaveSlotSummary {
+  slot: string;
+  source: "server" | "local";
+  count: number;
+  latest_updated_at: string | null;
+}
+
+/** The slot listing the device kept from the last time RomM answered, handed
+ *  back by a failed `get_save_slots` for a ROM whose slot the user confirmed.
+ *
+ *  A snapshot, not an answer: every count and timestamp in it describes the
+ *  moment it was taken, so it is held apart from the live `activeSlot` /
+ *  `availableSlots` and rendered as history (#1755). */
+export interface LastKnownSlots {
+  slots: SaveSlotSummary[];
+  /** The slot that was active then; `null` is the legacy web-player bucket. */
+  activeSlot: string | null;
+}
+
+export interface SlotSaveFile {
+  filename: string;
+  id: number;
+  size: number | null;
+  updated_at: string;
+  emulator: string;
+}
+
+export interface SlotSavesResponse {
+  success: boolean;
+  slot: string;
+  saves: SlotSaveFile[];
+  reason?: "server_unreachable" | "sync_disabled";
+  message?: string;
+}
+
+export interface SwitchSlotResponse {
+  success: boolean;
+  reason?: "pending_uploads" | "server_unreachable" | "sync_disabled" | "not_installed" | "switch_incomplete";
+  message?: string;
+  files?: string[];
+  save_status?: SaveStatus;
+}
+
+interface SaveSetupSlotInfo {
+  slot: string | null;
+  saves: Array<{
+    id: number;
+    file_name: string;
+    emulator: string;
+    updated_at: string;
+    file_size_bytes: number;
+  }>;
+  count: number;
+  latest_updated_at: string | null;
+}
+
+export interface SaveSetupInfo {
+  has_local_saves: boolean;
+  local_files: Array<{ filename: string; size: number }>;
+  server_slots: SaveSetupSlotInfo[];
+  default_slot: string;
+  slot_confirmed: boolean;
+  active_slot: string | null;
+  // "server_unreachable" and "not_found" both mean the server-saves fetch
+  // failed, so the wizard MUST hold and offer a retry instead of treating the
+  // empty server_slots as authoritative (auto-confirming default would clobber
+  // real server saves on first sync). They differ only in cause: "not_found"
+  // is the server ANSWERING that it has no such ROM or device id, so it must
+  // not report the server offline (#1570). See backend `get_save_setup_info`.
+  recommended_action: "auto_confirm_default" | "show_wizard" | "server_unreachable" | "not_found";
+  // True whenever that query failed, either way — for call sites routing on a
+  // boolean rather than the enum.
+  server_query_failed?: boolean;
+}
+
+/** One legacy-vs-local collision surfaced by `confirm_slot_choice` when a
+ *  content-based migration finds a local save file that differs from the legacy
+ *  save it would copy into the chosen slot (#1498). Both sides carry a
+ *  timestamp + size so the wizard's resolution dialog can show them. */
+export interface SlotMigrationConflict {
+  filename: string;
+  server_save_id: number;
+  server_updated_at: string;
+  server_size: number | null;
+  local_mtime: string;
+  local_size: number;
+}
+
+export interface SlotDeleteInfo {
+  success: boolean;
+  slot?: string;
+  source?: "server" | "local";
+  server_save_count?: number;
+  server_save_ids?: number[];
+  local_file_count?: number;
+  local_filenames?: string[];
+  is_active?: boolean;
+  // Coarse failure category for routing (e.g. "server_unreachable",
+  // "not_found", "not_installed", "disabled", "active_slot").
+  reason?: string;
+  message?: string;
+}
+
+export interface DeleteSlotResult {
+  success: boolean;
+  deleted_server_saves?: number;
+  cleaned_files?: number;
+  reason?: string;
+  message?: string;
+}
+
+export interface SaveVersionEntry {
+  id: number;
+  file_name: string;
+  emulator: string | null;
+  updated_at: string;
+  file_size_bytes: number | null;
+  device_syncs: Array<{ device_id: string; device_name: string; is_current: boolean; last_synced_at: string | null }>;
+  uploaded_by_us?: boolean | null;
+}
+
+export type RollbackStatus =
+  | { status: "ok" }
+  | { status: "rom_not_installed" }
+  | { status: "version_deleted" }
+  | { status: "unsupported" }
+  | { status: "server_unreachable"; message: string }
+  // The server ANSWERED 404 — no such ROM or device id. Distinct from
+  // `server_unreachable` (retryable) and `version_deleted` (one save missing
+  // from a ROM it still has).
+  | { status: "not_found"; message: string }
+  | { status: "conflict_blocked"; conflicts: SyncConflict[] }
+  | { status: "preflight_failed"; errors: string[] }
+  | { status: "put_failed"; message: string };
+
+export type ListFileVersionsResult =
+  | { status: "ok"; versions: SaveVersionEntry[] }
+  | { status: "multi_file_unsupported"; versions: SaveVersionEntry[] }
+  | { status: "server_unreachable"; message: string }
+  // See RollbackStatus — the server answered, it just has no such entry.
+  | { status: "not_found"; message: string };
+
+/** Discriminated-status result of `copySaveToSlot` — copies one server save into
+ *  a target slot, which becomes the ROM's active slot (the source is preserved).
+ *  Mirrors the backend `SaveCopyService.copy_save_to_slot` union. */
+export type CopySaveToSlotStatus =
+  | { status: "ok" }
+  | { status: "already_present"; existing_id: number }
+  | { status: "not_configured" }
+  | { status: "invalid_slot_name" }
+  | { status: "rom_not_installed" }
+  | { status: "version_deleted" }
+  | { status: "unsupported"; reason?: string }
+  | { status: "server_unreachable"; message: string }
+  // See RollbackStatus — the server answered, it just has no such entry.
+  | { status: "not_found"; message: string }
+  | { status: "conflict_blocked"; conflicts: SyncConflict[] }
+  | { status: "preflight_failed"; errors: string[] }
+  | { status: "target_slot_busy"; message: string }
+  | { status: "copy_failed"; message: string };

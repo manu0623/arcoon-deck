@@ -1,0 +1,789 @@
+"""Filesystem seam Protocols for service file I/O.
+
+Each Protocol owns the raw POSIX-style file operations one service
+needs against one logical subtree (cover art, ROM downloads, the
+launcher download queue, firmware/BIOS files, RetroDECK migration
+flows, installed ROMs, save files, SteamGridDB artwork cache).
+Implementations live in adapters; services see only the I/O seams.
+
+Implementations are synchronous — services that call from an async
+context offload via ``loop.run_in_executor``.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from contextlib import AbstractContextManager
+
+    from models.adoption import ArchiveMemberInfo, ExistingContent, MoveOutcome, TopLevelEntry, TopLevelName
+    from models.data_location import SourceDescription
+    from models.prune import (
+        MutationOutcome,
+        RecoveryArtifact,
+        SealedSourceClaims,
+        SourceClaim,
+        SteamRecoverySnapshot,
+    )
+
+    from domain.prune import BundleReadmeContext
+
+
+class DirectoryFileListerFn(Protocol):
+    """Recursively list the absolute paths of every file under a directory.
+
+    The narrow read seam the disc resolver needs to enumerate a multi-file
+    ROM's install directory: it cares only about which files are present, not
+    their sizes. Returns absolute paths; idempotent on a missing directory
+    (returns ``[]``). Backed by the same recursive walk the download file store
+    uses, exposed as a call-shaped Protocol so the resolver never depends on the
+    whole ``DownloadFileStore`` surface.
+    """
+
+    def __call__(self, directory: str) -> list[str]: ...
+
+
+class CoverArtFileStore(Protocol):
+    """Filesystem seam for cover-art file operations.
+
+    Owns the raw POSIX calls ArtworkService uses to manage cover art across the
+    plugin-owned per-ROM cover cache and the shared Steam grid directory: the
+    per-ROM cache is downloaded/seeded into, ``copy_file`` publishes the active
+    version's cache cover onto the Steam grid as ``{app_id}p.png``, and the read
+    seams back the base64 queries and orphan pruning. Path construction,
+    registry lookups, and orphan detection remain a service concern; this
+    Protocol exposes only the I/O seams.
+
+    Implementations are synchronous — services that call from an async
+    context offload via ``loop.run_in_executor``.
+    """
+
+    def exists(self, path: str) -> bool:
+        """Return True when *path* refers to an existing file or directory."""
+        ...
+
+    def make_dirs(self, path: str) -> None:
+        """Create *path* and any missing parents. Idempotent."""
+        ...
+
+    def remove_file(self, path: str) -> None:
+        """Delete *path*. Idempotent: a missing file is not an error."""
+        ...
+
+    def rename(self, src: str, dst: str) -> None:
+        """Atomically rename *src* to *dst*, replacing any existing file at *dst*."""
+        ...
+
+    def copy_file(self, src: str, dst: str) -> None:
+        """Copy the file *src* to *dst*, leaving *src* in place.
+
+        Publishes a per-ROM cache cover onto the Steam grid (or seeds the cache
+        from an existing grid cover) without consuming the source, so every
+        sibling version keeps its own cache file. The destination's parent
+        directory must already exist; callers create it via :meth:`make_dirs`.
+        """
+        ...
+
+    def listdir(self, directory: str) -> list[str]:
+        """Return the entries in *directory*."""
+        ...
+
+    def is_dir(self, path: str) -> bool:
+        """Return True when *path* exists and is a directory."""
+        ...
+
+    def read_bytes(self, path: str) -> bytes:
+        """Return the contents of *path* as raw bytes."""
+        ...
+
+    def write_text_atomic(self, path: str, content: str) -> None:
+        """Atomically write *content* to *path* as UTF-8 text.
+
+        Writes to a temp file beside *path* and ``os.replace``s it into place;
+        the temp file is removed on any failure. Backs the per-ROM cover-validator
+        sidecar (#1454).
+        """
+        ...
+
+
+class DownloadFileStore(Protocol):
+    """Filesystem seam for ROM download target operations.
+
+    Owns the raw POSIX calls DownloadService uses to manage downloaded
+    ROM files: temp-file lifecycle, atomic renames, disk-space probes,
+    ZIP extraction with ZIP-slip protection, post-extract URL-decoding,
+    and file-size scans for launch-file detection. Path construction,
+    queue management, and progress callbacks remain a service concern;
+    this Protocol exposes only the I/O seams.
+
+    Implementations are synchronous — services that call from an async
+    context offload via ``loop.run_in_executor``.
+    """
+
+    def exists(self, path: str) -> bool:
+        """Return True when *path* refers to an existing file or directory."""
+        ...
+
+    def describe_path(self, path: str) -> ExistingContent | None:
+        """Describe whatever occupies *path*, or ``None`` when nothing does.
+
+        The one ``stat`` the download pre-flight runs before it commits to
+        writing: it answers what is in the way, how big it is and when it was
+        last touched, so the collision can be shown rather than overwritten. A
+        directory reports the recursive total of its contents, comparable with
+        the server's ``fs_size_bytes`` for a multi-file ROM — which makes this
+        an ``os.walk`` of the whole tree, so callers offload it.
+
+        Existence is answered without following, and ``kind`` is the same rule
+        the two listings apply, so a symlink is reported as occupying its path —
+        as a link, which may not be adopted — rather than as nothing at all.
+        Where the listings leave out what is neither file, directory nor link,
+        this reports it with no ``kind``: something that is there must not come
+        back as nothing.
+        """
+        ...
+
+    def checksum(self, path: str, algorithm: str, progress_callback: Callable[[int], None] | None = None) -> str:
+        """Return *path*'s hex digest under *algorithm* (``"md5"`` or ``"crc32"``).
+
+        The content check the adopt dialog runs on request, matched against the
+        digest RomM published for the same file. One read pass; the callback
+        receives each chunk's byte count as a delta so a caller hashing a whole
+        directory accumulates across files. Raises ``ValueError`` for an
+        algorithm the store cannot compute.
+        """
+        ...
+
+    def list_top_level_entries(self, directory: str) -> tuple[TopLevelEntry, ...]:
+        """Describe what sits directly inside *directory*, without descending.
+
+        The Download click's read of the platform directory, which ranks what it
+        finds and so needs each entry's size and mtime. It stays on the top level
+        deliberately: a single multi-file install can hold tens of thousands of
+        files, and a user's own subfolders are their filing, not the plugin's. A
+        directory entry therefore reports size 0 — its recursive total is not
+        something this read pays for. Idempotent on a missing directory (returns
+        ``()``).
+
+        Admits exactly what :meth:`list_top_level_names` admits: an entry is a
+        file, a directory or a symlink, judged without following it, and anything
+        else is not listed at all.
+        """
+        ...
+
+    def list_top_level_names(self, directory: str) -> tuple[TopLevelName, ...]:
+        """Name and kind of everything directly inside *directory*, nothing more.
+
+        The same read for the caller that only matches names — the game-detail
+        page. Dropping the ``stat`` that fills in size and mtime is the whole
+        point: it is one syscall per ROM on a folder that can hold a whole
+        platform's library, and this one runs on every game page. Same
+        top-level-only rule, same admitted set, same ``()`` on a directory that
+        cannot be read.
+        """
+        ...
+
+    def list_archive_members(self, path: str) -> tuple[ArchiveMemberInfo, ...] | None:
+        """Describe what sits inside the archive at *path*, or ``None``.
+
+        Reads the central directory only, so every member's internal name,
+        uncompressed size and CRC32 arrive without a byte being decompressed.
+        ``None`` says the store could not read *path* as an archive — a loose
+        file, a format it does not open, or a damaged container — which is an
+        absence of evidence for the caller to report as such, never a verdict on
+        the content. Directory entries are omitted: they carry no content and
+        RomM does not list them either.
+        """
+        ...
+
+    def checksum_archive_member(
+        self,
+        path: str,
+        member_name: str,
+        algorithm: str,
+        progress_callback: Callable[[int], None] | None = None,
+    ) -> str:
+        """Return the hex digest of one member's **decompressed** bytes.
+
+        The comparison RomM's ``archive_members`` can be held to: its per-member
+        digests are taken over the same decompressed content, while the
+        archive's own bytes match nothing the server publishes. *member_name* is
+        a name this store returned from :meth:`list_archive_members`. Streams in
+        chunks with the same delta callback as :meth:`checksum`, and raises when
+        the member cannot be read — an unsupported compression method or a
+        container damaged since it was listed — so the caller reports that it
+        could not confirm rather than a mismatch it never observed.
+        """
+        ...
+
+    def remove_file(self, path: str) -> None:
+        """Delete *path*. Idempotent: a missing file is not an error."""
+        ...
+
+    def remove_tree(self, path: str) -> None:
+        """Recursively delete *path*. Idempotent: a missing directory is not an error."""
+        ...
+
+    def make_dirs(self, path: str) -> None:
+        """Create *path* and any missing parents. Idempotent."""
+        ...
+
+    def rename(self, src: str, dst: str) -> None:
+        """Atomically rename *src* to *dst*, replacing any existing file at *dst*."""
+        ...
+
+    def move_dir(self, src: str, dst: str) -> None:
+        """Atomically move the whole directory *src* to *dst*.
+
+        Moves the entire subtree (never a single file inside it), so the
+        ES-DE directory-collapse rename can never split a multi-file ROM
+        (ADR-0008). *dst* must not already exist — callers probe with
+        ``exists`` first and skip the move on collision. Same-filesystem
+        only (``os.replace`` semantics); the extract dir and its rename
+        target are siblings under the platform folder.
+        """
+        ...
+
+    def copy_file(self, src: str, dst: str) -> None:
+        """Copy the file *src* to *dst*, leaving *src* in place.
+
+        Used to heal a mis-suffixed dump file (``PS3_DISC.SFB.txt`` →
+        ``PS3_DISC.SFB``) — a correctly-named copy is written while the
+        original is preserved. Callers probe with ``exists`` first.
+        """
+        ...
+
+    def disk_free(self, path: str) -> int:
+        """Return the free space in bytes for the filesystem hosting *path*."""
+        ...
+
+    def file_size(self, path: str) -> int:
+        """Return the size in bytes of the file at *path*, or 0 if it's missing.
+
+        Used by the resume pre-flight to discount the bytes already held by a
+        partial ``.tmp``. A missing path reports 0 (no partial to discount).
+        """
+        ...
+
+    def walk_files_matching_suffixes(self, base_dir: str, suffixes: tuple[str, ...]) -> list[str]:
+        """Recursively list files under *base_dir* whose name ends with any of *suffixes*.
+
+        Returns absolute paths. Idempotent on missing *base_dir*
+        (returns ``[]``). Pure listing — does not mutate the filesystem;
+        callers own the removal loop and any per-file error handling.
+        """
+        ...
+
+    def extract_zip(
+        self,
+        archive_path: str,
+        dest_dir: str,
+        safe_root: str,
+        progress_callback: Callable[[int, int], None] | None = None,
+    ) -> None:
+        """Extract *archive_path* into *dest_dir* with ZIP-slip protection.
+
+        *safe_root* is the boundary outside of which extraction is
+        rejected. Implementations resolve both *dest_dir* and *safe_root*
+        via ``os.path.realpath`` and verify that every member resolves
+        within *safe_root* before extracting.
+
+        When *progress_callback* is supplied it is invoked with
+        ``(extracted, total)`` uncompressed byte counts as members stream
+        out; with it left ``None`` the extraction is silent and produces
+        byte-identical output.
+        """
+        ...
+
+    def decode_url_encoded_names(self, directory: str) -> None:
+        """Recursively rename URL-encoded entries under *directory*.
+
+        Files and subdirectories whose names contain ``%XX`` escapes are
+        renamed in place to their decoded form. Walks bottom-up so
+        nested encoded directories are handled correctly.
+        """
+        ...
+
+    def scan_files_with_sizes(self, directory: str) -> list[tuple[str, int]]:
+        """Recursively list files under *directory* with their sizes.
+
+        Returns a list of ``(absolute_path, size_bytes)`` tuples. Files
+        whose size cannot be read report size ``0`` so callers can still
+        reason over the list.
+        """
+        ...
+
+    def write_text_atomic(self, path: str, content: str) -> None:
+        """Atomically write *content* to *path* as UTF-8 text.
+
+        Writes to a temp file beside *path* and ``os.replace``s it to
+        the final destination. The temp file is removed on any failure.
+        """
+        ...
+
+
+class AdoptionMoveStore(Protocol):
+    """Filesystem seam for carrying an adopted ROM and its saves to canonical names.
+
+    Spans the ``roms``, ``saves`` and ``states`` trees at once, which is why it
+    is its own seam: a ROM adopted under the user's own name has to arrive at the
+    server's name together with everything RetroArch named after it, and no
+    single-tree store can express that.
+
+    Implementations are synchronous — services that call from an async
+    context offload via ``loop.run_in_executor``.
+    """
+
+    def list_names(self, directory: str) -> tuple[str, ...]:
+        """Return the file names directly inside *directory*; ``()`` when it does not exist."""
+        ...
+
+    def exists(self, path: str) -> bool:
+        """Return True when *path* is taken, a dangling symlink included."""
+        ...
+
+    def is_file(self, path: str) -> bool:
+        """Return True when *path* is a regular file, following symlinks.
+
+        What the save-backup funnel can act on: it moves a regular file aside and
+        reports ``False`` for anything else. Asking first is what lets a colliding
+        target that is a directory be refused **by name, before anything moves**,
+        rather than no-opping the quarantine and failing later at the link.
+        """
+        ...
+
+    def move_pairs(self, pairs: tuple[tuple[str, str], ...]) -> MoveOutcome:
+        """Carry every ``(source, target)`` pair, keeping a failure recoverable.
+
+        Implementations link-then-unlink where the filesystem allows it, so a
+        failure while staging leaves the originals exactly as they were, and fall
+        back to rename-with-rollback where it does not (a directory, or a set
+        spanning a mount boundary). The outcome partitions the pairs by where the
+        content actually ended up — never a bare success, never a bare failure.
+        """
+        ...
+
+
+class FirmwareFileStore(Protocol):
+    """Filesystem seam for firmware/BIOS file operations.
+
+    Owns the raw POSIX calls FirmwareService uses to manage firmware
+    downloads under the RetroDECK BIOS directory: existence probes,
+    atomic temp-file lifecycle, parent-directory creation, MD5 hashing
+    of downloaded payloads, and BIOS registry JSON reads. Path
+    construction, registry lookups, and download orchestration remain a
+    service concern; this Protocol exposes only the I/O seams.
+
+    Implementations are synchronous — services that call from an async
+    context offload via ``loop.run_in_executor``.
+    """
+
+    def exists(self, path: str) -> bool:
+        """Return True when *path* refers to an existing file or directory."""
+        ...
+
+    def remove_file(self, path: str) -> None:
+        """Delete *path*. Idempotent: a missing file is not an error."""
+        ...
+
+    def rename(self, src: str, dst: str) -> None:
+        """Atomically rename *src* to *dst*, replacing any existing file at *dst*."""
+        ...
+
+    def make_dirs(self, path: str) -> None:
+        """Create *path* and any missing parents. Idempotent."""
+        ...
+
+    def checksum_md5(self, path: str) -> str:
+        """Return the hex-encoded MD5 digest of *path*'s contents."""
+        ...
+
+    def read_bytes(self, path: str) -> bytes:
+        """Return the contents of *path* as raw bytes."""
+        ...
+
+
+class MigrationFileStore(Protocol):
+    """Filesystem seam for RetroDECK path and save-sort migration I/O.
+
+    Owns the raw POSIX calls MigrationService uses to walk source
+    locations, create destination directories, and relocate files when
+    the RetroDECK home path changes or RetroArch save sorting flips.
+    Path construction, conflict policy, and state updates remain a
+    service concern; this Protocol exposes only the I/O seams.
+
+    The Protocol distinguishes ``move`` from ``rename`` because the two
+    migration flows have different filesystem semantics. ``move`` is
+    the cross-device-safe shutil-style relocation used for RetroDECK
+    home changes (e.g., internal SSD to SD card); it falls back to
+    copy+delete on ``EXDEV``. ``rename`` is the same-filesystem atomic
+    ``os.replace`` used inside the saves tree where source and
+    destination are guaranteed to share a filesystem.
+
+    Implementations are synchronous — services that call from an async
+    context offload via ``loop.run_in_executor``.
+    """
+
+    def exists(self, path: str) -> bool:
+        """Return True when *path* refers to an existing file or directory."""
+        ...
+
+    def is_dir(self, path: str) -> bool:
+        """Return True when *path* exists and is a directory."""
+        ...
+
+    def make_dirs(self, path: str) -> None:
+        """Create *path* and any missing parents. Idempotent."""
+        ...
+
+    def remove_file(self, path: str) -> None:
+        """Delete the file at *path*. Idempotent: a missing file is not an error."""
+        ...
+
+    def remove_tree(self, path: str) -> None:
+        """Recursively delete *path*. Idempotent: a missing directory is not an error."""
+        ...
+
+    def move(self, src: str, dst: str) -> None:
+        """Cross-filesystem-safe move from *src* to *dst*.
+
+        Uses ``shutil.move`` semantics: a same-filesystem rename when
+        possible, falling back to copy+delete on ``EXDEV``. Use this
+        for RetroDECK home migrations where source and destination may
+        live on different filesystems.
+        """
+        ...
+
+    def rename(self, src: str, dst: str) -> None:
+        """Atomically rename *src* to *dst*, replacing any existing file at *dst*.
+
+        Uses ``os.replace`` semantics — same-filesystem only. Use this
+        for save-sort migrations inside the saves tree where source
+        and destination are guaranteed to share a filesystem.
+        """
+        ...
+
+    def get_mtime(self, path: str) -> float:
+        """Return the mtime of *path* as a Unix timestamp."""
+        ...
+
+    def realpath(self, path: str) -> str:
+        """Return *path* with every symlink in it resolved.
+
+        The home markers are compared as directories, not as strings: one
+        directory answers to two names wherever a root is reached through a
+        symlink, and reading that as a move would offer to migrate a directory
+        onto itself. A path that is not on disk still answers: the links in it
+        that exist are followed and the missing tail is normalized as spelled,
+        so a home the user moved away from and deleted resolves to a directory,
+        and one that is not the live one.
+        """
+        ...
+
+    def walk_files(self, base_dir: str) -> list[tuple[str, list[str], list[str]]]:
+        """Return ``os.walk``-style ``(dirpath, dirnames, filenames)`` triples for *base_dir*.
+
+        Mirrors ``os.walk`` exactly: returns raw triples so callers
+        retain control over directory pruning (e.g., skipping hidden
+        directories).
+        """
+        ...
+
+
+class RomFileStore(Protocol):
+    """Filesystem seam for installed ROM file operations.
+
+    Owns the raw POSIX calls RomRemovalService uses when physically
+    removing an installed ROM (single file or multi-file ROM directory).
+    Path-safety checks live in ``lib.path_safety``; this Protocol
+    exposes only the I/O seams.
+
+    Implementations are synchronous — services that call from an async
+    context offload via ``loop.run_in_executor``.
+    """
+
+    def is_dir(self, path: str) -> bool:
+        """Return True when *path* exists and is a directory."""
+        ...
+
+    def exists(self, path: str) -> bool:
+        """Return True when *path* refers to an existing file or directory."""
+        ...
+
+    def remove_file(self, path: str) -> None:
+        """Delete *path*. Idempotent: a missing file is not an error."""
+        ...
+
+    def remove_tree(self, path: str) -> None:
+        """Recursively delete *path* and all contents."""
+        ...
+
+    def claim_source(self, path: str, safe_root: str, *, digest: bool = True) -> SourceClaim:
+        """Capture the current no-follow source and complete subtree identity.
+
+        With *digest* false the claim carries no content hashes and is
+        authorized by exact identity and writer exclusion alone — the form a
+        caller takes when it seals and consumes the claim itself, with no
+        separately held copy of the bytes for a hash to bind the deletion to.
+        """
+        ...
+
+    def remove_claimed(
+        self,
+        path: str,
+        safe_root: str,
+        claim: SourceClaim,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> MutationOutcome:
+        """Remove only the complete claimed source tree and report durable progress.
+
+        *on_progress* receives (files removed, files claimed) after each
+        unlink, on the calling thread.
+        """
+        ...
+
+    def reclaim_staged_source(self, path: str, safe_root: str) -> MutationOutcome:
+        """Finish removing the staging entries an interrupted removal of *path* left behind.
+
+        Reports ``changed`` false when the parent holds no such entry. The
+        caller must hold its own proof that *path* is the ROM's, because a
+        partially consumed claim can no longer be revalidated.
+        """
+        ...
+
+
+class SaveFileStore(Protocol):
+    """Filesystem seam for local save file operations.
+
+    Owns the raw POSIX, ``open()``, ``tempfile``, and ``hashlib``-on-file
+    calls SaveService and its sub-services use when reading, writing,
+    backing up, hashing, and removing local save files under the
+    RetroDECK saves directory. Path construction and platform-specific
+    extension lookup remain a domain concern; this Protocol exposes only
+    the I/O seams.
+
+    Implementations are synchronous — services that call from an async
+    context offload via ``loop.run_in_executor``.
+    """
+
+    def exists(self, path: str) -> bool:
+        """Return True when *path* refers to an existing file or directory."""
+        ...
+
+    def is_file(self, path: str) -> bool:
+        """Return True when *path* exists and is a regular file."""
+        ...
+
+    def is_dir(self, path: str) -> bool:
+        """Return True when *path* exists and is a directory."""
+        ...
+
+    def is_symlink(self, path: str) -> bool:
+        """Return True when *path* is a symbolic link, including dangling links."""
+        ...
+
+    def canonical_path(self, path: str) -> str:
+        """Return the canonical real path used for exact ownership comparison."""
+        ...
+
+    def is_within(self, path: str, root: str) -> bool:
+        """Return whether canonical *path* is contained by canonical *root*."""
+        ...
+
+    def make_dirs(self, path: str) -> None:
+        """Create *path* and any missing parents. Idempotent."""
+        ...
+
+    def remove_file(self, path: str) -> None:
+        """Delete *path*. Idempotent: a missing file is not an error."""
+        ...
+
+    def listdir(self, directory: str) -> list[str]:
+        """Return the entry names in *directory*; empty list if it does not exist."""
+        ...
+
+    def rename(self, src: str, dst: str) -> None:
+        """Atomically rename *src* to *dst*, replacing any existing file at *dst*.
+
+        Uses ``os.replace`` semantics — same-filesystem only.
+        """
+        ...
+
+    def list_archive(self, archive_path: str) -> tuple[str, ...]:
+        """Return the regular-file member names of *archive_path*, in archive order."""
+        ...
+
+    def extract_archive(self, archive_path: str, dest_dir: str) -> tuple[str, ...]:
+        """Extract *archive_path*'s regular files into *dest_dir*; return their names.
+
+        Member names come from a server, so an entry that would land outside
+        *dest_dir* — absolute, or climbing with ``..`` — or through a symlink is
+        refused rather than written.
+        """
+        ...
+
+    def claim_source(self, path: str, safe_root: str) -> SourceClaim:
+        """Capture the current no-follow source and complete subtree identity."""
+        ...
+
+    def ensure_directory(self, path: str, safe_root: str) -> None:
+        """Create a directory through anchored no-follow parents and fsync each creation."""
+        ...
+
+    def rename_claimed(self, src: str, dst: str, safe_root: str, claim: SourceClaim) -> MutationOutcome:
+        """Rename only the complete claimed source and report durable progress."""
+        ...
+
+    def get_mtime(self, path: str) -> float:
+        """Return the mtime of *path* as a Unix timestamp."""
+        ...
+
+    def get_size(self, path: str) -> int:
+        """Return the size of *path* in bytes."""
+        ...
+
+    def checksum_md5(self, path: str) -> str:
+        """Return the hex-encoded MD5 digest of *path*'s contents.
+
+        Non-security use: drift detection between the local file and the
+        recorded ``last_sync_hash`` baseline. A collision here would mean
+        two different save files treated as identical — "sync misses an
+        update", not a security breach.
+        """
+        ...
+
+    def content_hash(self, path: str) -> str:
+        """Return RomM's zip-aware content hash for *path*.
+
+        Identical to :meth:`checksum_md5` for a plain file; for a zip archive
+        (a multi-file save) the per-entry combined hash RomM computes, so a
+        zipped save converges on its content rather than mismatching on the
+        archive container's framing. A file that sniffs as a zip but cannot be
+        read as one falls back to the plain MD5 rather than raising, so one
+        unreadable save never aborts a sync sweep. Non-security use, like
+        ``checksum_md5``.
+
+        Inside a :meth:`hash_memo_scope` the result is memoized per file; see
+        that method.
+        """
+        ...
+
+    def hash_memo_scope(self) -> AbstractContextManager[None]:
+        """Bound a per-run :meth:`content_hash` memo to a single sync run.
+
+        Within the returned scope, ``content_hash`` caches each save's digest
+        keyed by ``(path, mtime_ns, size)`` so one sync run's repeated hashings
+        of the same file (negotiate inventory, the newest-wins matrix, the
+        post-op baseline write) read it once. The memo is discarded on scope exit
+        — never a process-lifetime cache — and a file overwritten mid-run
+        re-hashes on its new stat. Reentrant: nested scopes share one memo. The
+        engine opens exactly one outermost scope per device-gated save-sync run.
+        """
+        ...
+
+    def make_temp_path(self, suffix: str = "") -> str:
+        """Return a fresh, unique path safe to write to.
+
+        Backed by ``tempfile.mkstemp`` so the file is created atomically
+        (``O_EXCL``) before the fd is closed. The caller owns the file
+        and is responsible for removing it.
+        """
+        ...
+
+    def read_bytes(self, path: str) -> bytes:
+        """Return the contents of *path* as raw bytes."""
+        ...
+
+
+class SgdbArtworkCache(Protocol):
+    """Filesystem seam for the SteamGridDB artwork cache directory.
+
+    Owns the raw POSIX calls SteamGridService uses to manage cached
+    SGDB artwork (heroes, logos, grids, icons) under the plugin runtime
+    directory. Path construction and pruning policy remain a service
+    concern; this Protocol exposes only the I/O seams.
+
+    Implementations are synchronous — services that call from an async
+    context offload via ``loop.run_in_executor``.
+    """
+
+    def cache_dir(self) -> str:
+        """Return the absolute path to the SGDB artwork cache directory.
+
+        Idempotently ensures the directory exists before returning.
+        """
+        ...
+
+    def exists(self, path: str) -> bool:
+        """Return True when *path* refers to an existing file or directory."""
+        ...
+
+    def remove_file(self, path: str) -> None:
+        """Delete *path*. Idempotent: a missing file is not an error."""
+        ...
+
+    def listdir(self, directory: str) -> list[str]:
+        """Return the entries in *directory*."""
+        ...
+
+    def is_dir(self, path: str) -> bool:
+        """Return True when *path* exists and is a directory."""
+        ...
+
+    def read_bytes(self, path: str) -> bytes:
+        """Return the contents of *path* as raw bytes."""
+        ...
+
+
+class RecoveryBundleStore(Protocol):
+    """Build and seal verified recovery bundles under the plugin recovery root."""
+
+    def root(self) -> str: ...
+    def free_bytes(self) -> int: ...
+    def measure_path(self, path: str, safe_root: str) -> int: ...
+    def validate_sources(self, bundle_path: str, bundle_digest: str | None = None) -> bool: ...
+    def source_claims(self, bundle_path: str) -> SealedSourceClaims: ...
+    def seal_bundle(
+        self,
+        bundle_id: str,
+        snapshot: dict[str, object],
+        artifacts: list[RecoveryArtifact],
+        readme_context: BundleReadmeContext,
+        playtime_text: str,
+        should_abort: Callable[[], bool] | None = None,
+    ) -> str: ...
+
+
+class PruneArtifactStore(Protocol):
+    """Own per-ROM cover and SteamGridDB cache artifacts during cleanup."""
+
+    def recovery_artifacts(self, rom_ids: list[int]) -> list[RecoveryArtifact]: ...
+    def remove(self, rom_ids: list[int], claims: dict[str, SourceClaim] | None = None) -> MutationOutcome: ...
+
+
+class DataLocationStore(Protocol):
+    """Own the older data locations the plugin may still be asked to move from.
+
+    Only the two operations a running plugin performs: describing the candidates
+    a user is choosing between, and recording which one they picked. The copy
+    itself happens at the next start, before the database is opened, and is not
+    on this seam.
+    """
+
+    def describe_sources(self) -> list[SourceDescription]: ...
+    def record_answer(self, name: str) -> None: ...
+
+
+class SteamRecoveryStore(Protocol):
+    """Own per-shortcut Steam Input/grid recovery files and controller state."""
+
+    def snapshot(self, app_id: int) -> SteamRecoverySnapshot: ...
+    def validate_state(self, app_id: int, snapshot: SteamRecoverySnapshot) -> bool: ...
+    def remove_state(
+        self,
+        app_id: int,
+        snapshot: SteamRecoverySnapshot,
+        claims: dict[str, SourceClaim],
+    ) -> MutationOutcome: ...

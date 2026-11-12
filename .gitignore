@@ -1,0 +1,58 @@
+# Dependencies
+node_modules/
+
+# Build output — shipped: a Deck install pulls instead of building
+
+# MkDocs build output
+site/
+
+# Logo render staging — the shipped copies live in assets/ and docs/assets/
+scripts/logo/out/
+
+# Environment
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.hypothesis/
+
+# Logs
+*.log
+log.txt
+
+# Claude Code — everything is local (worktrees, agents, settings.local.json)
+# except the checked-in path-scoped coding rules. Ignoring the contents rather
+# than the directory itself is what makes the negation below reachable: git does
+# not descend into an ignored directory.
+.claude/*
+!.claude/rules/
+.venv/
+
+# Git worktrees
+.worktrees/
+.coverage
+coverage.xml
+coverage.json
+
+# Frontend test coverage
+coverage/
+deno.lock
+
+# Locally built installable
+Arcoon Deck.zip

@@ -1,0 +1,545 @@
+/**
+ * Library-sync types — platforms, collections, preview/plan/apply payloads,
+ * and the sync-progress UI state. Anything related to the bulk
+ * RomM→Steam shortcut sync flow lives here.
+ */
+
+export interface PlatformSyncSetting {
+  id: number;
+  name: string;
+  slug: string;
+  rom_count: number;
+  sync_enabled: boolean;
+}
+
+export type CollectionKind = "standard" | "smart" | "virtual";
+
+export type CollectionScope = "standard" | "smart" | "virtual";
+
+/**
+ * The RomM virtual-collection type carried on a `kind === "virtual"` collection.
+ * `"franchise"` = IGDB franchise groupings; `"collection"` = the default IGDB
+ * collection/series groupings. Only these two of RomM's five virtual types are
+ * synced (genre/company/mode are ROM filter facets, not browsable collections).
+ */
+export type VirtualCollectionType = "franchise" | "collection";
+
+/**
+ * QAM collection owner-scope. `"all"` (default) syncs every collection the
+ * server lists; `"own"` restricts sync + display to the signed-in user's own
+ * collections. Independent of the kind sub-tab — it filters by owner, not kind.
+ */
+export type CollectionOwnerScope = "own" | "all";
+
+/**
+ * Steam-collection naming mode. `"merge"` (default) unions same-named
+ * collections of any kind into one `RomM: [<name>]` Steam collection;
+ * `"by_label"` appends the fine collection-type label (`RomM: [<name>
+ * (Franchise)]`) so same-named collections of different types stay separate.
+ * The label is computed backend-side at the reporter key — the wire payload is
+ * name→appIds only.
+ */
+export type CollectionNamingMode = "merge" | "by_label";
+
+export interface CollectionSyncSetting {
+  id: string;
+  name: string;
+  rom_count: number;
+  sync_enabled: boolean;
+  kind: CollectionKind;
+  is_favorite: boolean;
+  /**
+   * The virtual-collection type — present only when `kind === "virtual"`, used
+   * to label the row ("Franchise" / "IGDB Collection"). Absent on standard/smart
+   * collections and on older backends.
+   */
+  virtual_type?: VirtualCollectionType;
+  /**
+   * Whether this collection is the signed-in user's own (#1532). Virtual
+   * collections have no owner and are always `true`; when the plugin does not
+   * yet know its own identity every collection is `true` (so the "Own" filter
+   * degrades to "All"). Absent on older backends — treat absent as `true`.
+   */
+  is_own?: boolean;
+}
+
+export type SyncStage = "discovering" | "fetching" | "applying" | "finalizing" | "done" | "cancelled" | "error";
+
+/**
+ * What the run in flight is DOING — the backend states it rather than letting a
+ * page infer it, because a preview run and an apply run narrate the same work
+ * queue through frames of identical shape (`domain/sync_run_kind.py`).
+ */
+export type SyncRunKind = "preview" | "apply";
+
+export interface SyncProgress {
+  running: boolean;
+  stage?: SyncStage | "";
+  /** Fine: items processed within the current unit. */
+  current?: number;
+  /** Fine: total items in the current unit. */
+  total?: number;
+  message?: string;
+  /** Coarse: current unit index (1-based) driving the determinate main bar. */
+  step?: number;
+  /** Coarse: total units. ``0`` means indeterminate. */
+  totalSteps?: number;
+  /**
+   * Sub-phase of the ``fetching`` stage — ``"fetch"`` (paginated ROM listing)
+   * or ``"covers"`` (cover download/refresh) — so the running unit's width can
+   * fill each phase's own monotonic sub-slice instead of resting frozen until
+   * ``applying`` (#1407). Empty/absent on every other frame (including the
+   * ``fetching`` anchor and old backends), which the bar treats as "rest at the
+   * unit floor" — the pre-#1407 behaviour. camelCase, matching the sibling
+   * ``totalSteps`` / ``runId`` keys the backend emits on the same payload (the
+   * store spreads the raw event verbatim, so the wire key IS this field name).
+   */
+  subStage?: string;
+  /**
+   * ``true`` on the frontend applying-stage frames that report cover-refresh
+   * progress (``processCoverRefreshes``) rather than shortcut-item progress
+   * (#1456). Frontend-only; the seed clears it at the start of every unit. Its
+   * one job is to keep the live-rate ETA honest: a cover-refresh frame carries a
+   * cover counter, not item progress, so the estimator must skip it exactly as it
+   * skips fetch/cover frames — see the ``observeApplyProgress`` gate in
+   * ``MainPage``. The counter itself surfaces only through ``message``; the bar's
+   * ``current``/``total`` are left untouched (they rest at the unit's apply
+   * position), so this flag has no bar effect.
+   */
+  coverRefresh?: boolean;
+  /**
+   * Backend run identity for the in-flight sync, stamped from the backend's
+   * ``current_sync_id``. ``""`` when no run is in flight. The authoritative
+   * source a Cancel click scopes itself to — the frontend no longer mirrors a
+   * separate run id (#1202).
+   */
+  runId?: string;
+  /**
+   * What the in-flight run is doing, claimed with the backend's run slot and
+   * carried on every frame of that run — the live event, the terminal frames and
+   * the ``get_sync_status`` snapshot a remounted QAM re-seeds from, which is
+   * what lets a QAM reloaded mid-run learn the kind at all.
+   *
+   * ``""`` (the idle default) or absent means **not established**, never one of
+   * the two answers: a reader renders neither claim there. The frontend also
+   * stamps it on the optimistic frame it writes when it starts a run, so the
+   * first paint is already right rather than reading as unknown for a round trip.
+   */
+  runKind?: SyncRunKind | "";
+  /**
+   * Frontend-computed upper-bound apply duration (seconds) for the in-flight
+   * run, derived once from the ``sync_plan`` payload's ``total_roms`` — an
+   * honest ceiling (every ROM priced as new) that the applying UI surfaces as
+   * "up to ~X min". Never sent by the backend; set by the ``sync_plan``
+   * listener and preserved across backend ``sync_progress`` frames.
+   */
+  etaSeconds?: number;
+}
+
+export interface SessionBudgetStatus {
+  success: boolean;
+  /**
+   * Live renderer RSS in KB, or ``null`` when unreadable (no ``steamwebhelper`` /
+   * unreadable ``/proc``). The banners drop the number but keep their text when
+   * this is ``null`` (#1383).
+   */
+  rss_kb: number | null;
+  /**
+   * The advisory floor in KB (~1.8 GB) — strictly above this the value colours
+   * yellow (and the yellow high-heap banner appears). Backend-supplied so the
+   * frontend holds no threshold magic numbers (#1383).
+   */
+  warn_kb: number;
+  /** The effective pause ceiling in KB (~2.2 GB) — a chunk projected past this pauses; value colours red at/above it. */
+  ceiling_kb: number;
+  /** The measured OOM cliff in KB (~2.45 GB) the renderer crashes at. */
+  cliff_kb: number;
+  /**
+   * Signed renderer-RSS growth (KB) of the last run (end − start), measured at
+   * EVERY terminal — completed, paused, cancelled, or interrupted — so the row
+   * reflects that run's consumption, not a prior clean run's. Retained in backend
+   * memory so a QAM remount can show "last run: ±X GB" without a live run. ``null``
+   * when either endpoint was unmeasurable (or after a plugin reload). Rendered
+   * sign-formatted (#1383 / #36).
+   */
+  memory_delta_kb: number | null;
+  /**
+   * Whether resuming a paused run now would apply at least one full chunk without
+   * re-pausing — the gate's own predictive condition against the live reading. Once
+   * a Steam restart drops RSS this flips ``true`` and the paused banner tells the
+   * user memory is free again (and hides the restart button). ``null`` when the
+   * reading is unavailable (undecidable → conservative fail-open). (#1383)
+   */
+  resume_ready: boolean | null;
+  /**
+   * Items of the last run already done — its skipped (already-correct) entries plus
+   * every committed chunk's applied shortcuts. Counted in the backend, which
+   * survives the Steam restart the paused banner asks for. ``null`` when unknown
+   * (no run has reached its plan in the backend process — a plugin reload wipes the
+   * in-memory counters), in which case the banner omits the progress sentence
+   * rather than showing a placeholder (#1383).
+   */
+  run_done_items: number | null;
+  /** The last run's planned item total — the denominator of ``run_done_items``; ``null`` alongside it (#1383). */
+  run_total_items: number | null;
+}
+
+export interface SyncStats {
+  last_sync: string | null;
+  /**
+   * The latest run that ended in a terminal state OTHER than completed
+   * (cancelled / errored / interrupted / paused), surfaced only when it is newer
+   * than ``last_sync`` — so a cancelled or crash-resumed run reads as "17:48
+   * (cancelled)" instead of "Never" after thousands of shortcuts were applied.
+   * ``null`` (or absent) when the most recent terminal run completed cleanly.
+   * Force Full Sync preserves the run history, so this display survives a reset
+   * (#1318).
+   */
+  last_attempt?: { finished_at: string; status: "cancelled" | "errored" | "interrupted" | "paused" } | null;
+  platforms: number;
+  collections?: number;
+  roms: number;
+  total_shortcuts: number;
+  /**
+   * Bound ROMs carrying a recorded launch command — the games the next run can
+   * pass over at apply time, and the number the resume line states.
+   *
+   * Bound AND recorded, never recorded alone: an unbound row is classified NEW
+   * before its recorded value is read, so a recorded command with no shortcut is
+   * not skip authority. That is what makes this fall to zero after a
+   * remove-all, where the rows (and their recorded commands) deliberately
+   * survive.
+   *
+   * Absent from an older backend, which reads as no recorded games — the safe
+   * direction, since the offer then understates rather than promises.
+   */
+  resumable_games?: number;
+  /**
+   * Whether ANY platform or collection still carries a completion stamp — the
+   * other kind of durable progress, which makes the next run pass over a whole
+   * unit at fetch time.
+   *
+   * A separate fact rather than an optimisation of {@link resumable_games},
+   * because neither implies the other. A run cancelled inside its first platform
+   * unit has recorded games and no stamp; a row predating migration 015 carries a
+   * NULL recorded value while its platform's stamp survives, so an upgraded
+   * install can hold stamps and no recorded games. Both are genuine resumes.
+   */
+  has_completion_stamp?: boolean;
+}
+
+/**
+ * One recorded sync run, verbatim from the backend's `sync_runs` history.
+ *
+ * `status` is the run's lifecycle state: `"running"` for the one in flight,
+ * and the five terminals a run ends in exactly once. `cancelled` is the user's
+ * own Cancel, `interrupted` an external death, `paused` a session-budget stop
+ * at a chunk boundary, `errored` a failure.
+ *
+ * `finished_at` and the two completed lists are `null` on a run that has not
+ * reached that point. A stopped run's lists are `null` rather than empty: it
+ * never recorded them, and `status` is what says why — an empty list would read
+ * as a run that finished having synced nothing. `error` is `null` on a run that
+ * has not stopped AND on one that completed cleanly; only the four stopped
+ * terminals carry text there.
+ */
+export interface SyncRunRecord {
+  id: string;
+  started_at: string;
+  finished_at: string | null;
+  status: "running" | "completed" | "cancelled" | "interrupted" | "paused" | "errored";
+  platforms_planned: number;
+  roms_planned: number;
+  platforms_completed: string[] | null;
+  collections_completed: string[] | null;
+  error: string | null;
+}
+
+/** Answer of `get_sync_runs`: the newest recorded runs, newest first. */
+export interface SyncRunsAnswer {
+  success: boolean;
+  runs: SyncRunRecord[];
+}
+
+export interface RegistryPlatform {
+  name: string;
+  slug: string;
+  /** Bound ROMs — how many Steam shortcuts this platform has. What the Remove
+   *  group acts on, and never what the header line states. */
+  count: number;
+  /**
+   * How many of the platform's ROMs are reachable from Steam: every member of a
+   * sibling group that holds a binding, because one shortcut serves the whole
+   * group and the game's page switches versions across it. Equal to `count` only
+   * where every group that HOLDS a binding is a single version — a group with no
+   * binding contributes to neither number, which is exactly a partly-synced
+   * platform. A version the platform's last completed fetch did not return is
+   * excluded: the picker refuses a switch to it, so no reader reaches it. It is
+   * therefore not bounded by `count` either — a BOUND row the fetch did not
+   * return raises `count` without raising this, so a pane can read fewer here
+   * than it has shortcuts.
+   *
+   * Absent on older backends; a reader falls back to `count`, which is the
+   * pre-#1815 wording and understates rather than inventing a number.
+   */
+  reachable_count?: number;
+}
+
+export interface SyncAddItem {
+  rom_id: number;
+  name: string;
+  exe: string;
+  start_dir: string;
+  launch_options: string;
+  platform_name: string;
+}
+
+/**
+ * One platform's share of a preview's counts. Present only for a platform with
+ * at least one non-zero count, ordered by `name` (case-insensitively).
+ *
+ * `synced` is whether the platform is in the run's platform list. A
+ * `synced: false` row is a platform outside it: its toggle went off, RomM
+ * stopped listing it, or the only route to it is an enabled collection, which
+ * is not filtered by platform enablement. The causes compose, so one row can
+ * carry removals for the ROMs the run no longer fetches and new or changed
+ * counts for the ROMs a collection still reaches.
+ *
+ * `name` is the run's display name where there is one, else a real name carried
+ * on one of the platform's fetched new/changed entries, else what the backend
+ * recorded for the platform. A reconstructed collection member carries the slug
+ * in that field and does not count as a name. It is the bare slug where no tier
+ * answers — outside the run, no fetched entry with a real name, and the
+ * registry knows only the slug or holds no row for it.
+ *
+ * Collections are NOT a row here — `collection_diff` on the same summary already
+ * carries the added and removed collection names.
+ */
+export interface PlatformBreakdownRow {
+  slug: string;
+  name: string;
+  synced: boolean;
+  new_count: number;
+  changed_count: number;
+  remove_count: number;
+}
+
+export interface SyncPreviewSummary {
+  new_count: number;
+  changed_count: number;
+  unchanged_count: number;
+  remove_count: number;
+  disabled_platform_remove_count: number;
+  /**
+   * Bound ROMs whose server-side cover changed (#1386) — cover-cache refreshes
+   * the apply run performs even when the shortcut delta is empty. A cover-only
+   * preview (all other diffs zero, this > 0) must still offer Apply, or the
+   * refresh pass never runs and the tiles stay stale. Absent on older backends
+   * (treat as 0).
+   */
+  cover_refresh_count?: number;
+  /**
+   * Enabled platforms lacking a completion stamp (#1416) — a late-ack-recovered
+   * platform is complete but unstamped, so its apply is a 0-delta empty final
+   * chunk that re-writes the stamp and records a fresh run. A restamp-only
+   * preview (all other diffs zero, this > 0) must still offer Apply, or the
+   * stamp never returns and "Last sync: interrupted" lingers. Absent on older
+   * backends (treat as 0).
+   */
+  restamp_platform_count?: number;
+  /** Scope of the run — how many platforms this sync spans (always shown, independent of diffs). */
+  sync_platform_count?: number;
+  /** Scope of the run — how many collections this sync spans. */
+  sync_collection_count?: number;
+  /**
+   * The library-wide counts above, split per platform — one row per platform
+   * with a change, ordered by display name. Regrouped from the same
+   * classification, so each column sums to its total above. Absent on older
+   * backends (treat as no breakdown, and fall back to the totals).
+   */
+  platform_breakdown?: PlatformBreakdownRow[];
+  collection_diff?: {
+    has_changes: boolean;
+    added: string[];
+    removed: string[];
+  };
+  platform_collection_diff?: {
+    has_changes: boolean;
+    added_count: number;
+    removed_count: number;
+  };
+}
+
+export interface SyncPreview {
+  success: boolean;
+  summary: SyncPreviewSummary;
+  new_names: string[];
+  changed_names: string[];
+  preview_id: string;
+  message?: string;
+  blocked_by_migration?: boolean;
+  /**
+   * Post-preview session-budget prognosis (#1383): ``true`` when the backend
+   * predicts that applying every planned touch would push Steam's renderer past
+   * its per-session heap budget, so the sync will likely pause partway (and can
+   * always be resumed). Drives the yellow advisory hint on the preview. Absent /
+   * ``false`` when the reading is unavailable or the run fits under the budget.
+   */
+  pause_likely?: boolean;
+  /**
+   * Absolute wall-clock deadline (epoch SECONDS) the backend stops accepting
+   * this preview at — 30 minutes after it was computed. Absolute rather than a
+   * remaining-seconds count because the plugin and the panel share a machine
+   * and a clock, and a deadline survives the Deck suspending where a locally
+   * counted-down number does not. Absent on older backends; the card then shows
+   * no countdown and behaves exactly as it did before.
+   */
+  expires_at?: number;
+}
+
+/**
+ * Answer of ``get_sync_status``: the latest progress frame, plus the backend's
+ * run-lifecycle state as a fact of its own.
+ *
+ * `inFlight` rides this answer only — never an emitted `sync_progress` event —
+ * and it is not a re-reading of the frame's `running`. The two disagree by
+ * design: during a cancel drain the terminal frame already reads
+ * `running: false` while the run still owns the slot. A panel needs the
+ * distinction because a frame cannot tell it "the backend has no run" apart from
+ * "the backend has not said anything about this run yet", and only the first of
+ * those licenses retracting a run the panel believes is live.
+ */
+export interface SyncStatusAnswer extends SyncProgress {
+  inFlight?: boolean;
+}
+
+/**
+ * Answer of ``get_pending_preview`` — the preview the backend is still holding,
+ * which is how a panel that was navigated away from gets its card back. A
+ * ``null`` preview is the normal "nothing pending" answer (including a snapshot
+ * the backend dropped as expired), not a failure.
+ */
+export interface PendingPreviewAnswer {
+  success: boolean;
+  preview: SyncPreview | null;
+}
+
+export interface SyncPlanUnit {
+  type: "platform" | "collection";
+  id: number | string;
+  name: string;
+  slug: string;
+  rom_count: number;
+  /** Only present when ``type === "collection"``. Discriminates standard/smart/virtual. */
+  collection_kind?: CollectionKind;
+  /**
+   * Plan-time prediction of the wholesale incremental skip (#1382) —
+   * estimate-only, the fetch-time gate stays the sole skip authority
+   * (ADR-0023). Present on platform units from current backends; absent on
+   * collections and older backends (treat absent as "will not skip").
+   */
+  predicted_skip?: boolean;
+  /**
+   * Persisted post-collapse shortcut count for this platform (one shortcut
+   * per sibling group, ADR-0021). Absent on collections, never-synced
+   * platforms, and older backends; the estimate then weighs the unit by its
+   * raw `rom_count`.
+   */
+  collapsed_count?: number;
+  /**
+   * This unit's known ROMs that already carry a Steam shortcut (#1511) — a
+   * platform's persisted rows, or a collection's stamped member set. Those
+   * items take the cheap UPDATE path in the apply loop, so the seed prices them
+   * at `UPDATED_ITEM_SEC` and only the remainder at the create rate — without it
+   * a re-sync (and every Force Full Sync, which unbinds nothing) is priced as a
+   * fresh import. Unlike its sibling riders this rides BOTH unit kinds. Absent
+   * on older backends, on never-stamped collections (a collection's membership
+   * is known only from its stamp), and on virtual collections (never
+   * stampable); the seed then prices every item as a create, as before.
+   *
+   * Note the asymmetry a Force Full Sync exposes: it clears every stamp, so its
+   * PLATFORM units keep this field (read from the rows, no stamp gate) while its
+   * COLLECTION units lose it and price as creates for that run.
+   */
+  bound_count?: number;
+  /**
+   * Shortcuts this platform's apply is expected to CREATE rather than update
+   * (#1517) — sibling groups (ADR-0021) with no binding anywhere, unbound rows
+   * with no group key, and every server ROM the local mirror holds no row for.
+   * The seed uses it as the create term directly, because deriving creates by
+   * subtracting `bound_count` from the unit's weight over-reads whenever that
+   * weight is the pre-collapse `rom_count`: a sibling group's duplicates are
+   * unbound rows that will never become shortcuts, and the subtraction prices
+   * each of them as a new shortcut plus a cover download. That is precisely a
+   * Force Full Sync, which drops `collapsed_count` (stamp-gated) while leaving
+   * the bindings intact.
+   *
+   * Platform units only; absent on collections and older backends, where the
+   * seed falls back to the subtraction. `0` is real knowledge, not absence — a
+   * fully-mirrored platform genuinely creates nothing.
+   */
+  new_shortcut_count?: number;
+}
+
+export interface SyncPlanData {
+  /** Identifies the sync run; captured frontend-side so a Cancel click is scoped to the active run (#1198). */
+  run_id: string;
+  units: SyncPlanUnit[];
+  total_units: number;
+  /** Raw planned ROM total (pre-collapse, skip-blind) — kept for backward compatibility. */
+  total_roms: number;
+  /**
+   * Skip-aware estimate total (#1382): sum over units of `0` for a
+   * predicted-skip unit, else `collapsed_count ?? rom_count`. Absent on older
+   * backends; the seeds then fall back to `total_roms`.
+   */
+  total_estimated_items?: number;
+}
+
+export interface SyncApplyUnitData {
+  /** Identifies the sync run; keys the frontend's once-per-run shortcut-scan cache. */
+  run_id: string;
+  unit_type: "platform" | "collection";
+  unit_id: number | string;
+  unit_name: string;
+  unit_index: number;
+  total_units: number;
+  /**
+   * A unit's shortcuts are emitted in chunks, each acked + committed durably
+   * before the next, so a mid-unit CEF crash forfeits only the in-flight chunk.
+   * ``chunk_index`` (0-based) is echoed back in the ack so the backend rejects a
+   * stale chunk; ``chunk_offset`` / ``unit_total`` drive unit-wide progress that
+   * stays continuous across chunks; ``shortcuts`` is this chunk's slice.
+   */
+  chunk_index: number;
+  chunk_count: number;
+  chunk_offset: number;
+  unit_total: number;
+  shortcuts: SyncAddItem[];
+  /**
+   * EXISTING shortcuts whose server-side cover changed (#1386): the backend's
+   * cover-cache invalidation pass already re-downloaded the cache and grid
+   * copy; the frontend re-applies each cover via `SetCustomArtworkForApp` so
+   * the Steam tile refreshes in-session (the grid file alone shows only after
+   * a client restart). Rides the unit's first chunk, already clipped to the
+   * session-budget headroom backend-side; empty/absent on later chunks.
+   */
+  cover_refreshes?: { rom_id: number; app_id: number }[];
+}
+
+export interface SyncStaleData {
+  /**
+   * Bound stale ROMs to remove from Steam. Each entry carries the `app_id`
+   * read on the backend BEFORE the row was unbound, so the handler removes
+   * the shortcut directly without re-resolving rom_id→app_id (which races
+   * the backend unbind). Unbound stale ROMs are excluded — they have no
+   * Steam shortcut to remove.
+   */
+  remove: { rom_id: number; app_id: number }[];
+  prune_lease_token?: string;
+}
+
+export interface SyncCollectionsData {
+  platform_app_ids: Record<string, number[]>;
+  romm_collection_app_ids: Record<string, number[]>;
+}

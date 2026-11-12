@@ -1,0 +1,633 @@
+"""Adapter half of the composition root — the only place adapters are constructed.
+
+Adapter construction lives here so ``main.py`` only deals with the
+Decky lifecycle and the callable surface. ``bootstrap()`` also loads
+and migrates settings as part of adapter wiring so adapters that bind
+a live mutable settings dict (such as ``RommHttpAdapter``) bind the
+migrated dict in a single pass; that same dict is returned for the
+caller to keep as its source of truth.
+
+The bundles defined here are the typed vocabulary the service half
+consumes; nothing outside this module instantiates an adapter.
+"""
+
+from __future__ import annotations
+
+import functools
+import os
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+from models.shortcut_launcher import ShortcutLauncher
+
+from adapters.adoption_move import AdoptionMoveAdapter
+from adapters.asyncio_sleeper import AsyncioSleeper
+from adapters.atlas_catalogue import AtlasCatalogueAdapter, first_detected_installation
+from adapters.atlas_firmware import AtlasFirmwareAdapter, AtlasPlatformFirmwareAdapter
+from adapters.atlas_host import grant_core_probe_interpreter
+from adapters.atlas_saves import AtlasSaveLocationAdapter
+from adapters.content_identity import ContentIdentityAdapter
+from adapters.cover_art_file_store import CoverArtFileStoreAdapter
+from adapters.debug_logger import SettingsAwareDebugLogger
+from adapters.download_file import DownloadFileAdapter
+from adapters.es_find_rules import EsFindRulesAdapter
+from adapters.external_emulators import ExternalEmulatorsAdapter
+from adapters.firmware_file import FirmwareFileAdapter
+from adapters.game_process import GameProcessAdapter
+from adapters.gavel_native import GavelNativeAdapter
+from adapters.hostname import HostnameAdapter
+from adapters.launcher_install import LauncherInstallAdapter
+from adapters.layout_manifest import LayoutManifestAdapter
+from adapters.machine_id import MachineIdAdapter
+from adapters.migration_file import MigrationFileAdapter
+from adapters.path_probe import PathProbeAdapter, ResolvedPathAdapter
+from adapters.persistence import (
+    SETTINGS_FILENAME,
+    PersistenceAdapter,
+    PlatformCoreReaderAdapter,
+    SettingsPersisterAdapter,
+)
+from adapters.plugin_metadata import PluginMetadataAdapter
+from adapters.prune_artifacts import PruneArtifactAdapter
+from adapters.recovery_bundle import RecoveryBundleAdapter
+from adapters.renderer_gc import RendererGcAdapter
+from adapters.renderer_rss import RendererRssAdapter
+from adapters.repositories.unit_of_work import SqliteUnitOfWork
+from adapters.retroarch_appendconfig import RetroArchAppendConfigAdapter
+from adapters.retroarch_config import RetroArchConfigAdapter
+from adapters.retroarch_core_info import RetroArchCoreInfoAdapter
+from adapters.retroarch_runner import RetroArchRunnerAdapter
+from adapters.retrodeck_paths import RetroDeckPathsAdapter
+from adapters.rom_files import RomFileAdapter
+from adapters.romm.http import RommHttpAdapter
+from adapters.romm.romm_api import RommApiAdapter
+from adapters.save_bank_dir import SaveBankDirAdapter
+from adapters.save_file import SaveFileAdapter
+from adapters.sgdb_artwork_cache import SgdbArtworkCacheAdapter
+from adapters.sqlite_migrations import MIGRATIONS_DIR, apply_migrations
+from adapters.steam_config import SteamConfigAdapter
+from adapters.steam_recovery import SteamRecoveryAdapter
+from adapters.steamgriddb import SteamGridDbAdapter
+from adapters.system_clock import SystemClock
+from adapters.system_uuid_gen import SystemUuidGen
+from adapters.user_data_migration import SourceLocation, UserDataMigrationAdapter
+from domain.state_migrations import fold_legacy_save_sync_settings, migrate_settings
+from domain.user_data_location import SOURCE_FOLDER_NAMES, config_root, data_root, launcher_path
+
+if TYPE_CHECKING:
+    import asyncio
+    import logging
+    from typing import Any
+
+    from models.data_location import UserDataLocations
+
+    from services.protocols import (
+        AdoptionMoveStore,
+        Clock,
+        ComputeSyncActionFn,
+        ContentIdentityFn,
+        CoreInfoProvider,
+        CoreNameProviderFn,
+        CoverArtFileStore,
+        DataLocationStore,
+        DebugLogger,
+        DirectoryFileListerFn,
+        DownloadFileStore,
+        EventEmitter,
+        ExternalEmulatorProvider,
+        FirmwareFileStore,
+        FirmwarePlatformResolver,
+        FirmwareResolver,
+        GameProcessControl,
+        HostnameReader,
+        LayoutManifestReader,
+        MachineIdReader,
+        MigrationFileStore,
+        PathExistsReader,
+        PlatformCoreReader,
+        PluginMetadataReader,
+        PruneArtifactStore,
+        RecoveryBundleStore,
+        RendererGcFn,
+        RendererRssFn,
+        ResolvedPathFn,
+        ResolveUploadConflictFn,
+        RetroArchAppendConfigFn,
+        RetroArchRunnerFn,
+        RetroArchSaveLayoutProvider,
+        RetroArchSavestateLayoutProvider,
+        RetroDeckPaths,
+        RomFileStore,
+        RommApi,
+        SandboxLauncherFn,
+        SaveBankDirFn,
+        SaveFileStore,
+        SaveLocationReader,
+        SettingsPersister,
+        SgdbArtworkCache,
+        Sleeper,
+        SteamConfigStore,
+        SteamRecoveryStore,
+        SystemKnownFn,
+        SystemM3uSupportFn,
+        SystemSupportedExtensionsFn,
+        UnitOfWorkFactory,
+        UuidGen,
+    )
+
+# Filename of the SQLite database inside a plugin's runtime dir. Created by the
+# migration runner at startup. Not private: the legacy-install notice asks the
+# same question of the pre-rename install's runtime dir, and a second literal
+# spelling of the name would leave that detection silently answering about a
+# file we no longer write.
+DB_FILENAME = "romm_sync.db"
+
+# Where a user's answer to the two-libraries question waits for the next start.
+# It lives in the Decky-assigned runtime directory, which is the directory Decky
+# hands THIS install whichever candidate it is running from — so a start can find
+# the answer before it has decided anything. That directory is also one of the
+# candidates' own, which is why the migration's copy skips this file.
+DATA_LOCATION_ANSWER_FILENAME = "data-location-choice.json"
+
+
+@dataclass(frozen=True)
+class AdapterBundle:
+    """Concrete I/O adapters wired into services."""
+
+    http_adapter: RommHttpAdapter
+    romm_api: RommApi
+    steam_config: SteamConfigStore
+    sgdb_adapter: SteamGridDbAdapter
+    cover_art_file_store: CoverArtFileStore
+    sgdb_artwork_cache: SgdbArtworkCache
+    download_file_store: DownloadFileStore
+    adoption_move: AdoptionMoveStore
+    firmware_file_store: FirmwareFileStore
+    firmware_resolver: FirmwareResolver
+    platform_firmware_resolver: FirmwarePlatformResolver
+    migration_file_store: MigrationFileStore
+    rom_file_store: RomFileStore
+    save_file_store: SaveFileStore
+    path_probe: PathExistsReader
+    resolve_path: ResolvedPathFn
+    core_info_provider: CoreInfoProvider
+    external_emulators: ExternalEmulatorProvider
+    retroarch_appendconfig: RetroArchAppendConfigFn
+    retroarch_runner: RetroArchRunnerFn
+    content_identity: ContentIdentityFn
+    save_bank_dir: SaveBankDirFn
+    save_locations: SaveLocationReader
+    layout_manifest: LayoutManifestReader
+    renderer_rss: RendererRssFn
+    renderer_gc: RendererGcFn
+    game_process: GameProcessControl
+    resolve_upload_conflict: ResolveUploadConflictFn
+    compute_sync_action: ComputeSyncActionFn
+    recovery_store: RecoveryBundleStore
+    prune_artifacts: PruneArtifactStore
+    steam_recovery: SteamRecoveryStore
+    data_location_store: DataLocationStore
+
+
+@dataclass(frozen=True)
+class StateBundle:
+    """Live mutable state shared across services."""
+
+    settings: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class RuntimeBundle:
+    """Process-level runtime infrastructure (event loop, logger, paths, time/UUID/sleep seams)."""
+
+    loop: asyncio.AbstractEventLoop
+    logger: logging.Logger
+    plugin_dir: str
+    # The DECKY-ASSIGNED runtime directory, and nothing else. It is not where
+    # the user's data lives — that is ``WiringConfig.locations.data_dir``, which
+    # a migration may have moved out of Decky's tree entirely. What is asked of
+    # this one is a question about Decky's own layout: whether the folder the
+    # pre-rename release unpacked into still stands beside ours, which is
+    # answered by taking this directory's parent. Point it at the data root and
+    # that probe asks about a directory Decky never created, and the warning it
+    # carries goes quiet without failing.
+    runtime_dir: str
+    emit: EventEmitter
+    clock: Clock
+    uuid_gen: UuidGen
+    sleeper: Sleeper
+    hostname_provider: HostnameReader
+    machine_id_provider: MachineIdReader
+
+
+@dataclass(frozen=True)
+class CallbackBundle:
+    """Provider callables and persister Protocols injected into services."""
+
+    retrodeck_paths: RetroDeckPaths
+    get_save_layout: RetroArchSaveLayoutProvider
+    get_savestate_layout: RetroArchSavestateLayoutProvider
+    get_core_name: CoreNameProviderFn
+    platform_core_reader: PlatformCoreReader
+    m3u_support: SystemM3uSupportFn
+    sandbox_launcher: SandboxLauncherFn
+    system_known: SystemKnownFn
+    system_extensions: SystemSupportedExtensionsFn
+    list_rom_dir_files: DirectoryFileListerFn
+    settings_persister: SettingsPersister
+    log_debug: DebugLogger
+    plugin_metadata: PluginMetadataReader
+    uow_factory: UnitOfWorkFactory
+
+
+@dataclass(frozen=True)
+class RuntimeAdaptersBundle:
+    """Concrete adapters for the Clock/UuidGen/Sleeper/HostnameReader/MachineIdReader seams.
+
+    Bootstrap owns adapter instantiation, but the ``RuntimeBundle``
+    handed to ``wire_services`` also needs runtime-only state ``main.py``
+    introduces (the ``asyncio`` loop, ``decky.emit``). This sub-bundle
+    carries the seams bootstrap builds so ``main.py`` can compose the
+    final ``RuntimeBundle`` without instantiating any adapters itself.
+    """
+
+    clock: Clock
+    uuid_gen: UuidGen
+    sleeper: Sleeper
+    hostname_provider: HostnameReader
+    machine_id_provider: MachineIdReader
+
+
+@dataclass(frozen=True)
+class BootstrapHandles:
+    """Bootstrap outputs ``main.py`` needs that don't fit the wiring bundles.
+
+    Anything ``Plugin`` itself binds (not the services) lives here:
+    the debug logger forwarded by ``Plugin._log_debug`` and the
+    persistence adapter ``Plugin`` holds for disk-touching callable paths
+    that bypass a service. The bundles already cover everything passed to
+    ``wire_services``; this struct keeps those Plugin-only handles typed
+    instead of returning them via the untyped dict shape of yore.
+    """
+
+    debug_logger: DebugLogger
+    persistence: PersistenceAdapter
+
+
+@dataclass(frozen=True)
+class BootstrapResult:
+    """Typed return shape for :func:`bootstrap`.
+
+    The four bundles carry every Protocol-typed seam and live state
+    dict that services need; :attr:`handles` carries the small set of
+    raw outputs only ``main.py`` itself binds (debug logger); and
+    :attr:`locations` says which two directories this run ended up
+    reading and writing, which nothing else can answer because the
+    start-up migration decides it; :attr:`launcher` says where the
+    shortcut launcher lives beneath the data half and whether this
+    start got it there. Together they replace the historical untyped
+    ``dict`` return so every consumer is caught by basedpyright
+    instead of failing silently at runtime on a typo.
+    """
+
+    adapters: AdapterBundle
+    stores: StateBundle
+    callbacks: CallbackBundle
+    runtime_adapters: RuntimeAdaptersBundle
+    handles: BootstrapHandles
+    locations: UserDataLocations
+    launcher: ShortcutLauncher
+
+
+def bootstrap(
+    *,
+    settings_dir: str,
+    runtime_dir: str,
+    plugin_dir: str,
+    user_home: str,
+    logger: logging.Logger,
+) -> BootstrapResult:
+    """Build every adapter and bundle the composition root hands to ``main.py``.
+
+    Bootstrap owns adapter instantiation and is the only path that
+    constructs ``PersistenceAdapter``. Settings are loaded + migrated
+    inside here so the ``SettingsPersisterAdapter`` binds the live dict
+    at construction; mutating that dict from the caller side is visible
+    to every adapter/service that holds the same reference.
+
+    Parameters
+    ----------
+    settings_dir:
+        ``decky.DECKY_PLUGIN_SETTINGS_DIR`` — where settings USED to live, and
+        where they still live for a run whose migration could not finish.
+    runtime_dir:
+        ``decky.DECKY_PLUGIN_RUNTIME_DIR`` — the same, for the data half, and
+        the directory a recorded data-location answer waits in.
+    plugin_dir:
+        ``decky.DECKY_PLUGIN_DIR``
+    user_home:
+        ``decky.DECKY_USER_HOME`` — base for the plugin's own data roots, and
+        for RetroDECK and Steam path lookups.
+    logger:
+        ``decky.logger``
+
+    Returns
+    -------
+    :class:`BootstrapResult`
+        Typed bundles consumed by ``wire_services`` (``adapters``,
+        ``stores``, ``callbacks``, ``locations``) plus the small set of
+        Plugin-only handles ``main.py`` itself binds
+        (``handles.debug_logger``).
+    """
+    # SystemClock is dependency-free; construct it first so the single shared
+    # instance threads into the data-location migration (the date in the note it
+    # leaves behind), PersistenceAdapter (corrupt-settings backup stamp) and
+    # every later seam (uuid_gen/sleeper neighbours, runtime bundle).
+    clock = SystemClock()
+
+    # Before anything opens a file: bring the user's data to the plugin's own
+    # roots. Decky derives its per-plugin directories from the plugin's folder
+    # name, so the folder rename at 0.31.0 moved every user's data — putting the
+    # roots under the user's home takes that decision away from the packaging.
+    # Each older location's two halves are found by taking the parent of the
+    # directory Decky assigned US and looking for the folder name beside it,
+    # which asserts one layout fact less than composing ``DECKY_HOME`` here.
+    data_home = data_root(user_home)
+    data_location_store = UserDataMigrationAdapter(
+        settings_root=config_root(user_home),
+        data_root=data_home,
+        fallback_settings_dir=settings_dir,
+        fallback_data_dir=runtime_dir,
+        sources=[
+            SourceLocation(
+                name=name,
+                settings_dir=os.path.join(os.path.dirname(settings_dir), name),
+                data_dir=os.path.join(os.path.dirname(runtime_dir), name),
+            )
+            for name in SOURCE_FOLDER_NAMES
+        ],
+        answer_path=os.path.join(runtime_dir, DATA_LOCATION_ANSWER_FILENAME),
+        db_filename=DB_FILENAME,
+        settings_filename=SETTINGS_FILENAME,
+        clock=clock,
+        logger=logger,
+    )
+    locations = data_location_store.migrate()
+
+    # Then the launcher, which is code rather than data and moves for the other
+    # reason: Decky deletes the whole plugin folder before it unpacks an update,
+    # and every shortcut's ``exe`` used to name a file inside it. It is written
+    # on every start rather than once, so the launcher a shortcut runs is always
+    # the one this release ships — a launcher installed once would freeze at
+    # whatever version the day of the move happened to bring.
+    #
+    # IT MUST NOT RUN BEFORE THE DATA HALF HAS LANDED, and the reason is not
+    # tidiness. ``UserDataMigrationAdapter._probe_root`` (adapters/
+    # user_data_migration.py:332-334) reads a target root as already migrated the
+    # moment ``os.scandir`` yields ANY entry, so a launcher written into an empty
+    # data root would settle the migration's first rung for the life of the
+    # install and the user's library would never come across — with no failure,
+    # no notice and nothing in the log. Whether the half landed is read off what
+    # the migration just decided, never by probing the directory a second time.
+    # A start that has not got there installs nothing and creates nothing.
+    #
+    # The path a new shortcut is built against follows the INSTALL, not the
+    # migration: it is the home only where this start actually got the launcher
+    # into it, and the copy the release ships otherwise — a start whose write
+    # failed is the second case, and pointing a shortcut at a home the write
+    # never reached would name a file that is not there.
+    data_settled = locations.data_dir == data_home
+    launcher_at_home = (
+        data_settled
+        and LauncherInstallAdapter(
+            source=launcher_path(plugin_dir),
+            destination=launcher_path(locations.data_dir),
+            logger=logger,
+        ).install()
+    )
+    launcher = ShortcutLauncher(
+        path=launcher_path(locations.data_dir) if launcher_at_home else launcher_path(plugin_dir),
+        at_home=launcher_at_home,
+    )
+
+    # Bring the on-disk SQLite schema up to date before any service is wired —
+    # the composition root owns startup infra. Post-cutover (#784) SQLite is the
+    # sole persistence backend: there is no JSON fallback, so a failed or
+    # unopenable database is fatal. Log the cause, then re-raise so bootstrap
+    # aborts and the plugin stays inert — matching the RomM-minimum-version
+    # gate's "inert until the environment is fixed" posture.
+    db_path = os.path.join(locations.data_dir, DB_FILENAME)
+    try:
+        apply_migrations(db_path, MIGRATIONS_DIR, logger=logger)
+    except Exception:
+        logger.exception("SQLite schema migration failed; plugin cannot start")
+        raise
+
+    # The runtime Unit-of-Work factory: each call opens a fresh sync sqlite3
+    # connection on db_path (ADR-0004). Wired here but not yet threaded into any
+    # service config — the service cutover (#784) consumes it.
+    uow_factory: UnitOfWorkFactory = functools.partial(SqliteUnitOfWork, db_path)
+
+    retrodeck_paths = RetroDeckPathsAdapter(user_home=user_home, logger=logger)
+    retroarch_config = RetroArchConfigAdapter(user_home=user_home, logger=logger)
+    retroarch_core_info = RetroArchCoreInfoAdapter(user_home=user_home, logger=logger)
+    es_find_rules = EsFindRulesAdapter(logger=logger, user_home=user_home)
+
+    persistence = PersistenceAdapter(locations.settings_dir, locations.data_dir, logger, clock=clock)
+    settings = persistence.load_settings()
+    # One-time JSON→JSON lift (ADR-0003): fold the legacy save-sync knobs +
+    # device_name out of save_sync_state.json before the schema bump stamps
+    # version 4. Idempotent — after the first run save_settings stamps the
+    # new version and this branch is skipped.
+    if settings.get("version", 0) < 4:
+        settings = fold_legacy_save_sync_settings(settings, persistence.load_save_sync_state())
+    settings = migrate_settings(settings)
+    # If load_settings quarantined a corrupt file this boot, fold the reset into
+    # the settings dict as a persistent marker. Set AFTER migration and BEFORE
+    # the save so it lands in the fresh settings.json and survives a plugin
+    # reload — the frontend surfaces it as a banner (QAM + game detail) until the
+    # next successful sign-in clears it (ConnectionService pops it on persist).
+    if persistence.corrupt_reset is not None:
+        settings["_settings_reset_notice"] = {"backed_up_to": persistence.corrupt_reset["backed_up_to"]}
+    persistence.save_settings(settings)
+    settings_persister = SettingsPersisterAdapter(persistence, settings)
+    # Binds the same live settings dict so the per-platform-core fan-out resolves
+    # the freshly-written value, not a snapshot.
+    platform_core_reader = PlatformCoreReaderAdapter(settings)
+    plugin_metadata = PluginMetadataAdapter()
+    # Single source of truth for outgoing User-Agent — read package.json once at
+    # boot and thread the string to the two adapters that talk to a server off
+    # this machine (RomM and SteamGridDB). ``RendererGcAdapter`` also speaks
+    # HTTP, to Steam's own debugger on localhost, and takes no UA. Bot Fight Mode
+    # on Cloudflare blocks the default ``Python-urllib`` UA before requests reach
+    # self-hosted RomM (#249). Both halves come from that one read: a literal
+    # name here would be a second spelling of the package, free to drift away
+    # from the recovery root built out of the same value below.
+    package_name, plugin_version = plugin_metadata.read_metadata(plugin_dir)
+    user_agent = f"{package_name}/{plugin_version}"
+    recovery_store = RecoveryBundleAdapter(
+        user_home=user_home,
+        package_name=package_name,
+        plugin_version=plugin_version,
+    )
+    prune_artifacts = PruneArtifactAdapter(runtime_dir=locations.data_dir)
+    steam_recovery = SteamRecoveryAdapter(user_home=user_home, logger=logger)
+    # Built here rather than beside its peers below because the transport wants
+    # it: a bare `logger.debug` never reaches the log the user reads, since
+    # nothing sets a level on this logger and `log_level` gates this seam alone.
+    debug_logger = SettingsAwareDebugLogger(settings=settings, logger=logger)
+    http_adapter = RommHttpAdapter(settings, plugin_dir, logger, user_agent, log_debug=debug_logger)
+    romm_api = RommApiAdapter(http_adapter)
+    steam_config = SteamConfigAdapter(user_home=user_home, logger=logger)
+    sgdb_adapter = SteamGridDbAdapter(settings=settings, logger=logger, user_agent=user_agent)
+    cover_art_file_store = CoverArtFileStoreAdapter()
+    sgdb_artwork_cache = SgdbArtworkCacheAdapter(runtime_dir=locations.data_dir)
+    download_file_store = DownloadFileAdapter()
+    adoption_move = AdoptionMoveAdapter()
+    firmware_file_store = FirmwareFileAdapter()
+    migration_file_store = MigrationFileAdapter()
+    rom_file_store = RomFileAdapter()
+    save_file_store = SaveFileAdapter(logger=logger)
+    path_probe = PathProbeAdapter()
+    resolve_path = ResolvedPathAdapter()
+    renderer_rss = RendererRssAdapter()
+    renderer_gc = RendererGcAdapter(logger=logger)
+    game_process = GameProcessAdapter()
+    # The compiled gavel core owns both save-sync decisions — the per-file sync
+    # action and the upload-409 resolution. Loaded eagerly so a missing /
+    # wrong-architecture artifact is fatal here (like the SQLite migration gate
+    # above) rather than surfacing mid-sync — there is no Python fallback
+    # (GavelNativeLoadError propagates, plugin stays inert).
+    gavel = GavelNativeAdapter()
+    uuid_gen = SystemUuidGen()
+    sleeper = AsyncioSleeper()
+    hostname_provider = HostnameAdapter()
+    machine_id_provider = MachineIdAdapter()
+    # Without this grant the resolver probes no core here — Decky Loader's
+    # frozen runtime is no interpreter to spawn — so every core it is asked
+    # about answers unknown and a libretro save answer usually establishes
+    # nothing. That fails nothing and no test notices, which is why the answer
+    # is logged rather than discarded. Granted before the first atlas adapter:
+    # any question one of them puts can probe. The call stands on its own line
+    # because it is the grant, not the diagnostic: nested inside the log it
+    # would leave with a demoted or deleted log line, and everything would stay
+    # green.
+    core_probe_report = grant_core_probe_interpreter()
+    logger.info(core_probe_report)
+    # Built after the debug logger because the resolver never logs on its own:
+    # its caveats are the whole degradation channel and reach the log through
+    # this seam or not at all. That holds for both firmware questions and for
+    # the emulator catalogue.
+    firmware_resolver = AtlasFirmwareAdapter(user_home=user_home, log_debug=debug_logger)
+    platform_firmware_resolver = AtlasPlatformFirmwareAdapter(user_home=user_home, log_debug=debug_logger)
+    # Detection never picks a winner, so the choice is made here rather than in
+    # the adapter: the highest-priority arrangement, which is RetroDECK wherever
+    # one is installed. Offering the others is #918; nothing in services/ learns
+    # which one answered.
+    emulator_catalogue = AtlasCatalogueAdapter(
+        choose_installation=functools.partial(first_detected_installation, user_home),
+        emulator_installed=es_find_rules.command_emulator_installed,
+        log_debug=debug_logger,
+    )
+    # The installs RetroDECK does not ship: AppImages in ~/Applications, EmuDeck's
+    # launchers, bare flatpaks. Cached for a minute because the picker asks on every
+    # menu open, while the probe behind it spawns ``flatpak list``.
+    external_emulators = ExternalEmulatorsAdapter(user_home=user_home, logger=logger)
+    # Points a libretro launch's saves at the bank. RetroDECK's flatpak carries
+    # ``filesystems=…;host;``, so the data directory is visible inside its sandbox
+    # (verified on a Deck) and the baked ``--appendconfig`` path resolves there.
+    # One switch, read live, so the redirect and the lookup it must agree with can never
+    # be enabled by different means. Off by default: until the bank's directory is the one
+    # a sync reads, redirecting into it would move saves somewhere nothing looks.
+    save_bank_enabled = lambda: bool(settings.get("save_bank"))  # noqa: E731 - one live read, not a name
+    retroarch_appendconfig = RetroArchAppendConfigAdapter(
+        data_dir=locations.data_dir, logger=logger, enabled=save_bank_enabled
+    )
+    save_bank_dir = SaveBankDirAdapter(data_dir=locations.data_dir, logger=logger, enabled=save_bank_enabled)
+    # The RetroArch to start directly when the user opts out of RetroDECK's launcher.
+    # Only a runner that actually holds the requested core is returned, so an unusual
+    # install falls back to the RetroDECK launch instead of starting nothing.
+    retroarch_runner = RetroArchRunnerAdapter(user_home=user_home, logger=logger)
+    # Reads the disc/cart header's own id, which is what names an id-keyed save folder.
+    content_identity = ContentIdentityAdapter(logger=logger)
+    # Same chooser, its own handle: this one caches no answer at all, because a
+    # save answer has to be live on every sync path.
+    save_locations = AtlasSaveLocationAdapter(
+        choose_installation=functools.partial(first_detected_installation, user_home),
+        log_debug=debug_logger,
+    )
+
+    adapters = AdapterBundle(
+        http_adapter=http_adapter,
+        romm_api=romm_api,
+        steam_config=steam_config,
+        sgdb_adapter=sgdb_adapter,
+        cover_art_file_store=cover_art_file_store,
+        sgdb_artwork_cache=sgdb_artwork_cache,
+        download_file_store=download_file_store,
+        adoption_move=adoption_move,
+        firmware_file_store=firmware_file_store,
+        firmware_resolver=firmware_resolver,
+        platform_firmware_resolver=platform_firmware_resolver,
+        migration_file_store=migration_file_store,
+        rom_file_store=rom_file_store,
+        save_file_store=save_file_store,
+        path_probe=path_probe,
+        resolve_path=resolve_path,
+        core_info_provider=emulator_catalogue,
+        external_emulators=external_emulators,
+        retroarch_appendconfig=retroarch_appendconfig.ensure,
+        retroarch_runner=retroarch_runner,
+        content_identity=content_identity,
+        save_bank_dir=save_bank_dir,
+        save_locations=save_locations,
+        # ADR-0034: the provisioner's own statement of each managed platform's launch
+        # and save path. Absent file → every platform unmanaged, behaviour unchanged.
+        layout_manifest=LayoutManifestAdapter(data_dir=locations.data_dir, logger=logger),
+        renderer_rss=renderer_rss,
+        renderer_gc=renderer_gc,
+        game_process=game_process,
+        resolve_upload_conflict=gavel,
+        compute_sync_action=gavel.compute_sync_action,
+        recovery_store=recovery_store,
+        prune_artifacts=prune_artifacts,
+        steam_recovery=steam_recovery,
+        data_location_store=data_location_store,
+    )
+    stores = StateBundle(
+        settings=settings,
+    )
+    callbacks = CallbackBundle(
+        retrodeck_paths=retrodeck_paths,
+        get_save_layout=retroarch_config.get_save_layout,
+        get_savestate_layout=retroarch_config.get_savestate_layout,
+        get_core_name=retroarch_core_info.get_corename,
+        platform_core_reader=platform_core_reader,
+        m3u_support=emulator_catalogue.system_supports_m3u,
+        sandbox_launcher=es_find_rules.resolve_sandbox_launcher,
+        system_known=emulator_catalogue.is_known_system,
+        system_extensions=emulator_catalogue.get_supported_extensions,
+        list_rom_dir_files=download_file_store.list_files,
+        settings_persister=settings_persister,
+        log_debug=debug_logger,
+        plugin_metadata=plugin_metadata,
+        uow_factory=uow_factory,
+    )
+    runtime_adapters = RuntimeAdaptersBundle(
+        clock=clock,
+        uuid_gen=uuid_gen,
+        sleeper=sleeper,
+        hostname_provider=hostname_provider,
+        machine_id_provider=machine_id_provider,
+    )
+    handles = BootstrapHandles(debug_logger=debug_logger, persistence=persistence)
+
+    return BootstrapResult(
+        adapters=adapters,
+        stores=stores,
+        callbacks=callbacks,
+        runtime_adapters=runtime_adapters,
+        handles=handles,
+        locations=locations,
+        launcher=launcher,
+    )
