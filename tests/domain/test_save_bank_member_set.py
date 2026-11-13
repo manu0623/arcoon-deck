@@ -34,9 +34,19 @@ class TestWhichPlatformsRestoreByExtraction:
         """
         assert restores_by_extraction("switch") is True
 
+    @pytest.mark.parametrize("platform", ["psp", "ps3"])
+    def test_a_prefix_bundle_is_a_member_set(self, platform: str) -> None:
+        """PSP and PS3 saves are sibling folders sharing the game's id prefix.
+
+        RomM stores one as `<title> [timestamp].zip`, and a restore that renamed that zip
+        into the folder instead of extracting it would leave PPSSPP reading an empty
+        memory stick — the same failure GameCube's card had (ADR-0048).
+        """
+        assert restores_by_extraction(platform) is True
+
     @pytest.mark.parametrize(
         "platform",
-        ["gba", "snes", "genesis", "n64", "psx", "ps2", "psp", "ps3", "n3ds", "wii", "wiiu", "dreamcast"],
+        ["gba", "snes", "genesis", "n64", "psx", "ps2", "n3ds", "wii", "wiiu", "dreamcast"],
     )
     def test_every_other_family_is_written_as_a_file(self, platform: str) -> None:
         """Only a flat member set restores by extraction; the rest keep their own rule."""
