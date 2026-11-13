@@ -713,3 +713,32 @@ class TestDismissSettingsResetNotice:
         assert result == {"success": True}
         assert "_settings_reset_notice" not in settings
         settings_persister.save_settings.assert_called_once_with()
+
+
+class TestSaveRuntimeMode:
+    """`save_runtime_mode` — the own-first switch is validated, not coerced (ADR-0045)."""
+
+    @pytest.mark.parametrize("mode", ["standalone", "retrodeck", "auto"])
+    def test_accepts_every_known_mode(self, service, settings, settings_persister, mode):
+        result = service.save_runtime_mode(mode)
+
+        assert result == {"success": True, "runtime_mode": mode}
+        assert settings["runtime_mode"] == mode
+        settings_persister.save_settings.assert_called_once_with()
+
+    def test_refuses_an_unknown_mode_without_persisting(self, service, settings, settings_persister):
+        result = service.save_runtime_mode("retroarch")
+
+        assert result["success"] is False
+        assert "runtime_mode" not in settings
+        settings_persister.save_settings.assert_not_called()
+
+    def test_refuses_a_non_string_from_the_wire(self, service, settings, settings_persister):
+        result = service.save_runtime_mode(True)
+
+        assert result["success"] is False
+        assert "runtime_mode" not in settings
+        settings_persister.save_settings.assert_not_called()
+
+    def test_get_settings_reports_the_shipped_default(self, service):
+        assert service.get_settings()["runtime_mode"] == "standalone"

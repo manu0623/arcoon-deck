@@ -250,6 +250,7 @@ const waitForPruneRelease = callable("wait_for_prune_release");
 const saveLogLevel = callable("save_log_level");
 const savePreferredRegion = callable("save_preferred_region");
 const saveSkipPreview = callable("save_skip_preview");
+const saveRuntimeMode = callable("save_runtime_mode");
 const getKnownRegions = callable("get_known_regions");
 const debugLog = callable("debug_log");
 const frontendLog = callable("frontend_log");
@@ -11282,7 +11283,12 @@ const AdvancedSection = ({ logLevel, onLogLevelChange }) => {
                     ], selectedOption: logLevel, onChange: (option) => onLogLevelChange(option.data) }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.TextField, { label: "Update from URL", description: "A plugin zip built from this repository \u2014 the panel installs it and Decky restarts", value: url, onChange: (event) => setUrl(event.target.value) }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.Focusable, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", disabled: busy || !url.trim(), onClick: () => { void runUpdate(); }, children: busy ? "Updating…" : "Update now" }) }) })] }));
 };
 
-const CoreSetupSection = ({ busy, status, onInstall }) => (SP_JSX.jsxs(DFL.PanelSection, { title: "Emulators & Cores", children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: onInstall, disabled: busy, children: busy ? "Installing cores…" : "Install Missing Cores" }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: "11px", color: "#8f98a0", padding: "0 0 6px" }, children: "Downloads the RetroArch runtime and the cores your enabled platforms launch with, then verifies each one. Standalone emulators are not covered yet." }) }), status !== "" && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: "12px", color: "#dcdedf" }, children: status }) }))] }));
+const RUNTIME_CHOICES = [
+    { id: "standalone", label: "This app" },
+    { id: "retrodeck", label: "RetroDECK" },
+    { id: "auto", label: "Follow what's installed" },
+];
+const CoreSetupSection = ({ busy, status, onInstall, runtimeMode, onRuntimeChange, }) => (SP_JSX.jsxs(DFL.PanelSection, { title: "Emulators & Cores", children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: "11px", color: "#8f98a0", padding: "0 0 6px" }, children: "Runtime \u2014 the app installs and launches its own RetroArch, so its saves are the ones it can answer for. RetroDECK is a fallback you choose, never a requirement." }) }), RUNTIME_CHOICES.map(({ id, label }) => (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => onRuntimeChange(id), disabled: runtimeMode === id, children: runtimeMode === id ? `${label} — in use` : label }) }, id))), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: onInstall, disabled: busy, children: busy ? "Installing cores…" : "Install Missing Cores" }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: "11px", color: "#8f98a0", padding: "0 0 6px" }, children: "Downloads the RetroArch runtime and the cores your enabled platforms launch with, then verifies each one. Standalone emulators are not covered yet." }) }), status !== "" && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: "12px", color: "#dcdedf" }, children: status }) }))] }));
 
 const AUTO_REGION = "auto";
 const ANCHOR_REGIONS = ["World", "USA", "Europe", "Japan"];
@@ -11369,6 +11375,7 @@ const SettingsPage = ({ onBack, section }) => {
     const [saveSortMigrating, setSaveSortMigrating] = SP_REACT.useState(false);
     const [saveSortResult, setSaveSortResult] = SP_REACT.useState("");
     const [logLevel, setLogLevel] = SP_REACT.useState("warn");
+    const [runtimeMode, setRuntimeMode] = SP_REACT.useState("standalone");
     const [preferredRegion, setPreferredRegion] = SP_REACT.useState(AUTO_REGION);
     const [libraryRegions, setLibraryRegions] = SP_REACT.useState([]);
     const [platformGroups, setPlatformGroups] = SP_REACT.useState(false);
@@ -11383,6 +11390,7 @@ const SettingsPage = ({ onBack, section }) => {
             setSgdbApiKey(s.sgdb_api_key_masked);
             setSteamInputMode(s.steam_input_mode);
             setLogLevel(s.log_level);
+            setRuntimeMode(s.runtime_mode ?? "standalone");
             setPreferredRegion(s.preferred_region ?? AUTO_REGION);
             setPlatformGroups(!!s.collection_create_platform_groups);
             setNamingMode(s.collection_naming_mode ?? "merge");
@@ -11692,6 +11700,12 @@ const SettingsPage = ({ onBack, section }) => {
             setRetroarchFixStatus("Failed to apply fix");
         }
     };
+    const handleRuntimeChange = (mode) => {
+        if (mode === runtimeMode)
+            return;
+        setRuntimeMode(mode);
+        detach(saveRuntimeMode(mode));
+    };
     const handleLogLevelChange = (level) => {
         setLogLevel(level);
         detach(saveLogLevel(level));
@@ -11782,7 +11796,7 @@ const SettingsPage = ({ onBack, section }) => {
             case "steam-library":
                 return (SP_JSX.jsx(LibrarySection, { preferredRegion: preferredRegion, libraryRegions: libraryRegions, onPreferredRegionChange: handlePreferredRegionChange, platformGroups: platformGroups, onPlatformGroupsChange: handlePlatformGroupsChange, namingMode: namingMode, onNamingModeChange: handleNamingModeChange }));
             case "cores":
-                return (SP_JSX.jsx(CoreSetupSection, { busy: coresBusy, status: coresStatus, onInstall: () => {
+                return (SP_JSX.jsx(CoreSetupSection, { busy: coresBusy, status: coresStatus, runtimeMode: runtimeMode, onRuntimeChange: handleRuntimeChange, onInstall: () => {
                         detach(handleInstallCores());
                     } }));
             case "advanced":

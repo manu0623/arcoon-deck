@@ -152,7 +152,7 @@ class TestVersionStampingOnSave:
         with open(settings_path) as f:
             loaded = json.load(f)
         assert loaded["version"] == _SETTINGS_VERSION
-        assert loaded["version"] == 13
+        assert loaded["version"] == 14
 
 
 # ── Loading edge cases ─────────────────────────────────────────────────────────

@@ -15,6 +15,7 @@ import { ConfirmModal, Field, showModal } from "@decky/ui";
 import { showToast } from "../utils/toast";
 import {
   getSettings,
+  saveRuntimeMode,
   saveServerUrl,
   saveCustomHeaders,
   connectWithCredentials,
@@ -152,6 +153,10 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack, section }) => {
   // Advanced state
   const [logLevel, setLogLevel] = useState("warn");
 
+  // Runtime (ADR-0045) — which tree and launcher the app runs on. Read from the settings
+  // payload so the tick is the backend's answer, not this panel's last click.
+  const [runtimeMode, setRuntimeMode] = useState("standalone");
+
   // Library state (preferred sibling-group region, ADR-0021)
   const [preferredRegion, setPreferredRegion] = useState(AUTO_REGION);
   const [libraryRegions, setLibraryRegions] = useState<string[]>([]);
@@ -171,6 +176,7 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack, section }) => {
         setSgdbApiKey(s.sgdb_api_key_masked);
         setSteamInputMode(s.steam_input_mode);
         setLogLevel(s.log_level);
+        setRuntimeMode(s.runtime_mode ?? "standalone");
         setPreferredRegion(s.preferred_region ?? AUTO_REGION);
         setPlatformGroups(!!s.collection_create_platform_groups);
         setNamingMode(s.collection_naming_mode ?? "merge");
@@ -521,6 +527,13 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack, section }) => {
     }
   };
 
+  // --- Runtime handler ---
+  const handleRuntimeChange = (mode: string) => {
+    if (mode === runtimeMode) return;
+    setRuntimeMode(mode);
+    detach(saveRuntimeMode(mode));
+  };
+
   // --- Advanced handlers ---
   const handleLogLevelChange = (level: string) => {
     setLogLevel(level);
@@ -704,6 +717,8 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack, section }) => {
           <CoreSetupSection
             busy={coresBusy}
             status={coresStatus}
+            runtimeMode={runtimeMode}
+            onRuntimeChange={handleRuntimeChange}
             onInstall={() => {
               detach(handleInstallCores());
             }}

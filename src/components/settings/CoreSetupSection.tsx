@@ -21,10 +21,43 @@ export interface CoreSetupSectionProps {
   /** What the last run did — counts, or the failure it hit. */
   status: string;
   onInstall: () => void;
+  /** Which runtime is driving: "standalone" (default), "retrodeck" or "auto" (ADR-0045). */
+  runtimeMode: string;
+  onRuntimeChange: (mode: string) => void;
 }
 
-export const CoreSetupSection: FC<CoreSetupSectionProps> = ({ busy, status, onInstall }) => (
+/** The three runtimes, in the order the choice reads: the app's own first. */
+const RUNTIME_CHOICES: ReadonlyArray<{ id: string; label: string }> = [
+  { id: "standalone", label: "This app" },
+  { id: "retrodeck", label: "RetroDECK" },
+  { id: "auto", label: "Follow what's installed" },
+];
+
+export const CoreSetupSection: FC<CoreSetupSectionProps> = ({
+  busy,
+  status,
+  onInstall,
+  runtimeMode,
+  onRuntimeChange,
+}) => (
   <PanelSection title="Emulators & Cores">
+    <PanelSectionRow>
+      <div style={{ fontSize: "11px", color: "#8f98a0", padding: "0 0 6px" }}>
+        Runtime — the app installs and launches its own RetroArch, so its saves are the ones it can answer for.
+        RetroDECK is a fallback you choose, never a requirement.
+      </div>
+    </PanelSectionRow>
+    {RUNTIME_CHOICES.map(({ id, label }) => (
+      <PanelSectionRow key={id}>
+        <ButtonItem
+          layout="below"
+          onClick={() => onRuntimeChange(id)}
+          disabled={runtimeMode === id}
+        >
+          {runtimeMode === id ? `${label} — in use` : label}
+        </ButtonItem>
+      </PanelSectionRow>
+    ))}
     <PanelSectionRow>
       <ButtonItem layout="below" onClick={onInstall} disabled={busy}>
         {busy ? "Installing cores…" : "Install Missing Cores"}

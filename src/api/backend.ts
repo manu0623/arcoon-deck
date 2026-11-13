@@ -954,6 +954,14 @@ export const savePreferredRegion = callable<[string], { success: boolean }>("sav
 // Read back from get_settings. Main's toggle still holds its own local state
 // and does not call this; no backend sync path consults the value either.
 export const saveSkipPreview = callable<[boolean], { success: boolean }>("save_skip_preview");
+
+// Which runtime drives the plugin (ADR-0045): "standalone" (the app's own tree), or the
+// opt-ins "retrodeck" and "auto". Typed as a plain string because the backend validates
+// it — a narrowed union here would make an unknown value a compile error in the panel
+// instead of the rejection the callable already returns.
+export const saveRuntimeMode = callable<[string], { success: boolean; runtime_mode?: string }>(
+  "save_runtime_mode",
+);
 // Distinct region values present in the locally synced library — the non-anchor
 // options for the Preferred-region dropdown. Pure local DB read, no server call.
 export const getKnownRegions = callable<[], string[]>("get_known_regions");

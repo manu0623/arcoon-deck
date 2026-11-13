@@ -34,6 +34,10 @@ if TYPE_CHECKING:
 
 _MASK_PLACEHOLDER = "••••"
 _VALID_LOG_LEVELS = ("debug", "info", "warn", "error")
+
+#: The runtime vocabulary ``domain.runtime`` understands. Validated here so a typo from
+#: the panel is refused instead of silently rerouting the library (ADR-0045).
+_VALID_RUNTIME_MODES = ("standalone", "retrodeck", "auto")
 _VALID_STEAM_INPUT_MODES = ("default", "force_on", "force_off")
 
 # What the user is told about a refused custom-header list. Each template may name
@@ -169,6 +173,7 @@ class SettingsService:
             "sgdb_api_key_masked": _MASK_PLACEHOLDER if self._settings.get("steamgriddb_api_key") else "",
             "retroarch_input_check": self._steam_config.check_retroarch_input_driver(),
             "log_level": self._settings.get("log_level", "warn"),
+            "runtime_mode": self._settings.get("runtime_mode", "standalone"),
             "romm_allow_insecure_ssl": self._settings.get("romm_allow_insecure_ssl", False),
             "collection_create_platform_groups": self._settings.get("collection_create_platform_groups", False),
             "collection_owner_scope": self._settings.get("collection_owner_scope", "all"),
@@ -179,6 +184,22 @@ class SettingsService:
                 h.name for h in stored_custom_headers(self._settings.get("romm_custom_headers"))
             ],
         }
+
+    # ── Runtime ──────────────────────────────────────────────────────────
+
+    def save_runtime_mode(self, mode: object) -> dict[str, Any]:
+        """Validate and persist which runtime the plugin drives (ADR-0045).
+
+        An override, not a hint: ``retrodeck_paths.runtime_mode()`` reads this value on
+        every call, so the roots, the launcher and the save bank follow it from the next
+        callable on — no restart. A non-string or an unknown value is refused rather than
+        coerced, because a typo must not leave the app reading a tree it never chose.
+        """
+        if not isinstance(mode, str) or mode not in _VALID_RUNTIME_MODES:
+            return {"success": False, "reason": "invalid_runtime_mode", "message": "Invalid runtime"}
+        self._settings["runtime_mode"] = mode
+        self._settings_persister.save_settings()
+        return {"success": True, "runtime_mode": mode}
 
     # ── Log level ────────────────────────────────────────────────────────
 

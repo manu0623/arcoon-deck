@@ -41,6 +41,8 @@ def migrate_settings(data: dict[str, Any]) -> dict[str, Any]:
         new_data = _migrate_v11_to_v12(new_data)
     if version < 13:
         new_data = _migrate_v12_to_v13(new_data)
+    if version < 14:
+        new_data = _migrate_v13_to_v14(new_data)
     return new_data
 
 
@@ -306,6 +308,23 @@ def _migrate_v11_to_v12(data: dict[str, Any]) -> dict[str, Any]:
     if data.get("default_slot") == "default":
         data["default_slot"] = "autosave"
     data["version"] = 12
+    return data
+
+
+def _migrate_v13_to_v14(data: dict[str, Any]) -> dict[str, Any]:
+    """v<14 → v14: the plugin's own tree becomes the default runtime (ADR-0045).
+
+    ``runtime_mode`` shipped as ``"auto"``, which follows the installation — on a Deck
+    with RetroDECK that meant RetroDECK's roots, launcher and save layout drove every
+    launch, which is the dependency this plugin exists to remove. A file that never left
+    ``"auto"`` gets the new shipped default. A file already naming ``"retrodeck"`` or
+    ``"standalone"`` holds an answer the user gave, and is left alone — the migration
+    moves the un-decided, not the decided. ``"auto"`` stays a value the settings can
+    still be set to.
+    """
+    if data.get("runtime_mode", "auto") == "auto":
+        data["runtime_mode"] = "standalone"
+    data["version"] = 14
     return data
 
 

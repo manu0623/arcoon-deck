@@ -68,6 +68,11 @@ export interface PluginSettings {
   steam_input_mode: "default" | "force_on" | "force_off";
   sgdb_api_key_masked: string;
   log_level: "debug" | "info" | "warn" | "error";
+  // Which runtime drives the plugin (ADR-0045). "standalone" is the shipped default:
+  // the plugin owns its tree and launches RetroArch itself. "retrodeck" is the opt-in
+  // classic shape and "auto" follows whatever is installed. Optional so an older
+  // payload or a test fixture without it reads as the default, not as undefined.
+  runtime_mode?: "standalone" | "retrodeck" | "auto";
   romm_allow_insecure_ssl: boolean;
   retroarch_input_check?: RetroArchInputCheck;
   collection_create_platform_groups?: boolean;

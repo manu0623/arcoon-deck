@@ -16,7 +16,7 @@ from typing import Any, Protocol
 
 from adapters.system_clock import SystemClock
 
-_SETTINGS_VERSION = 13
+_SETTINGS_VERSION = 14
 _LOCK_EXT = ".lock"
 
 # The settings file's name, and the only spelling of it in the codebase.
@@ -63,16 +63,17 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # the order they were entered. Values are proxy credentials: never sent to the
     # frontend, never logged.
     "romm_custom_headers": [],
-    # What a libretro launch goes through. ``"retrodeck"`` keeps RetroDECK's
-    # ``run_game.sh`` in the process tree (the shipped default); ``"retroarch"`` starts
-    # RetroArch directly with the plugin's own core path and appendconfig, and falls
-    # back per launch to the RetroDECK form when no direct install holds the core.
-    # Only the literal value changes anything — see ``domain.retroarch_runner``.
-    "launch_backend": "retrodeck",
-    # Which runtime the plugin drives: ``"auto"`` follows what is installed (RetroDECK
-    # when present, the plugin's own tree when not), and the other two force a side.
-    # See ``domain.runtime`` — the choice decides the roots AND the launcher.
-    "runtime_mode": "auto",
+    # What a libretro launch goes through. ``"retroarch"`` is the shipped default: the
+    # plugin starts RetroArch itself with its own core path and appendconfig, because that
+    # is the launch whose saves it can answer for. ``"retrodeck"`` keeps RetroDECK's
+    # ``run_game.sh`` in the process tree and is the opt-in, not the default — see
+    # ADR-0043 and ADR-0045. Only the literal value changes anything — see
+    # ``domain.retroarch_runner``.
+    "launch_backend": "retroarch",
+    # Which runtime the plugin drives: ``"standalone"`` (shipped default — the plugin owns
+    # its tree and its launcher), ``"retrodeck"`` (the classic shape, opt-in) or ``"auto"``
+    # (follow whichever is installed). See ``domain.runtime`` and ADR-0045.
+    "runtime_mode": "standalone",
     # Per-root overrides for the standalone tree; empty means "use the default"
     # (``<home>/Emulation/<root>``). A cleared path must fall back, not point at nothing.
     "roms_dir": "",

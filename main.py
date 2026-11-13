@@ -314,6 +314,9 @@ class Plugin:
     async def save_skip_preview(self, enabled):
         return self._settings_service.save_skip_preview(enabled)
 
+    async def save_runtime_mode(self, mode):
+        return self._settings_service.save_runtime_mode(mode)
+
     async def get_known_regions(self):
         return self._settings_service.get_known_regions()
 

@@ -142,7 +142,7 @@ it does not need the owned launch path.
 
 ### The owned launch path
 
-`launch_backend` (`settings.json`, default `"retrodeck"`) selects what a libretro launch goes through.
+`launch_backend` (`settings.json`, default `"retroarch"` since ADR-0045) selects what a libretro launch goes through.
 Set to the literal `"retroarch"`, the baked command stops mentioning RetroDECK at all:
 
 ```text
@@ -283,7 +283,7 @@ evidence of an unclean exit: recover the save, then clear it. Startup clears sta
 
 **1 — runner resolution.** `LaunchCatalogue` behind a Protocol with the RetroDECK implementation
 moved behind it unchanged; a catalogue keyed by (emulator, platform); detection for RetroArch's
-three install shapes; `launch_backend` in settings defaulting to `"retrodeck"`. Ships with no
+three install shapes; `launch_backend` in settings now defaulting to `"retroarch"` (ADR-0045). Ships with no
 behaviour change.
 
 **2 — point RetroArch at the bank.** Generated appendconfig, `system_directory`, saves and states
@@ -346,7 +346,7 @@ the keys and firmware gates, and `.nsp`/`.xci` title-id reading. Then Cemu, RPCS
 as catalogue entries.
 
 **7 — opt-in and retreat.** A per-platform switch to the owned path (today's switch is global), then
-the `launch_backend` default flips. RetroDECK stays selectable.
+the `launch_backend` default flipped in 0.36.0 (ADR-0045). RetroDECK stays selectable.
 
 ## Risks
 
