@@ -52,11 +52,35 @@ A provider that cannot say which install it means does not get a link.
 **It runs at startup and right after an install**, because the window that matters is the first
 launch: an emulator opened before the link exists writes a save the next sync cannot see.
 
+## The answer, not just the link
+
+Pointing the folder was only half of it, and the second half was measured the same evening:
+the save did not reach the server. `[saves] psp: the catalogue offers no entry labelled
+'PPSSPP (Standalone)'` and `post_exit_sync skipped: save_shape_unsupported` — the save layer asks
+an installed emulator catalogue where a launch writes, this Deck has no ES-DE, so every launch
+through a standalone emulator was refused in both directions.
+
+So `services/saves/rom_info` now answers a **standalone launch the plugin has pointed at the
+bank** from the bank, exactly as it answers an owned libretro launch from the appendconfig: the
+emulator's directory *is* the bank directory, the platform's layout rule names the members (a PSP
+save is the `<DISC_ID>*` folders read from the disc's `PARAM.SFO`), and the sync carries them.
+The gate is `domain.emulator_save_link.links_emulator`, which reads the same table the link pass
+reads, so a launch whose folder nothing points keeps the catalogue's answer — and its refusal —
+because the bank would describe a program that writes somewhere else.
+
 ## What this does not do
 
-- **Other standalone emulators.** Dolphin's cards, a PS2 card, a 3DS title tree: their bank
-  layouts describe shapes nothing has pointed those emulators at yet, and pointing them is a
-  separate decision per emulator (which card, which profile, which title root).
+- **Other standalone emulators.** The mechanism generalises — one table row plus the bank answer
+  above — but each family has to be *verified* before its row exists, and they fall into three
+  groups:
+  - **A straight directory match, so a row is all it needs once checked on a device**: RPCS3's
+    `dev_hdd0/home/00000001/savedata`, Dolphin's `Wii/title/00010000`, Cemu's `mlc01/usr/save`,
+    Citra/Azahar's `sdmc`.
+  - **Answered already, unlinked**: the yuzu lineage's Switch tree is read from the emulator's own
+    settings today (`_stated_platform_unit`), so it syncs without a link.
+  - **Needs more than a link**: PS2 and GameCube saves are *cards* (one file holding many games),
+    Dreamcast's is a set of VMU images, melonDS names its saves its own way — each needs its
+    card/file shape modelled in the bank first, which is the same work ADR-0048 did for PSP.
 - **Savestates.** `PPSSPP_STATE` is left alone; `SAVEDATA` is the savedata the sync carries.
 - **RetroDECK's sandboxed emulators.** They are reached through its frontend, which is its own
   business.

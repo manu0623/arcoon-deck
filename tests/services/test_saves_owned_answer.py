@@ -237,7 +237,9 @@ class _PspStore:
         return path in self._TREE or os.path.dirname(path) == _PSP_BASE
 
 
-def _psp_service(*, with_identity: bool) -> tuple[RomInfoService, FakeSaveLocationReader]:
+def _psp_service(
+    *, with_identity: bool, emulator: EmulatorInvocation | None = None
+) -> tuple[RomInfoService, FakeSaveLocationReader]:
     uow = FakeUnitOfWork()
     with uow:
         uow.roms.save(
@@ -267,7 +269,11 @@ def _psp_service(*, with_identity: bool) -> tuple[RomInfoService, FakeSaveLocati
             save_file_store=_PspStore(),
             retrodeck_paths=FakeRetroDeckPaths(),
             active_core=FakeActiveCoreResolver(
-                default_emulator=EmulatorInvocation.libretro("ppsspp_libretro", "PPSSPP (libretro)")
+                default_emulator=(
+                    emulator
+                    if emulator is not None
+                    else EmulatorInvocation.libretro("ppsspp_libretro", "PPSSPP (libretro)")
+                )
             ),
             save_locations=catalogue,
             resolve_system=lambda slug: slug,
@@ -355,3 +361,49 @@ def test_a_fresh_psp_game_still_has_a_download_target() -> None:
     assert names == ("Burnout Legends.zip",)
     assert directory == os.path.join(os.path.dirname(_PSP_BASE), PACKED_ARCHIVE_DIR_NAME)
     assert extract_dir == _PSP_BASE
+
+def _standalone_ppsspp() -> EmulatorInvocation:
+    """The AppImage the install action put in ~/Applications — the one the plugin links."""
+    return EmulatorInvocation.standalone(
+        '"/home/deck/Applications/PPSSPP.AppImage" %ROM%',
+        label="PPSSPP (AppImage)",
+        emulator="ppsspp",
+    )
+
+
+def _standalone_unlinked() -> EmulatorInvocation:
+    """An emulator whose folder the plugin does not point at the bank."""
+    return EmulatorInvocation.standalone(
+        '"/home/deck/Applications/DuckStation.AppImage" %ROM%',
+        label="DuckStation (AppImage)",
+        emulator="duckstation",
+    )
+
+
+class TestPspStandaloneSaveAnswer:
+    """The standalone PPSSPP the plugin pointed at the bank answers from the bank.
+
+    Measured on the reference Deck (0.44.2): a PSP game launched with the standalone
+    PPSSPP reported ``save_shape_unsupported``, because the save layer asked a catalogue
+    that is not installed. Its save folder is a symlink into the bank (ADR-0051), so the
+    bank is the truth — and the sync both downloads and uploads again.
+    """
+
+    def test_a_pointed_standalone_launch_answers_from_the_bank(self) -> None:
+        service, catalogue = _psp_service(with_identity=True, emulator=_standalone_ppsspp())
+
+        answer = service.save_answer(_ROM_ID)
+
+        assert answer.syncable is True
+        assert answer.directory == _PSP_BASE
+        assert answer.synced_names == ("ULUS10064DATA00", "ULUS10064SETTINGS")
+        assert catalogue.calls == []
+
+    def test_a_standalone_emulator_the_plugin_does_not_point_keeps_the_refusal(self) -> None:
+        """DuckStation's folder is nobody's redirect yet, so claiming the bank here would
+        describe a program that writes somewhere else."""
+        service, catalogue = _psp_service(with_identity=True, emulator=_standalone_unlinked())
+
+        service.save_answer(_ROM_ID)
+
+        assert catalogue.calls != []

@@ -29,6 +29,7 @@ import posixpath
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from domain.emulator_registry import definition
 from domain.save_bank import layout_for
 
 if TYPE_CHECKING:
@@ -63,6 +64,25 @@ class SaveLink:
     platform: str
     emulator_dir: str
     owned_dir: str
+
+
+LINKED_FAMILIES: frozenset[str] = frozenset(_FAMILY_SAVE_SUBDIRS)
+"""The families whose standalone install is pointed at the plugin's save tree."""
+
+
+def links_emulator(emulator_id: str | None) -> bool:
+    """Whether a standalone launch by *emulator_id* writes into the plugin's tree.
+
+    The save layer asks this about a resolved ``EmulatorInvocation`` (whose
+    ``emulator`` field is a definition id, not a family), and the answer decides
+    whether the emulator's own directory or the bank is the truth about where this
+    launch writes. A family this module links is a family whose install the startup
+    pass has pointed, so the two can never disagree.
+    """
+    if not emulator_id:
+        return False
+    found = definition(emulator_id)
+    return found is not None and found.family in LINKED_FAMILIES
 
 
 def link_for(install: InstalledEmulator, *, config_root: str, saves_root: str) -> SaveLink | None:

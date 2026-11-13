@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from domain.content_identity import save_id_text
+from domain.emulator_save_link import links_emulator
 from domain.save_answer import (
     SAVE_ID_NEED,
     SAVE_REGION_NEED,
@@ -368,7 +369,16 @@ class RomInfoService:
         # own statement, not a catalogue reading. Asking the catalogue here is what made every
         # owned launch report an unestablished save: on a device with no ES-DE there is no
         # entry labelled with the core's name, and sync was skipped for a path we wrote.
-        if bank_dir and (emulator is None or emulator.kind == "libretro"):
+        # A STANDALONE emulator the plugin has pointed at the bank counts here too: its
+        # save folder IS the bank directory (a symlink, ADR-0051), so the bank states where
+        # it writes exactly as the appendconfig does for a libretro launch. Without this a
+        # PSP played in the standalone PPSSPP reported ``save_shape_unsupported`` — the
+        # catalogue it was asked has no ES-DE to answer from — and neither the download nor
+        # the upload ever ran, which looked like a save that never reached the server.
+        pointed_standalone = (
+            emulator is not None and emulator.kind == "standalone" and links_emulator(emulator.emulator)
+        )
+        if bank_dir and (emulator is None or emulator.kind == "libretro" or pointed_standalone):
             layout = save_layout_for(platform)
             if layout.family is not SaveFamily.LIBRETRO_FILE:
                 # A redirected launch whose save is a folder set (PSP): the appendconfig
