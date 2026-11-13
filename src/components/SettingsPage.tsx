@@ -40,6 +40,7 @@ import {
   migrateSaveSortFiles,
   dismissSaveSortMigration,
   logError,
+  ensureAllPlatformCores,
 } from "../api/backend";
 import type {
   RegisteredDevice,
@@ -68,6 +69,7 @@ import { SaveSyncSection } from "./settings/SaveSyncSection";
 import { RegisteredDevicesSection } from "./settings/RegisteredDevicesSection";
 import { ControllerSection } from "./settings/ControllerSection";
 import { AdvancedSection } from "./settings/AdvancedSection";
+import { CoreSetupSection } from "./settings/CoreSetupSection";
 import { LibrarySection, AUTO_REGION, DEFAULT_REGION_LABEL } from "./settings/LibrarySection";
 import { showPreferredRegionModal } from "./settings/PreferredRegionModal";
 
@@ -95,6 +97,7 @@ const SECTION_LABELS: Record<SettingsSection, string> = {
   "save-sync": "Save Sync",
   controller: "Controller",
   "steam-library": "Steam Library",
+  cores: "Emulators & Cores",
   advanced: "Advanced",
 };
 
@@ -134,6 +137,10 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack, section }) => {
   const [steamInputMode, setSteamInputMode] = useState("default");
   const [steamInputStatus, setSteamInputStatus] = useState("");
   const [applyingSteamInput, setApplyingSteamInput] = useState(false);
+  // The Emulators & Cores section: one provisioning run at a time, with the
+  // result it produced in words rather than a spinner that says nothing.
+  const [coresBusy, setCoresBusy] = useState(false);
+  const [coresStatus, setCoresStatus] = useState("");
   const [retroarchWarning, setRetroarchWarning] = useState<RetroArchInputCheck | null>(null);
   const [retroarchFixStatus, setRetroarchFixStatus] = useState("");
 
@@ -451,6 +458,31 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack, section }) => {
     detach(saveSteamInputSetting(mode));
     setSteamInputStatus("");
   };
+  const handleInstallCores = async () => {
+    setCoresBusy(true);
+    setCoresStatus("Installing the runtime and the cores your platforms need…");
+    try {
+      const result = await ensureAllPlatformCores();
+      const installed = result.installed ?? [];
+      const failed = result.failed ?? [];
+      if (failed.length > 0) {
+        setCoresStatus(
+          `Installed ${installed.length}, but ${failed.length} failed: ${failed.map((entry) => entry.core).join(", ")}`,
+        );
+      } else if (installed.length > 0) {
+        setCoresStatus(`Installed ${installed.length} core${installed.length === 1 ? "" : "s"}.`);
+      } else if (result.runtime?.reason) {
+        setCoresStatus(`Could not install the runtime: ${result.runtime.reason}`);
+      } else {
+        setCoresStatus("Everything your enabled platforms need is already installed.");
+      }
+    } catch (error) {
+      setCoresStatus(`Install failed: ${String(error)}`);
+    } finally {
+      setCoresBusy(false);
+    }
+  };
+
   const handleApplySteamInput = async () => {
     // A second press while the first run is in flight is refused rather than
     // queued: the run walks every shortcut Steam holds and two of them
@@ -659,6 +691,16 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack, section }) => {
             onPlatformGroupsChange={handlePlatformGroupsChange}
             namingMode={namingMode}
             onNamingModeChange={handleNamingModeChange}
+          />
+        );
+      case "cores":
+        return (
+          <CoreSetupSection
+            busy={coresBusy}
+            status={coresStatus}
+            onInstall={() => {
+              detach(handleInstallCores());
+            }}
           />
         );
       case "advanced":

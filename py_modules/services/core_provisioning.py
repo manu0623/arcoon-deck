@@ -23,7 +23,7 @@ from domain.core_provision import missing_cores
 if TYPE_CHECKING:
     import asyncio
     import logging
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
 
     from domain.owned_inventory import InventoryPlatform
 
@@ -44,6 +44,9 @@ class CoreProvisioningConfig:
     # Installing a flatpak on a device RetroDECK already drives would be a second runtime
     # nobody launches; while it drives, this service has nothing to do.
     runtime_is_standalone: Callable[[], bool]
+    # A RomM platform slug is not an inventory system name; the platform map
+    # answers the difference for the whole-device sweep.
+    resolve_system: Callable[[str], str]
 
 
 class CoreProvisioningService:
@@ -58,6 +61,7 @@ class CoreProvisioningService:
         self._runtime_installed = config.runtime_installed
         self._runtime_installer = config.runtime_installer
         self._runtime_is_standalone = config.runtime_is_standalone
+        self._resolve_system = config.resolve_system
 
     async def ensure_runtime(self) -> dict[str, Any]:
         """Make sure the plugin has a runtime it can start, installing it when it does not.
@@ -73,6 +77,36 @@ class CoreProvisioningService:
             return {"success": True, "already_present": True}
         result = await self._loop.run_in_executor(None, self._runtime_installer)
         return {"success": bool(result.get("ok")), **result}
+
+    async def ensure_for_platforms(self, platform_slugs: Iterable[str]) -> dict[str, Any]:
+        """Provision every enabled platform: one call for the whole device.
+
+        Slugs are resolved to inventory systems first and deduplicated, so two platforms
+        that name one system (``gb``/``gbc`` both landing on ``gbc``) do not download the
+        same core twice. A platform the inventory does not describe is reported but not
+        counted as a failure — it is a system this build has no emulator data for, not a
+        download that broke.
+        """
+        runtime = await self.ensure_runtime()
+        # ``dict.fromkeys`` dedupes while keeping the order, so two platforms naming
+        # one system download its cores once and the report reads in list order.
+        resolved = (self._resolve_system(slug) for slug in platform_slugs)
+        systems = list(dict.fromkeys(system for system in resolved if system))
+        results: list[dict[str, Any]] = [await self.ensure_for_system(system) for system in systems]
+        installed = [core for result in results for core in result.get("installed", [])]
+        failed = [core for result in results for core in result.get("failed", [])]
+        broken = [
+            result
+            for result in results
+            if not result.get("success") and result.get("reason") != "unknown_system"
+        ]
+        return {
+            "success": not failed and not broken and bool(runtime.get("success")),
+            "runtime": runtime,
+            "systems": results,
+            "installed": installed,
+            "failed": failed,
+        }
 
     async def ensure_for_system(self, system_name: str) -> dict[str, Any]:
         """Install what *system_name* is missing and report every core's outcome.

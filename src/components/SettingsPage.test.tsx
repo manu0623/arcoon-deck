@@ -2005,11 +2005,18 @@ describe("SettingsPage", () => {
   });
 
   describe("the section list", () => {
-    it("shows exactly the five sections, in order", async () => {
+    it("shows exactly the six sections, in order", async () => {
       const { getAllByTestId } = renderPage();
       await flushAsync();
       const labels = getAllByTestId("field").map((el) => el.textContent);
-      expect(labels).toEqual(["Connections", "Save Sync", "Controller", "Steam Library", "Advanced"]);
+      expect(labels).toEqual([
+        "Connections",
+        "Save Sync",
+        "Controller",
+        "Steam Library",
+        "Emulators & Cores",
+        "Advanced",
+      ]);
     });
 
     it("opens on the section a navigation names", async () => {

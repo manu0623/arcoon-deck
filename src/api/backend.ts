@@ -245,6 +245,22 @@ export interface CachedGameDetail extends BiosAnswer {
 // module-scope cache + invalidation surface is in one place. Re-exported here
 // for back-compat with existing import sites.
 export { getCachedGameDetail, invalidateCachedGameDetail } from "../utils/cachedGameDetailStore";
+export interface CoreProvisionFailure {
+  core: string;
+  reason?: string;
+}
+
+/** What one provisioning run did: the runtime it installed, and the cores. */
+export interface CoreProvisionResult {
+  success: boolean;
+  runtime?: { success?: boolean; app_id?: string; already_present?: boolean; skipped?: string; reason?: string };
+  installed?: string[];
+  failed?: CoreProvisionFailure[];
+}
+
+/** Install the runtime and every enabled platform's missing cores, in one call. */
+export const ensureAllPlatformCores = callable<[], CoreProvisionResult>("ensure_all_platform_cores");
+
 export const getSettings = callable<[], PluginSettings>("get_settings");
 export const saveServerUrl = callable<[string, boolean], BackendResult>("save_server_url");
 export const saveCustomHeaders = callable<[CustomHeaderEntry[]], CustomHeadersResult>("save_custom_headers");

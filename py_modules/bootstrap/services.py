@@ -491,6 +491,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             runtime_is_standalone=lambda: (
                 cfg.callbacks.retrodeck_paths.runtime_mode() is RuntimeMode.STANDALONE
             ),
+            resolve_system=cfg.adapters.http_adapter.resolve_system,
         ),
     )
 

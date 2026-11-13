@@ -154,6 +154,7 @@ function isCandidateVanished(value) {
 function isRenameCollisions(value) {
     return "reason" in value && value.reason === "rename_collisions";
 }
+const ensureAllPlatformCores = callable("ensure_all_platform_cores");
 const getSettings = callable("get_settings");
 const saveServerUrl = callable("save_server_url");
 const saveCustomHeaders = callable("save_custom_headers");
@@ -3586,7 +3587,14 @@ const BENIGN_SYNC_SKIP_REASONS = [
     SAVE_SHAPE_UNSUPPORTED_REASON,
 ];
 
-const SETTINGS_SECTIONS = ["connections", "save-sync", "controller", "steam-library", "advanced"];
+const SETTINGS_SECTIONS = [
+    "connections",
+    "save-sync",
+    "controller",
+    "steam-library",
+    "cores",
+    "advanced",
+];
 
 class TimeoutError extends Error {
     constructor(ms) {
@@ -11274,6 +11282,8 @@ const AdvancedSection = ({ logLevel, onLogLevelChange }) => {
                     ], selectedOption: logLevel, onChange: (option) => onLogLevelChange(option.data) }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.TextField, { label: "Update from URL", description: "A plugin zip built from this repository \u2014 the panel installs it and Decky restarts", value: url, onChange: (event) => setUrl(event.target.value) }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.Focusable, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", disabled: busy || !url.trim(), onClick: () => { void runUpdate(); }, children: busy ? "Updating…" : "Update now" }) }) })] }));
 };
 
+const CoreSetupSection = ({ busy, status, onInstall }) => (SP_JSX.jsxs(DFL.PanelSection, { title: "Emulators & Cores", children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: onInstall, disabled: busy, children: busy ? "Installing cores…" : "Install Missing Cores" }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: "11px", color: "#8f98a0", padding: "0 0 6px" }, children: "Downloads the RetroArch runtime and the cores your enabled platforms launch with, then verifies each one. Standalone emulators are not covered yet." }) }), status !== "" && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: "12px", color: "#dcdedf" }, children: status }) }))] }));
+
 const AUTO_REGION = "auto";
 const ANCHOR_REGIONS = ["World", "USA", "Europe", "Japan"];
 const DEFAULT_REGION_LABEL = "Default (World > USA > Europe)";
@@ -11328,6 +11338,7 @@ const SECTION_LABELS = {
     "save-sync": "Save Sync",
     controller: "Controller",
     "steam-library": "Steam Library",
+    cores: "Emulators & Cores",
     advanced: "Advanced",
 };
 const asSection = (id) => SETTINGS_SECTIONS.find((candidate) => candidate === id) ?? SETTINGS_SECTIONS[0];
@@ -11350,6 +11361,8 @@ const SettingsPage = ({ onBack, section }) => {
     const [steamInputMode, setSteamInputMode] = SP_REACT.useState("default");
     const [steamInputStatus, setSteamInputStatus] = SP_REACT.useState("");
     const [applyingSteamInput, setApplyingSteamInput] = SP_REACT.useState(false);
+    const [coresBusy, setCoresBusy] = SP_REACT.useState(false);
+    const [coresStatus, setCoresStatus] = SP_REACT.useState("");
     const [retroarchWarning, setRetroarchWarning] = SP_REACT.useState(null);
     const [retroarchFixStatus, setRetroarchFixStatus] = SP_REACT.useState("");
     const saveSortMigration = useSaveSortMigrationState();
@@ -11618,6 +11631,33 @@ const SettingsPage = ({ onBack, section }) => {
         detach(saveSteamInputSetting(mode));
         setSteamInputStatus("");
     };
+    const handleInstallCores = async () => {
+        setCoresBusy(true);
+        setCoresStatus("Installing the runtime and the cores your platforms need…");
+        try {
+            const result = await ensureAllPlatformCores();
+            const installed = result.installed ?? [];
+            const failed = result.failed ?? [];
+            if (failed.length > 0) {
+                setCoresStatus(`Installed ${installed.length}, but ${failed.length} failed: ${failed.map((entry) => entry.core).join(", ")}`);
+            }
+            else if (installed.length > 0) {
+                setCoresStatus(`Installed ${installed.length} core${installed.length === 1 ? "" : "s"}.`);
+            }
+            else if (result.runtime?.reason) {
+                setCoresStatus(`Could not install the runtime: ${result.runtime.reason}`);
+            }
+            else {
+                setCoresStatus("Everything your enabled platforms need is already installed.");
+            }
+        }
+        catch (error) {
+            setCoresStatus(`Install failed: ${String(error)}`);
+        }
+        finally {
+            setCoresBusy(false);
+        }
+    };
     const handleApplySteamInput = async () => {
         if (applyingSteamInput)
             return;
@@ -11736,6 +11776,10 @@ const SettingsPage = ({ onBack, section }) => {
                     } }));
             case "steam-library":
                 return (SP_JSX.jsx(LibrarySection, { preferredRegion: preferredRegion, libraryRegions: libraryRegions, onPreferredRegionChange: handlePreferredRegionChange, platformGroups: platformGroups, onPlatformGroupsChange: handlePlatformGroupsChange, namingMode: namingMode, onNamingModeChange: handleNamingModeChange }));
+            case "cores":
+                return (SP_JSX.jsx(CoreSetupSection, { busy: coresBusy, status: coresStatus, onInstall: () => {
+                        detach(handleInstallCores());
+                    } }));
             case "advanced":
                 return SP_JSX.jsx(AdvancedSection, { logLevel: logLevel, onLogLevelChange: handleLogLevelChange });
         }

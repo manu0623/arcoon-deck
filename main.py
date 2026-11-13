@@ -389,6 +389,16 @@ class Plugin:
     async def get_platform_core_info(self, rom_id):
         return await self._core_service.get_platform_core_info(rom_id)
 
+    async def ensure_all_platform_cores(self):
+        """Install the runtime and every enabled platform's missing cores.
+
+        What the Settings page's button calls: one action for a device that has no
+        emulators at all, so the reader does not have to know which platform needs which
+        core. Platforms the inventory does not describe are skipped rather than failing.
+        """
+        enabled = [slug for slug, on in (self.settings.get("enabled_platforms") or {}).items() if on]
+        return await self._core_provisioning_service.ensure_for_platforms(enabled)
+
     async def ensure_libretro_runtime(self):
         """Install the runtime the plugin drives, when there is none to start.
 
