@@ -679,9 +679,16 @@ class RomInfoService:
         source_dir = answer.directory
         archive_dir = os.path.join(os.path.dirname(source_dir), PACKED_ARCHIVE_DIR_NAME)
         archive_name = f"{info['rom_name']}.zip"
+        archive_path = os.path.join(archive_dir, archive_name)
         if members:
-            self._save_file_store.create_archive(os.path.join(archive_dir, archive_name), source_dir, list(members))
+            self._save_file_store.create_archive(archive_path, source_dir, list(members))
             self._logger.debug(f"SaveService: packed {len(members)} file(s) into {archive_name}")
+        elif self._save_file_store.exists(archive_path):
+            # Nothing to pack, so a leftover archive here is a claim about a folder that no
+            # longer holds it. Measured on the reference Deck: the title tree was deleted and
+            # the sync still reported the ROM as synced, because the stale zip beside it
+            # carried the same hash the server did — so the server's save was never fetched.
+            self._save_file_store.remove_file(archive_path)
         return PackedSaveUnit(archive_dir=archive_dir, archive_name=archive_name, source_dir=source_dir)
 
     def find_save_files(self, rom_id: int, *, save_answer: SaveAnswer | None = None) -> list[dict[str, str]]:
