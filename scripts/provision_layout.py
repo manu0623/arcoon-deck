@@ -77,9 +77,35 @@ DOLPHIN_LAUNCH = [
 ]
 
 
-def build_manifest(root: Path, adopted: dict[str, str]) -> dict:
-    """The manifest document this run would write, given what was adopted."""
-    platforms = {}
+def existing_entries(root: Path) -> dict[str, dict]:
+    """The managed entries an existing manifest already holds, or nothing.
+
+    A run only states the platforms it was told about, and a platform it does not mention must
+    keep the entry it has: measured on the reference Deck, re-running this script to adopt Wii
+    dropped the Switch entry that was already there, and the plugin then answered Switch from
+    the catalogue — which resolved a save folder under ``nand/user`` that Eden never writes.
+    An unreadable file yields an empty mapping, which is exactly the state a first run is in.
+    """
+    path = root / MANIFEST_NAME
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(document, dict) or document.get("version") != MANIFEST_VERSION:
+        return {}
+    platforms = document.get("platforms")
+    if not isinstance(platforms, dict):
+        return {}
+    return {key: value for key, value in platforms.items() if isinstance(value, dict)}
+
+
+def build_manifest(root: Path, adopted: dict[str, str], *, kept: dict[str, dict] | None = None) -> dict:
+    """The manifest document this run would write, given what was adopted.
+
+    *kept* is an existing manifest's entries: a platform this run does not name keeps the
+    entry it already states, so adopting one platform can never unmanage another.
+    """
+    platforms: dict[str, dict] = dict(kept or {})
     for platform, directory in adopted.items():
         if platform in WII_PLATFORMS:
             # Dolphin files a Wii save as `Wii/title/<category>/<title id>/data`, and the title id
@@ -169,7 +195,7 @@ def main(argv: list[str] | None = None) -> int:
     for name in SUBDIRECTORIES:
         (root / name).mkdir(exist_ok=True)
     # Written last, and atomically: a reader either sees the previous file or the new one.
-    document = build_manifest(root, adopted)
+    document = build_manifest(root, adopted, kept=existing_entries(root))
     manifest_path = root / MANIFEST_NAME
     handle, tmp_name = tempfile.mkstemp(dir=root, prefix=".layout-", suffix=".json")
     try:
@@ -182,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
             os.unlink(tmp_name)
 
     print(f"root: {root}")
-    print(f"manifest: {manifest_path} ({len(adopted)} managed platform(s))")
+    print(f"manifest: {manifest_path} ({len(document['platforms'])} managed platform(s))")
     for platform, directory in adopted.items():
         state = "exists" if Path(directory.replace("<region>", "USA")).parent.parent.parent.is_dir() else "MISSING"
         print(f"  {platform}: adopted {directory} ({state})")

@@ -232,3 +232,29 @@ class TestTheProvisionedDolphinLaunch:
         for platform in ("gc", "wii"):
             entry = self._manifest(platform, "/saves/root")["platforms"][platform]
             assert "%EMULATOR_DOLPHIN%" not in entry["launch"]
+
+
+class TestProvisioningKeepsWhatItDidNotName:
+    """Measured: re-running the provisioner to adopt Wii dropped the Switch entry that was
+    already in `layout.json`, and the plugin then answered Switch from the catalogue."""
+
+    def test_a_platform_this_run_does_not_name_keeps_its_entry(self, tmp_path) -> None:
+        module = _provision_layout()
+        switch_entry = {
+            "emulator": "Eden (Standalone)",
+            "launch": ["%EMULATOR_FLATPAK-SPAWN%", "--host", "/x", "-f", "-g", "%ROM%"],
+            "save_dir": "/nand/user/save/0000000000000000/93543B1D30E2AEB87D0F28AE30D83730/<save_id>",
+            "save_unit": "title-dir",
+            "needs": ["save_id"],
+        }
+        (tmp_path / "layout.json").write_text(
+            json.dumps({"version": 1, "root": str(tmp_path), "platforms": {"switch": switch_entry}}),
+            encoding="utf-8",
+        )
+
+        document = module.build_manifest(
+            tmp_path, {"wii": "/dolphin/Wii/title/00010000"}, kept=module.existing_entries(tmp_path)
+        )
+
+        assert document["platforms"]["switch"] == switch_entry
+        assert document["platforms"]["wii"]["save_unit"] == "title-dir"
