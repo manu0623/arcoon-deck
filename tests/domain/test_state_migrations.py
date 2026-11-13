@@ -71,7 +71,7 @@ class TestMigrateSettings:
         result = migrate_settings(data)
         assert result == {
             "version": 14,
-            "runtime_mode": "standalone",
+            "runtime_mode": "builtin",
             "romm_url": "http://example.com",
             "log_level": "warn",
             "romm_api_token": None,
@@ -85,7 +85,7 @@ class TestMigrateSettings:
         result = migrate_settings(data)
         assert result == {
             "version": 14,
-            "runtime_mode": "standalone",
+            "runtime_mode": "builtin",
             "romm_url": "http://example.com",
             "log_level": "warn",
             "romm_api_token": None,
@@ -106,7 +106,7 @@ class TestMigrateSettings:
         result = migrate_settings(data)
         assert result == {
             "version": 14,
-            "runtime_mode": "standalone",
+            "runtime_mode": "builtin",
             "romm_url": "http://example.com",
             "log_level": "warn",
             "romm_api_token": "rmm_existing",
@@ -127,7 +127,7 @@ class TestMigrateSettings:
         result = migrate_settings(data)
         assert result == {
             "version": 14,
-            "runtime_mode": "standalone",
+            "runtime_mode": "builtin",
             "romm_url": "http://example.com",
             "log_level": "warn",
             "romm_api_token": "rmm_existing",
@@ -149,7 +149,7 @@ class TestMigrateSettings:
         result = migrate_settings(data)
         assert result == {
             "version": 14,
-            "runtime_mode": "standalone",
+            "runtime_mode": "builtin",
             "romm_url": "http://example.com",
             "log_level": "warn",
             "romm_api_token": "rmm_existing",
@@ -176,7 +176,7 @@ class TestMigrateSettings:
         result = migrate_settings(data)
         # v13→v14 stamps the own-first runtime default; every other key rides through.
         assert result["version"] == 14
-        assert result["runtime_mode"] == "standalone"
+        assert result["runtime_mode"] == "builtin"
         assert {k: v for k, v in result.items() if k not in ("version", "runtime_mode")} == {
             k: v for k, v in data.items() if k != "version"
         }
@@ -942,9 +942,9 @@ class TestMigrateSettingsV13Standard:
 class TestTheDefaultRuntimeBecomesTheAppsOwn:
     """v13→v14: the plugin's own tree is the default (ADR-0045)."""
     def test_the_old_default_is_moved_to_the_new_one(self):
-        assert _migrate_v13_to_v14({"runtime_mode": "auto"})["runtime_mode"] == "standalone"
+        assert _migrate_v13_to_v14({"runtime_mode": "auto"})["runtime_mode"] == "builtin"
     def test_an_install_that_never_stored_a_mode_gets_the_new_default(self):
-        assert _migrate_v13_to_v14({})["runtime_mode"] == "standalone"
+        assert _migrate_v13_to_v14({})["runtime_mode"] == "builtin"
     def test_an_answer_the_user_gave_is_left_alone(self):
         assert _migrate_v13_to_v14({"runtime_mode": "retrodeck"})["runtime_mode"] == "retrodeck"
     def test_the_step_stamps_its_own_version(self):

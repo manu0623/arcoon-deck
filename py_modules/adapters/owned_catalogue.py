@@ -58,13 +58,13 @@ class OwnedCatalogueAdapter:
         user_home: str,
         logger: logging.Logger,
         cores_dir: Callable[[], str],
-        runtime_is_standalone: Callable[[], bool],
+        runtime_is_builtin: Callable[[], bool],
     ) -> None:
         self._plugin_dir = plugin_dir
         self._user_home = user_home
         self._logger = logger
         self._cores_dir = cores_dir
-        self._runtime_is_standalone = runtime_is_standalone
+        self._runtime_is_builtin = runtime_is_builtin
         self._inventory: dict[str, InventoryPlatform] | None = None
 
     def reset_cache(self) -> None:
@@ -190,7 +190,7 @@ class OwnedCatalogueAdapter:
         """
         if not core_so:
             return False
-        if not self._runtime_is_standalone():
+        if not self._runtime_is_builtin():
             return True
         cores = self._cores_dir()
         return bool(cores) and os.path.isfile(os.path.join(cores, f"{core_so}.so"))
@@ -229,49 +229,68 @@ class OwnedCatalogueAdapter:
 
 
 class FallbackCatalogueAdapter:
-    """Answer from ES-DE's catalogue, and from the owned inventory where it cannot.
+    """Answer from the plugin's own inventory or ES-DE's catalogue, in the runtime's order.
 
-    The primary is asked first and always wins any question it can answer. A question it
-    refuses — the catalogue could not be read at all — passes to the fallback, and an
-    answer that is empty but valid (a system the catalogue lists with no bakeable
-    command) also passes, because a platform with nothing to launch with is exactly the
-    case the inventory exists for.
+    Which tier answers first is decided per call by ``owned_first``, because it follows the
+    runtime rather than the device: a **built-in** runtime owns its cores and its launch, so
+    the shipped inventory is asked first and ES-DE is the fallback (ADR-0045) — the app does
+    not go looking for RetroDECK's catalogue to answer a question it can answer itself. A
+    **RetroDECK** runtime flips both, because RetroDECK's catalogue is the only place its own
+    core labels exist.
 
-    Nothing here decides which source is "better": a device with RetroDECK keeps
-    answering from ES-DE, and a device without one gets the shipped inventory.
+    A question the first tier refuses — it could not be read at all — passes to the second,
+    and an answer that is empty but valid (a system the catalogue lists with no bakeable
+    command) also passes, because a platform with nothing to launch with is exactly the case
+    the other tier exists for.
     """
 
-    def __init__(self, *, primary: Any, fallback: OwnedCatalogueAdapter) -> None:
-        self._primary = primary
-        self._fallback = fallback
+    def __init__(
+        self,
+        *,
+        esde: Any,
+        owned: OwnedCatalogueAdapter,
+        owned_first: Callable[[], bool],
+    ) -> None:
+        self._esde = esde
+        self._owned = owned
+        self._owned_first = owned_first
 
     def reset_cache(self) -> None:
-        self._primary.reset_cache()
-        self._fallback.reset_cache()
+        self._esde.reset_cache()
+        self._owned.reset_cache()
+
+    def _tiers(self) -> tuple[Any, Any]:
+        """``(first, second)`` for this call, per the runtime that is driving."""
+        return (self._owned, self._esde) if self._owned_first() else (self._esde, self._owned)
 
     def get_emulator_options(self, system_name: str) -> dict[str, Any]:
-        answer = self._primary.get_emulator_options(system_name)
+        first, second = self._tiers()
+        answer = first.get_emulator_options(system_name)
         if answer["available"] and answer["options"]:
             return answer
-        owned = self._fallback.get_emulator_options(system_name)
-        return owned if owned["options"] else answer
+        other = second.get_emulator_options(system_name)
+        return other if other["options"] else answer
 
     def get_default_emulator(self, system_name: str) -> EmulatorInvocation | None:
-        return self._primary.get_default_emulator(system_name) or self._fallback.get_default_emulator(system_name)
+        first, second = self._tiers()
+        return first.get_default_emulator(system_name) or second.get_default_emulator(system_name)
 
     def get_active_core(self, system_name: str) -> tuple[str | None, str | None]:
-        core_so, label = self._primary.get_active_core(system_name)
+        first, second = self._tiers()
+        core_so, label = first.get_active_core(system_name)
         if core_so is not None:
             return (core_so, label)
-        return self._fallback.get_active_core(system_name)
+        return second.get_active_core(system_name)
 
     def get_supported_extensions(self, system_name: str) -> frozenset[str]:
-        extensions = self._primary.get_supported_extensions(system_name)
-        return extensions if extensions else self._fallback.get_supported_extensions(system_name)
+        first, second = self._tiers()
+        extensions = first.get_supported_extensions(system_name)
+        return extensions if extensions else second.get_supported_extensions(system_name)
 
     def is_known_system(self, system_name: str) -> bool | None:
-        known = self._primary.is_known_system(system_name)
-        return known if known is not None else self._fallback.is_known_system(system_name)
+        first, second = self._tiers()
+        known = first.is_known_system(system_name)
+        return known if known is not None else second.is_known_system(system_name)
 
     def system_supports_m3u(self, system_name: str) -> bool:
         """True iff either source accepts ``.m3u`` for the system (see the extensions rule)."""

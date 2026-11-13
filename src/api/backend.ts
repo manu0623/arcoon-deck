@@ -955,8 +955,8 @@ export const savePreferredRegion = callable<[string], { success: boolean }>("sav
 // and does not call this; no backend sync path consults the value either.
 export const saveSkipPreview = callable<[boolean], { success: boolean }>("save_skip_preview");
 
-// Which runtime drives the plugin (ADR-0045): "standalone" (the app's own tree), or the
-// opt-ins "retrodeck" and "auto". Typed as a plain string because the backend validates
+// Which runtime drives the plugin (ADR-0045): "builtin" (the libretro runtime and cores the
+// app installs itself), or the opt-ins "retrodeck" and "auto". Typed as a plain string because the backend validates
 // it — a narrowed union here would make an unknown value a compile error in the panel
 // instead of the rejection the callable already returns.
 export const saveRuntimeMode = callable<[string], { success: boolean; runtime_mode?: string }>(

@@ -155,7 +155,7 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack, section }) => {
 
   // Runtime (ADR-0045) — which tree and launcher the app runs on. Read from the settings
   // payload so the tick is the backend's answer, not this panel's last click.
-  const [runtimeMode, setRuntimeMode] = useState("standalone");
+  const [runtimeMode, setRuntimeMode] = useState("builtin");
 
   // Library state (preferred sibling-group region, ADR-0021)
   const [preferredRegion, setPreferredRegion] = useState(AUTO_REGION);
@@ -176,7 +176,7 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack, section }) => {
         setSgdbApiKey(s.sgdb_api_key_masked);
         setSteamInputMode(s.steam_input_mode);
         setLogLevel(s.log_level);
-        setRuntimeMode(s.runtime_mode ?? "standalone");
+        setRuntimeMode(s.runtime_mode ?? "builtin");
         setPreferredRegion(s.preferred_region ?? AUTO_REGION);
         setPlatformGroups(!!s.collection_create_platform_groups);
         setNamingMode(s.collection_naming_mode ?? "merge");

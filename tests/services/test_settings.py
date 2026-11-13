@@ -718,7 +718,7 @@ class TestDismissSettingsResetNotice:
 class TestSaveRuntimeMode:
     """`save_runtime_mode` — the own-first switch is validated, not coerced (ADR-0045)."""
 
-    @pytest.mark.parametrize("mode", ["standalone", "retrodeck", "auto"])
+    @pytest.mark.parametrize("mode", ["builtin", "retrodeck", "auto"])
     def test_accepts_every_known_mode(self, service, settings, settings_persister, mode):
         result = service.save_runtime_mode(mode)
 
@@ -741,4 +741,4 @@ class TestSaveRuntimeMode:
         settings_persister.save_settings.assert_not_called()
 
     def test_get_settings_reports_the_shipped_default(self, service):
-        assert service.get_settings()["runtime_mode"] == "standalone"
+        assert service.get_settings()["runtime_mode"] == "builtin"

@@ -41,7 +41,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from adapters.flatpak_install import flatpak_app_files_dirs
-from domain.runtime import RuntimeMode, resolve_mode, resolve_roots
+from domain.runtime import _LEGACY_BUILTIN, RuntimeMode, resolve_mode, resolve_roots
 from lib.retrodeck_health import RetroDeckConfigHealth
 
 if TYPE_CHECKING:
@@ -136,11 +136,16 @@ class RetroDeckPathsAdapter:
         launcher that no longer existed. So presence is the *app* being installed in either
         flatpak tree, with the config as the second half of the answer.
         """
+        setting = None if self._settings is None else self._settings().get("runtime_mode")
+        # An explicit choice is the answer, and it is answered without probing: a built-in
+        # runtime must not go looking for a RetroDECK it was not asked to use, and a retrodeck
+        # one was chosen on purpose. Only ``auto`` (or nothing) needs the machine inspected.
+        if setting in (RuntimeMode.BUILTIN, RuntimeMode.RETRODECK, _LEGACY_BUILTIN):
+            return resolve_mode(setting, retrodeck_present=False)
         present = self.config_health() in (
             RetroDeckConfigHealth.OK,
             RetroDeckConfigHealth.ROOT_MISSING,
         ) and bool(flatpak_app_files_dirs(self._user_home))
-        setting = None if self._settings is None else self._settings().get("runtime_mode")
         return resolve_mode(setting, retrodeck_present=present)
 
     def _owned_root(self, name: str) -> str | None:
@@ -150,10 +155,10 @@ class RetroDeckPathsAdapter:
         root spelled through ``/home`` does not become a second directory beside the same
         one reached through ``/var/home`` (#1838).
         """
-        if self.runtime_mode() is not RuntimeMode.STANDALONE:
+        if self.runtime_mode() is not RuntimeMode.BUILTIN:
             return None
         roots = resolve_roots(
-            mode=RuntimeMode.STANDALONE,
+            mode=RuntimeMode.BUILTIN,
             home=self._user_home,
             retrodeck_roots={},
             settings=None if self._settings is None else self._settings(),

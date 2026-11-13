@@ -58,7 +58,7 @@ class _Harness:
                 installer=self.install,
                 runtime_installed=lambda: True,
                 runtime_installer=lambda: _RUNTIME_OK,
-                runtime_is_standalone=lambda: True,
+                runtime_is_builtin=lambda: True,
                 resolve_system=self.resolve,
             )
         )

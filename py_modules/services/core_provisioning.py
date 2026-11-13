@@ -43,7 +43,7 @@ class CoreProvisioningConfig:
     runtime_installer: Callable[[], dict[str, Any]]
     # Installing a flatpak on a device RetroDECK already drives would be a second runtime
     # nobody launches; while it drives, this service has nothing to do.
-    runtime_is_standalone: Callable[[], bool]
+    runtime_is_builtin: Callable[[], bool]
     # A RomM platform slug is not an inventory system name; the platform map
     # answers the difference for the whole-device sweep.
     resolve_system: Callable[[str], str]
@@ -60,7 +60,7 @@ class CoreProvisioningService:
         self._installer = config.installer
         self._runtime_installed = config.runtime_installed
         self._runtime_installer = config.runtime_installer
-        self._runtime_is_standalone = config.runtime_is_standalone
+        self._runtime_is_builtin = config.runtime_is_builtin
         self._resolve_system = config.resolve_system
 
     async def ensure_runtime(self) -> dict[str, Any]:
@@ -71,7 +71,7 @@ class CoreProvisioningService:
         runtime is the RetroArch Flatpak, installed per user so the install needs no
         password — the one thing Game Mode cannot provide.
         """
-        if not self._runtime_is_standalone():
+        if not self._runtime_is_builtin():
             return {"success": True, "skipped": "retrodeck"}
         if self._runtime_installed():
             return {"success": True, "already_present": True}

@@ -21,14 +21,15 @@ export interface CoreSetupSectionProps {
   /** What the last run did — counts, or the failure it hit. */
   status: string;
   onInstall: () => void;
-  /** Which runtime is driving: "standalone" (default), "retrodeck" or "auto" (ADR-0045). */
+  /** Which runtime is driving: "builtin" (default — the app installs and launches its own
+   *  RetroArch), "retrodeck" or "auto" (ADR-0045). */
   runtimeMode: string;
   onRuntimeChange: (mode: string) => void;
 }
 
 /** The three runtimes, in the order the choice reads: the app's own first. */
 const RUNTIME_CHOICES: ReadonlyArray<{ id: string; label: string }> = [
-  { id: "standalone", label: "This app" },
+  { id: "builtin", label: "Built-in" },
   { id: "retrodeck", label: "RetroDECK" },
   { id: "auto", label: "Follow what's installed" },
 ];

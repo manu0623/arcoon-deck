@@ -322,8 +322,10 @@ def _migrate_v13_to_v14(data: dict[str, Any]) -> dict[str, Any]:
     moves the un-decided, not the decided. ``"auto"`` stays a value the settings can
     still be set to.
     """
-    if data.get("runtime_mode", "auto") == "auto":
-        data["runtime_mode"] = "standalone"
+    # ``"standalone"`` is the 0.36.0 spelling of the same decision, and ``"auto"`` the
+    # older default: both mean the file never chose, so both land on the shipped one.
+    if data.get("runtime_mode", "auto") in ("auto", "standalone"):
+        data["runtime_mode"] = "builtin"
     data["version"] = 14
     return data
 

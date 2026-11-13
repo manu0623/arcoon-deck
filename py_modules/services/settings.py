@@ -37,7 +37,7 @@ _VALID_LOG_LEVELS = ("debug", "info", "warn", "error")
 
 #: The runtime vocabulary ``domain.runtime`` understands. Validated here so a typo from
 #: the panel is refused instead of silently rerouting the library (ADR-0045).
-_VALID_RUNTIME_MODES = ("standalone", "retrodeck", "auto")
+_VALID_RUNTIME_MODES = ("builtin", "retrodeck", "auto")
 _VALID_STEAM_INPUT_MODES = ("default", "force_on", "force_off")
 
 # What the user is told about a refused custom-header list. Each template may name
@@ -173,7 +173,7 @@ class SettingsService:
             "sgdb_api_key_masked": _MASK_PLACEHOLDER if self._settings.get("steamgriddb_api_key") else "",
             "retroarch_input_check": self._steam_config.check_retroarch_input_driver(),
             "log_level": self._settings.get("log_level", "warn"),
-            "runtime_mode": self._settings.get("runtime_mode", "standalone"),
+            "runtime_mode": self._settings.get("runtime_mode", "builtin"),
             "romm_allow_insecure_ssl": self._settings.get("romm_allow_insecure_ssl", False),
             "collection_create_platform_groups": self._settings.get("collection_create_platform_groups", False),
             "collection_owner_scope": self._settings.get("collection_owner_scope", "all"),

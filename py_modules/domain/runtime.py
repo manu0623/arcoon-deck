@@ -1,26 +1,32 @@
 """Which runtime the plugin drives, and the roots it owns when it drives its own.
 
+Two words this module and the rest of the app use, and never interchangeably:
+
+- **Built-in** — the libretro runtime and cores the plugin downloads, verifies and
+  launches itself. ``BUILTIN`` below means exactly this and nothing else.
+- **Standalone** — an emulator the plugin did not install and cannot configure (Eden,
+  RPCS3, a flatpak, an AppImage). It is reached through the emulator registry and
+  ``EmulatorInvocation.standalone``; it is never a runtime this module returns.
+
 The plugin was written against RetroDECK: every root it read came out of
-``retrodeck.json``, and with RetroDECK gone those getters return
-``~/retrodeck/roms`` and friends — paths that exist only because RetroDECK is installed.
-That is not a fallback, it is a dependency with a polite error message, and it rules out
-the shape this plugin is supposed to have: an app that manages its own library, saves and
-emulators.
+``retrodeck.json``, and with RetroDECK gone those getters return ``~/retrodeck/roms`` and
+friends — paths that exist only because RetroDECK is installed. That is not a fallback, it
+is a dependency with a polite error message, and it rules out the shape this app is
+supposed to have: one that manages its own library, saves and emulators.
 
 So the runtime is a value, decided once and read everywhere:
 
-- ``RETRODECK`` — the classic shape. Roots come from ``retrodeck.json`` exactly as before.
-- ``STANDALONE`` — the plugin owns its roots. They default to an EmuDeck-style
-  ``<home>/Emulation`` tree, which is where a Deck's standalone emulators (Eden, Dolphin,
-  Cemu) already keep their saves, and any of them can be overridden in settings.
-- ``AUTO`` — the user's setting: follow whoever is installed.
+- ``BUILTIN`` — the app's own runtime, and the shipped default. Roots are its own tree
+  (``<home>/Emulation`` unless a root is overridden), and a libretro launch goes through
+  the RetroArch it installed with the cores it provisioned. Nothing from RetroDECK or a
+  separately installed RetroArch is read, expected or required.
+- ``RETRODECK`` — the classic shape, opt-in. Roots come from ``retrodeck.json`` and the
+  launcher is RetroDECK's, because that is what the user asked for.
+- ``AUTO`` — follow whoever is installed (RetroDECK when present). Kept for the user who
+  wants the app to adapt rather than decide, never as the default.
 
-The measured state of a Deck with RetroDECK removed is why this exists rather than a
-guess: ``~/retrodeck/{roms,saves,bios}`` exist only on a RetroDECK install, and the
-RetroArch Flatpak that the owned launch path starts holds none of RetroDECK's cores. A
-runtime that answers "no roots" would leave the library unreadable while everything above
-it kept reporting success, so ``AUTO`` never leaves the answer empty — it picks the tree
-that a standalone Deck actually has.
+``AUTO`` never leaves the answer empty: a Deck with nothing installed answers from the
+built-in tree, so the library stays readable rather than reporting success over no roots.
 
 This module is pure: it takes what was detected and what was configured, and returns
 values. Nothing here touches the filesystem.
@@ -41,12 +47,16 @@ class RuntimeMode(StrEnum):
 
     AUTO = "auto"
     RETRODECK = "retrodeck"
-    STANDALONE = "standalone"
+    BUILTIN = "builtin"
 
 
-#: The directory a standalone runtime keeps its library in. EmuDeck's own layout, because
-#: that is the tree a Deck already has when RetroDECK is the thing being dropped.
-STANDALONE_ROOT_DIR = "Emulation"
+#: The directory the built-in runtime keeps its library in. EmuDeck's own layout, because
+#: that is the tree a Deck already has when RetroDECK is the thing being dropped; a root
+#: that names another tree through settings wins over it.
+BUILTIN_ROOT_DIR = "Emulation"
+
+#: The one older spelling of :attr:`RuntimeMode.BUILTIN` a settings file may still hold.
+_LEGACY_BUILTIN = "standalone"
 
 #: Where RetroArch's Flatpak keeps the cores it loads, relative to the user's home. The
 #: owned launch path starts that RetroArch, so its cores directory is the one to provision.
@@ -92,9 +102,11 @@ def resolve_mode(setting: object, *, retrodeck_present: bool) -> RuntimeMode:
     """
     if setting == RuntimeMode.RETRODECK:
         return RuntimeMode.RETRODECK
-    if setting == RuntimeMode.STANDALONE:
-        return RuntimeMode.STANDALONE
-    return RuntimeMode.RETRODECK if retrodeck_present else RuntimeMode.STANDALONE
+    if setting in (RuntimeMode.BUILTIN, _LEGACY_BUILTIN):
+        # ``"standalone"`` was this decision's spelling for one build (0.36.0); reading it
+        # as the current name keeps a settings file from rerouting to AUTO's answer.
+        return RuntimeMode.BUILTIN
+    return RuntimeMode.RETRODECK if retrodeck_present else RuntimeMode.BUILTIN
 
 
 def resolve_roots(
@@ -110,7 +122,7 @@ def resolve_roots(
     resolved them (symlinks included, #1838), and re-deriving them here would be a second
     spelling of one directory.
 
-    A ``STANDALONE`` runtime answers from its own tree, with ``<root>_dir`` settings keys
+    A ``BUILTIN`` runtime answers from its own tree, with ``<root>_dir`` settings keys
     overriding any of them. An empty override is unset, not a root of ``""`` — a settings
     file that once held a path and had it cleared must fall back, not point at nothing.
     """
@@ -123,7 +135,7 @@ def resolve_roots(
             states=retrodeck_roots["states"],
             cores=retrodeck_roots.get("cores", ""),
         )
-    base = f"{home}/{STANDALONE_ROOT_DIR}"
+    base = f"{home}/{BUILTIN_ROOT_DIR}"
     defaults = {
         "roms": f"{base}/roms",
         "saves": f"{base}/saves",
@@ -146,11 +158,11 @@ def resolve_launch_backend(setting: object, *, mode: RuntimeMode) -> str:
 
     An explicit ``"retroarch"`` always wins, because it is the owned form and needs
     nothing from RetroDECK. The shipped default is RetroDECK's launcher, and a
-    ``STANDALONE`` runtime cannot use it — there is no RetroDECK to hand the command to —
+    ``BUILTIN`` runtime cannot use it — there is no RetroDECK to hand the command to —
     so the default resolves to the owned one instead of baking a launch that dies at
     exec. This is the one place the setting is read through, so the read-path and the
     bake cannot disagree about which program starts.
     """
     if setting == "retroarch":
         return "retroarch"
-    return "retroarch" if mode is RuntimeMode.STANDALONE else "retrodeck"
+    return "retroarch" if mode is RuntimeMode.BUILTIN else "retrodeck"

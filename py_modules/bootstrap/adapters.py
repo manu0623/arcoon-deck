@@ -558,9 +558,17 @@ def bootstrap(
         user_home=user_home,
         logger=logger,
         cores_dir=retrodeck_paths.cores_path,
-        runtime_is_standalone=lambda: retrodeck_paths.runtime_mode() is RuntimeMode.STANDALONE,
+        runtime_is_builtin=lambda: retrodeck_paths.runtime_mode() is RuntimeMode.BUILTIN,
     )
-    emulator_catalogue = FallbackCatalogueAdapter(primary=es_de_catalogue, fallback=owned_catalogue)
+    # Tier order follows the runtime: under BUILTIN the app's own inventory answers first and
+    # ES-DE is the fallback, so nothing RetroDECK-shaped is consulted for a question the app
+    # can answer itself. Under RETRODECK the order flips, because its catalogue is the only
+    # place its own core labels exist (ADR-0045).
+    emulator_catalogue = FallbackCatalogueAdapter(
+        esde=es_de_catalogue,
+        owned=owned_catalogue,
+        owned_first=lambda: retrodeck_paths.runtime_mode() is RuntimeMode.BUILTIN,
+    )
     # The installs RetroDECK does not ship: AppImages in ~/Applications, EmuDeck's
     # launchers, bare flatpaks. Cached for a minute because the picker asks on every
     # menu open, while the probe behind it spawns ``flatpak list``.
@@ -572,11 +580,11 @@ def bootstrap(
     # be enabled by different means. Off by default: until the bank's directory is the one
     # a sync reads, redirecting into it would move saves somewhere nothing looks.
     # The bank is what redirects an owned RetroArch launch's saves into a directory the save
-    # layer reads. A STANDALONE runtime is launched by the plugin itself (domain.runtime), so
+    # layer reads. A BUILTIN runtime is launched by the plugin itself (domain.runtime), so
     # the bank cannot be optional there: without the redirect the owned launch writes where
     # no sync looks, which is a save that silently never reaches the server.
     def save_bank_enabled() -> bool:
-        return bool(settings.get("save_bank")) or retrodeck_paths.runtime_mode() is RuntimeMode.STANDALONE
+        return bool(settings.get("save_bank")) or retrodeck_paths.runtime_mode() is RuntimeMode.BUILTIN
     retroarch_appendconfig = RetroArchAppendConfigAdapter(
         data_dir=locations.data_dir, logger=logger, enabled=save_bank_enabled
     )

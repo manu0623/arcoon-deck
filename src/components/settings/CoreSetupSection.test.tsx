@@ -10,7 +10,7 @@ import { CoreSetupSection } from "./CoreSetupSection";
 describe("CoreSetupSection", () => {
   it("offers the install action", () => {
     const onInstall = vi.fn();
-    render(<CoreSetupSection runtimeMode="standalone" onRuntimeChange={vi.fn()} busy={false} status="" onInstall={onInstall} />);
+    render(<CoreSetupSection runtimeMode="builtin" onRuntimeChange={vi.fn()} busy={false} status="" onInstall={onInstall} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Install Missing Cores" }));
 
@@ -19,7 +19,7 @@ describe("CoreSetupSection", () => {
 
   it("says what it is doing while a run is in flight, and refuses a second press", () => {
     const onInstall = vi.fn();
-    render(<CoreSetupSection runtimeMode="standalone" onRuntimeChange={vi.fn()} busy status="" onInstall={onInstall} />);
+    render(<CoreSetupSection runtimeMode="builtin" onRuntimeChange={vi.fn()} busy status="" onInstall={onInstall} />);
 
     const button = screen.getByRole("button", { name: "Installing cores…" });
     fireEvent.click(button);
@@ -32,7 +32,7 @@ describe("CoreSetupSection", () => {
     const onRuntimeChange = vi.fn();
     render(
       <CoreSetupSection
-        runtimeMode="standalone"
+        runtimeMode="builtin"
         onRuntimeChange={onRuntimeChange}
         busy={false}
         status=""
@@ -40,19 +40,19 @@ describe("CoreSetupSection", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "This app — in use" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Built-in — in use" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "RetroDECK" }));
     expect(onRuntimeChange).toHaveBeenCalledWith("retrodeck");
   });
 
   it("reports the run's result under the button", () => {
-    render(<CoreSetupSection runtimeMode="standalone" onRuntimeChange={vi.fn()} busy={false} status="Installed 2 cores." onInstall={vi.fn()} />);
+    render(<CoreSetupSection runtimeMode="builtin" onRuntimeChange={vi.fn()} busy={false} status="Installed 2 cores." onInstall={vi.fn()} />);
 
     expect(screen.getByText("Installed 2 cores.")).toBeInTheDocument();
   });
 
   it("says nothing extra before a run has happened", () => {
-    const { container } = render(<CoreSetupSection runtimeMode="standalone" onRuntimeChange={vi.fn()} busy={false} status="" onInstall={vi.fn()} />);
+    const { container } = render(<CoreSetupSection runtimeMode="builtin" onRuntimeChange={vi.fn()} busy={false} status="" onInstall={vi.fn()} />);
 
     // The explainer is always there; a status line with no run behind it is not.
     expect(screen.queryByText(/Installed|failed|already installed/)).not.toBeInTheDocument();

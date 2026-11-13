@@ -70,10 +70,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # ADR-0043 and ADR-0045. Only the literal value changes anything — see
     # ``domain.retroarch_runner``.
     "launch_backend": "retroarch",
-    # Which runtime the plugin drives: ``"standalone"`` (shipped default — the plugin owns
-    # its tree and its launcher), ``"retrodeck"`` (the classic shape, opt-in) or ``"auto"``
-    # (follow whichever is installed). See ``domain.runtime`` and ADR-0045.
-    "runtime_mode": "standalone",
+    # Which runtime the plugin drives: ``"builtin"`` (shipped default — the libretro runtime
+    # and cores this app installs itself), ``"retrodeck"`` (the classic shape, opt-in) or
+    # ``"auto"`` (follow whichever is installed). See ``domain.runtime`` and ADR-0045.
+    "runtime_mode": "builtin",
     # Per-root overrides for the standalone tree; empty means "use the default"
     # (``<home>/Emulation/<root>``). A cleared path must fall back, not point at nothing.
     "roms_dir": "",

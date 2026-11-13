@@ -72,7 +72,7 @@ export interface PluginSettings {
   // the plugin owns its tree and launches RetroArch itself. "retrodeck" is the opt-in
   // classic shape and "auto" follows whatever is installed. Optional so an older
   // payload or a test fixture without it reads as the default, not as undefined.
-  runtime_mode?: "standalone" | "retrodeck" | "auto";
+  runtime_mode?: "builtin" | "retrodeck" | "auto";
   romm_allow_insecure_ssl: boolean;
   retroarch_input_check?: RetroArchInputCheck;
   collection_create_platform_groups?: boolean;

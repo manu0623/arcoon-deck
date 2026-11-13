@@ -11284,7 +11284,7 @@ const AdvancedSection = ({ logLevel, onLogLevelChange }) => {
 };
 
 const RUNTIME_CHOICES = [
-    { id: "standalone", label: "This app" },
+    { id: "builtin", label: "Built-in" },
     { id: "retrodeck", label: "RetroDECK" },
     { id: "auto", label: "Follow what's installed" },
 ];
@@ -11375,7 +11375,7 @@ const SettingsPage = ({ onBack, section }) => {
     const [saveSortMigrating, setSaveSortMigrating] = SP_REACT.useState(false);
     const [saveSortResult, setSaveSortResult] = SP_REACT.useState("");
     const [logLevel, setLogLevel] = SP_REACT.useState("warn");
-    const [runtimeMode, setRuntimeMode] = SP_REACT.useState("standalone");
+    const [runtimeMode, setRuntimeMode] = SP_REACT.useState("builtin");
     const [preferredRegion, setPreferredRegion] = SP_REACT.useState(AUTO_REGION);
     const [libraryRegions, setLibraryRegions] = SP_REACT.useState([]);
     const [platformGroups, setPlatformGroups] = SP_REACT.useState(false);
@@ -11390,7 +11390,7 @@ const SettingsPage = ({ onBack, section }) => {
             setSgdbApiKey(s.sgdb_api_key_masked);
             setSteamInputMode(s.steam_input_mode);
             setLogLevel(s.log_level);
-            setRuntimeMode(s.runtime_mode ?? "standalone");
+            setRuntimeMode(s.runtime_mode ?? "builtin");
             setPreferredRegion(s.preferred_region ?? AUTO_REGION);
             setPlatformGroups(!!s.collection_create_platform_groups);
             setNamingMode(s.collection_naming_mode ?? "merge");

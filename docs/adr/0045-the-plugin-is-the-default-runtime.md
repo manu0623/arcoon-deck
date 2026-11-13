@@ -17,7 +17,7 @@ things this plugin does best become unreachable:
 - **Roots.** Every path comes out of `retrodeck.json`. The plugin's own save bank, appendconfig
   and core tree are still built and written, but nothing launches through them.
 - **Answers.** The ES-DE catalogue — which exists only inside RetroDECK or an EmuDeck install —
-  answers instead of the plugin's own inventory, so the machine that most needs the standalone
+  answers instead of the plugin's own inventory, so the machine that most needs the built-in
   path is exactly the one that never exercises it.
 
 A user who removes RetroDECK gets the app's own world by accident. A user who keeps it never
@@ -29,20 +29,30 @@ The shipped defaults are the plugin's own runtime:
 
 | setting | shipped default | meaning |
 |---|---|---|
-| `runtime_mode` | `"standalone"` | the plugin owns its tree (`<home>/Emulation/*`, overridable per root) |
+| `runtime_mode` | `"builtin"` | the app's own libretro runtime and cores (`<home>/Emulation/*`, overridable per root) |
 | `launch_backend` | `"retroarch"` | the plugin starts RetroArch with its own core path and appendconfig |
+
+Under `"builtin"` the emulator catalogue is asked in the app's own order — shipped inventory
+first, ES-DE second — and nothing RetroDECK-shaped is consulted for a question the app can
+answer itself. A `"retrodeck"` runtime flips that order back.
 
 `"retrodeck"` and `"auto"` remain selectable — RetroDECK is a **fallback the user chooses**,
 never a requirement and never the default. The choice is surfaced in Settings → Emulators &
 Cores as three buttons, so it is reversible without editing `settings.json`.
 
+**The vocabulary is load-bearing:** *built-in* means the libretro runtime and cores this app
+downloads and launches itself; *standalone* means an emulator the app did not install (Eden,
+RPCS3, a flatpak). A runtime called "standalone" would collide with the second meaning, which
+is why the mode is `"builtin"`.
+
 `_migrate_v13_to_v14` applies this to existing installs: a stored `"auto"` (the old default,
-which no user typed) becomes `"standalone"`; a stored `"retrodeck"` or `"standalone"` is an
-answer the user gave and is left alone.
+which no user typed) becomes `"builtin"`; a stored `"retrodeck"` is an
+answer the user gave and is left alone. A file holding `"standalone"` — the 0.36.0 spelling
+of the same decision — is read as `"builtin"` (both by the migration and by the resolver).
 
 ## What this does not change
 
-- **The save bank gate.** `save_bank_enabled()` already returned true under a standalone
+- **The save bank gate.** `save_bank_enabled()` already returned true under a built-in
   runtime; this ADR does not change that expression, it changes which runtime a fresh install
   is on when it is evaluated.
 - **RetroDECK support.** Every path that worked under `"retrodeck"` still does. Nothing is
@@ -62,6 +72,6 @@ answer the user gave and is left alone.
   the former because `"auto"` was the default for every install that holds it, and the
   setting is one click away from being restored.
 - Two roots can now disagree in a new way: a Deck with RetroDECK installed but running
-  standalone keeps its library under `<home>/Emulation`. That is the intended shape, and the
+  built-in runtime keeps its library under `<home>/Emulation`. That is the intended shape, and the
   existing per-root overrides (`roms_dir`, `saves_dir`, `bios_dir`, `cores_dir`) are how a
   user points it at the tree that already has their ROMs.
