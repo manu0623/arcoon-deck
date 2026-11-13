@@ -8,6 +8,7 @@ narrowing, and the families that take no part.
 from __future__ import annotations
 
 import logging
+import os
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -196,3 +197,66 @@ class TestTheDataRootedEmulator:
             "/home/deck/.var/app/org.azahar_emu.Azahar/data/azahar-emu/sdmc/Nintendo 3DS"
         ]
         assert recorder.applied[0].owned_dir == f"{SAVES}/3ds/sdmc/Nintendo 3DS"
+
+
+PCSX2 = EmulatorDef(
+    id="pcsx2",
+    display_name="PCSX2",
+    family="pcsx2",
+    platforms=("ps2",),
+    hints=DetectionHints(flatpak_ids=("net.pcsx2.PCSX2",)),
+)
+
+FLATPAK_PCSX2 = InstalledEmulator(definition=PCSX2, provider="flatpak", path="net.pcsx2.PCSX2")
+
+
+class TestPs2Cards:
+    """The ps2 card step runs off the link, not off the platform."""
+
+    @pytest.mark.asyncio
+    async def test_linking_pcsx2_prepares_the_banks_card(self) -> None:
+        asked: list[str] = []
+
+        def _cards(bank_dir: str) -> dict[str, str]:
+            asked.append(bank_dir)
+            return {"card": "file_card", "core_link": "linked"}
+
+        built = EmulatorSaveLinkService(
+            config=EmulatorSaveLinkConfig(
+                logger=logging.getLogger("test_emulator_save_links"),
+                external_emulators=_Scanner([FLATPAK_PCSX2]),
+                config_reader=_Roots({"flatpak": "/home/deck/.var/app/net.pcsx2.PCSX2/config"}),
+                saves_path=lambda: SAVES,
+                apply=_Recorder(),
+                ps2_cards=_cards,
+            )
+        )
+
+        answer = await built.ensure_all()
+
+        assert asked == [os.path.join(SAVES, "ps2")]
+        assert answer["ps2_cards"] == {"card": "file_card", "core_link": "linked"}
+
+    @pytest.mark.asyncio
+    async def test_a_pass_that_did_not_link_pcsx2_touches_no_card(self) -> None:
+        asked: list[str] = []
+
+        def _cards(bank_dir: str) -> dict[str, str]:
+            asked.append(bank_dir)
+            return {}
+
+        built = EmulatorSaveLinkService(
+            config=EmulatorSaveLinkConfig(
+                logger=logging.getLogger("test_emulator_save_links"),
+                external_emulators=_Scanner([FLATPAK_PPSSPP]),
+                config_reader=_Roots({"flatpak": "/home/deck/.var/app/org.ppsspp.PPSSPP/config/ppsspp"}),
+                saves_path=lambda: SAVES,
+                apply=_Recorder(),
+                ps2_cards=_cards,
+            )
+        )
+
+        answer = await built.ensure_all()
+
+        assert asked == []
+        assert answer["ps2_cards"] is None

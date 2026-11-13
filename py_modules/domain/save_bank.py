@@ -258,7 +258,16 @@ _PLATFORM_LAYOUTS: dict[str, SaveLayout] = {
 #: into the bank. A standalone emulator reaches the bank through a save link instead, so
 #: its families are the ones ``domain.emulator_save_link`` declares — and the two sets
 #: are kept apart because a redirect the plugin did not make must not be claimed here.
-LAUNCH_REDIRECTED_FAMILIES = frozenset({SaveFamily.LIBRETRO_FILE, SaveFamily.PREFIX_BUNDLE})
+#: Families whose launch the plugin redirects into the bank itself — so the bank is
+#: genuinely where that launch writes, and a lookup may answer from it.
+#:
+#: ``PS2_CARD`` is here because both shapes of ps2 launch are redirected: a standalone
+#: PCSX2 has its ``config/PCSX2/memcards`` folder linked at the bank (a ``SavePoint``),
+#: and the libretro core's own card folder, ``system/pcsx2/memcards``, is linked at the
+#: same directory because the core ignores ``savefile_directory`` for memory cards —
+#: measured on the reference Deck, where a redirected launch still wrote its card into
+#: the emulator's system tree.
+LAUNCH_REDIRECTED_FAMILIES = frozenset({SaveFamily.LIBRETRO_FILE, SaveFamily.PREFIX_BUNDLE, SaveFamily.PS2_CARD})
 
 # RomM, Argosy and RomM's own client pick different spellings for four systems.
 # Normalising here means a caller never has to know which vocabulary it holds.

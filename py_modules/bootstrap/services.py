@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from adapters.coredumps import CoredumpAdapter
 from adapters.emulator_save_link import EmulatorSaveLinkAdapter
+from adapters.ps2_memcard import Ps2MemcardAdapter
 from domain.owned_dolphin import user_dir_for
 from domain.runtime import RuntimeMode, resolve_launch_backend
 from domain.shortcut_data import RETRODECK_APP_ID
@@ -498,6 +499,12 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
 
     # Points a standalone emulator's save folder at the tree the plugin syncs, so a game
     # played in PPSSPP's own window finds the savedata the sync put there (ADR-0051).
+    # PS2 needs a card, not just a link: a file card holds every game's saves in one
+    # image, so the bank gets a folder card and the libretro core's own card folder is
+    # pointed at it (the core ignores ``savefile_directory`` for cards).
+    ps2_memcard_adapter = Ps2MemcardAdapter(logger=cfg.runtime.logger)
+    retroarch_config_dir = cfg.adapters.retroarch_config.config_dir()
+
     emulator_save_link_service = EmulatorSaveLinkService(
         config=EmulatorSaveLinkConfig(
             logger=cfg.runtime.logger,
@@ -505,6 +512,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             config_reader=cfg.adapters.emulator_config,
             saves_path=cfg.callbacks.retrodeck_paths.saves_path,
             apply=EmulatorSaveLinkAdapter(logger=cfg.runtime.logger).apply,
+            ps2_cards=lambda bank_dir: ps2_memcard_adapter.ensure(bank_dir, retroarch_config_dir),
         ),
     )
 

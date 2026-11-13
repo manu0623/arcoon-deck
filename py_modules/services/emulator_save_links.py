@@ -23,6 +23,7 @@ reader doing anything about it.
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -58,6 +59,10 @@ class EmulatorSaveLinkConfig:
     config_reader: ConfigRootsReader
     saves_path: Callable[[], str]
     apply: Callable[[SaveLink], LinkOutcome]
+    #: PS2's extra step, taken once PCSX2 is linked: the bank needs a folder memory
+    #: card, and the libretro core's own card folder is pointed at it (it ignores
+    #: ``savefile_directory`` for cards). ``None`` for a caller with no card source.
+    ps2_cards: Callable[[str], dict[str, str]] | None = None
 
 
 class EmulatorSaveLinkService:
@@ -69,6 +74,7 @@ class EmulatorSaveLinkService:
         self._config_reader = config.config_reader
         self._saves_path = config.saves_path
         self._apply = config.apply
+        self._ps2_cards = config.ps2_cards
 
     async def ensure_all(self) -> dict[str, Any]:
         """Every install that needs a link, linked. Runs the filesystem work off-thread."""
@@ -104,7 +110,21 @@ class EmulatorSaveLinkService:
                 self._logger.warning(
                     f"Emulator saves: could not link {outcome.emulator} at {outcome.emulator_dir}: {outcome.note}"
                 )
-        return {"saves_root": saves_root, "links": outcomes}
+        cards = self._ensure_ps2_cards(outcomes, saves_root)
+        return {"saves_root": saves_root, "links": outcomes, "ps2_cards": cards}
+
+    def _ensure_ps2_cards(self, outcomes: list[dict[str, Any]], saves_root: str) -> dict[str, str] | None:
+        """The ps2 card step, run only when this pass linked PCSX2.
+
+        Keyed off the link rather than the platform: a Deck with no PCSX2 installed has
+        nothing to point at a card, and creating one in the bank for an emulator nobody
+        runs would be an invented save root.
+        """
+        if self._ps2_cards is None or not any(outcome["emulator"] == "pcsx2" for outcome in outcomes):
+            return None
+        cards = self._ps2_cards(os.path.join(saves_root, "ps2"))
+        self._logger.info(f"Emulator saves: ps2 card {cards}")
+        return cards
 
     def _link_for(self, install: InstalledEmulator, saves_root: str) -> SaveLink | None:
         """The plan for one install, with its own provider's config root expanded."""

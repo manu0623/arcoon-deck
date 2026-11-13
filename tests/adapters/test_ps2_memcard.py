@@ -1,0 +1,134 @@
+"""Tests for adapters/ps2_memcard — the bank's folder card and the core's view of it.
+
+The rule under test is the one that protects a user's saves: a file card already in
+place is never converted or overwritten, because it holds every game's saves and only
+PCSX2's own Memory Card manager can turn it into a folder card without losing them.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+
+import pytest
+
+from adapters.ps2_memcard import FOLDER_CARD_NAME, Ps2MemcardAdapter
+from domain.save_bank import PS2_SUPERBLOCK_FILE, is_formatted_ps2_superblock
+
+_SYMLINK_SKIP = "symlinks unavailable on this host (they need a privilege Windows lacks)"
+
+
+def _symlink_or_skip(target, link) -> None:
+    try:
+        os.symlink(target, link, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip(_SYMLINK_SKIP)
+
+
+def _link_or_skip(adapter: Ps2MemcardAdapter, ra, bank) -> str:
+    status = adapter.ensure_core_card_link(str(ra), str(bank))
+    if status == "failed":
+        pytest.skip(_SYMLINK_SKIP)
+    return status
+
+_LOGGER = logging.getLogger("test_ps2_memcard")
+
+
+def _adapter() -> Ps2MemcardAdapter:
+    return Ps2MemcardAdapter(logger=_LOGGER)
+
+
+class TestEnsureFolderCard:
+    def test_a_missing_card_is_created_formatted(self, tmp_path):
+        status = _adapter().ensure_folder_card(str(tmp_path))
+
+        card = tmp_path / FOLDER_CARD_NAME
+        assert status == "created"
+        assert card.is_dir()
+        superblock = (card / PS2_SUPERBLOCK_FILE).read_bytes()
+        assert is_formatted_ps2_superblock(superblock)
+
+    def test_an_existing_folder_card_is_left_alone(self, tmp_path):
+        card = tmp_path / FOLDER_CARD_NAME
+        card.mkdir()
+        (card / PS2_SUPERBLOCK_FILE).write_bytes(b"\xff" * 0x2000)
+        (card / "SCUS-97198").mkdir()
+
+        assert _adapter().ensure_folder_card(str(tmp_path)) == "present"
+        assert (card / "SCUS-97198").is_dir()
+
+    def test_a_file_card_is_neither_converted_nor_overwritten(self, tmp_path):
+        card = tmp_path / FOLDER_CARD_NAME
+        card.write_bytes(b"an 8 MB card full of somebody's saves")
+
+        assert _adapter().ensure_folder_card(str(tmp_path)) == "file_card"
+        assert card.is_file()
+        assert card.read_bytes() == b"an 8 MB card full of somebody's saves"
+
+    def test_a_folder_card_without_a_superblock_gets_one(self, tmp_path):
+        card = tmp_path / FOLDER_CARD_NAME
+        card.mkdir()
+
+        assert _adapter().ensure_folder_card(str(tmp_path)) == "present"
+        assert (card / PS2_SUPERBLOCK_FILE).is_file()
+
+
+class TestEnsureCoreCardLink:
+    def test_a_missing_folder_is_linked_at_the_bank(self, tmp_path):
+        bank = tmp_path / "bank"
+        bank.mkdir()
+        ra = tmp_path / "retroarch"
+
+        assert _link_or_skip(_adapter(), ra, bank) == "linked"
+        link = ra / "system" / "pcsx2" / "memcards"
+        assert os.path.islink(link)
+        assert os.path.realpath(link) == os.path.realpath(bank)
+
+    def test_a_link_already_naming_the_bank_is_reported(self, tmp_path):
+        bank = tmp_path / "bank"
+        bank.mkdir()
+        ra = tmp_path / "retroarch"
+        link = ra / "system" / "pcsx2" / "memcards"
+        link.parent.mkdir(parents=True)
+        _symlink_or_skip(bank, link)
+
+        assert _link_or_skip(_adapter(), ra, bank) == "already_linked"
+
+    def test_a_link_pointing_elsewhere_is_repointed(self, tmp_path):
+        bank = tmp_path / "bank"
+        bank.mkdir()
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        ra = tmp_path / "retroarch"
+        link = ra / "system" / "pcsx2" / "memcards"
+        link.parent.mkdir(parents=True)
+        _symlink_or_skip(elsewhere, link)
+
+        assert _link_or_skip(_adapter(), ra, bank) == "linked"
+        assert os.path.realpath(link) == os.path.realpath(bank)
+
+    def test_cards_a_real_folder_holds_are_adopted_into_the_bank(self, tmp_path):
+        # The measured case: the core already wrote Mcd001.ps2 into its own tree.
+        bank = tmp_path / "bank"
+        bank.mkdir()
+        ra = tmp_path / "retroarch"
+        existing = ra / "system" / "pcsx2" / "memcards"
+        existing.mkdir(parents=True)
+        (existing / "Mcd001.ps2").write_bytes(b"the user's card")
+
+        assert _link_or_skip(_adapter(), ra, bank) == "adopted"
+        assert (bank / "Mcd001.ps2").read_bytes() == b"the user's card"
+        assert os.path.islink(existing)
+
+    def test_a_card_the_bank_already_holds_is_not_clobbered(self, tmp_path):
+        bank = tmp_path / "bank"
+        bank.mkdir()
+        (bank / "Mcd001.ps2").write_bytes(b"bank copy")
+        ra = tmp_path / "retroarch"
+        existing = ra / "system" / "pcsx2" / "memcards"
+        existing.mkdir(parents=True)
+        (existing / "Mcd001.ps2").write_bytes(b"emulator copy")
+
+        _link_or_skip(_adapter(), ra, bank)
+
+        assert (bank / "Mcd001.ps2").read_bytes() == b"bank copy"

@@ -56,6 +56,20 @@ class RetroArchConfigAdapter:
         self._user_home = user_home
         self._logger = logger
 
+    def config_dir(self) -> str:
+        """The RetroArch config directory in use: the first candidate that exists.
+
+        Only the *directory* is answered, because the caller that needs it writes
+        beside ``retroarch.cfg`` rather than into it: the ps2 core's memory-card folder
+        lives at ``system/pcsx2/memcards`` below this directory, and the plugin points
+        that folder at the save bank.
+        """
+        for suffix in self._RETROARCH_CFG_SUFFIXES:
+            path = os.path.join(self._user_home, suffix)
+            if os.path.isfile(path):
+                return os.path.dirname(path)
+        return os.path.dirname(os.path.join(self._user_home, self._RETROARCH_CFG_SUFFIXES[-1]))
+
     def get_save_layout(self) -> SaveLayout:
         """Read the RetroArch save-**file** layout from retroarch.cfg.
 
