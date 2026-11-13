@@ -344,7 +344,6 @@ class RomInfoService:
         # The SAVE path, asked of the resolver's pick-agnostic read: the picker chooses
         # which program runs, never where the platform keeps its cards.
         managed = self._active_core.managed_save_entry(int(rom_id))
-        self._logger.info(f"SaveService: {platform} managed save entry: {'yes' if managed is not None else 'no'}")
         stated = manifest_answer(managed, content_installed=installed)
         if stated is not None:
             # The provisioner stated both the launch and the save path, so there is nothing
@@ -400,17 +399,13 @@ class RomInfoService:
         folder holds files named ``0``, ``1``, … keyed by nothing at all. The listing is the
         only honest source in both cases.
         """
-        self._logger.info(
-            f"SaveService: {platform} save fill: granularity={answer.granularity} "
-            f"needs={answer.needs} dir={answer.directory}"
-        )
         if canonical_platform(platform) == "gc":
             return self._fill_gci_names(answer, identity=identity, platform=platform)
         if answer.granularity == "title-dir":
-            return self._fill_directory_members(answer, platform=platform)
+            return self._fill_directory_members(answer)
         return answer
 
-    def _fill_directory_members(self, answer: SaveAnswer, *, platform: str) -> SaveAnswer:
+    def _fill_directory_members(self, answer: SaveAnswer) -> SaveAnswer:
         """Name a managed title directory's files from the directory itself.
 
         Only a provisioned ``title-dir`` answer reaches this, so the directory is one the
@@ -427,10 +422,7 @@ class RomInfoService:
             for name in self._save_file_store.listdir(answer.directory)
             if self._save_file_store.is_file(os.path.join(answer.directory, name))
         ]
-        filled = fill_directory_members(answer, names)
-        if filled.syncable:
-            self._logger.info(f"SaveService: {platform} save members named from the folder: {filled.synced_names}")
-        return filled
+        return fill_directory_members(answer, names)
 
     def _fill_gci_names(self, answer: SaveAnswer, *, identity: ContentIdentity, platform: str) -> SaveAnswer:
         """Name a GameCube card's entries from the card folder itself.
@@ -533,9 +525,7 @@ class RomInfoService:
         archive_dir = os.path.join(os.path.dirname(source_dir), PACKED_ARCHIVE_DIR_NAME)
         archive_name = f"{info['rom_name']}.zip"
         self._save_file_store.create_archive(os.path.join(archive_dir, archive_name), source_dir, list(members))
-        self._logger.info(
-            f"SaveService: packed {len(members)} file(s) from {source_dir} into {archive_name}"
-        )
+        self._logger.debug(f"SaveService: packed {len(members)} file(s) into {archive_name}")
         return PackedSaveUnit(archive_dir=archive_dir, archive_name=archive_name, source_dir=source_dir)
 
     def find_save_files(self, rom_id: int, *, save_answer: SaveAnswer | None = None) -> list[dict[str, str]]:
