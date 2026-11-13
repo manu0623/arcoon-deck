@@ -20,6 +20,7 @@ import re
 from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
+from domain.emulator_switches import normalise_switches
 from domain.shortcut_data import EmulatorInvocation
 
 # A RetroArch libretro command in the exact shape the plugin bakes: the
@@ -235,15 +236,17 @@ def option_to_invocation(option: EmulatorOption | None) -> EmulatorInvocation | 
     """Render a *bakeable* option into an :class:`EmulatorInvocation`, else ``None``.
 
     A libretro option yields a libretro invocation keyed on its ``core_so``; a
-    standalone option bakes its full command text verbatim. A ``None`` option,
-    or one that is not bakeable, resolves to ``None`` (the plain-launch signal).
+    standalone option bakes its full command text, corrected into the switch
+    spelling the emulator it names accepts (:func:`domain.emulator_switches.
+    normalise_switches`). A ``None`` option, or one that is not bakeable, resolves
+    to ``None`` (the plain-launch signal).
     """
     if option is None or option.status != "bakeable":
         return None
     if option.kind == "libretro" and option.core_so:
         return EmulatorInvocation.libretro(option.core_so, option.label, option.emulator)
     if option.kind == "standalone" and option.command:
-        return EmulatorInvocation.standalone(option.command, option.label, option.emulator)
+        return EmulatorInvocation.standalone(normalise_switches(option.command), option.label, option.emulator)
     return None
 
 

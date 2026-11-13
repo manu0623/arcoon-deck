@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
 from domain.command_text import appendconfig_flag
+from domain.emulator_switches import normalise_switches
 from domain.owned_dolphin import command_with_user_dir
 from domain.retroarch_runner import RetroArchRunner, retroarch_command
 from domain.sibling_group import compute_sibling_group_key
@@ -282,11 +283,18 @@ def build_launch_options(invocation: str, path: str) -> str:
     break out of the quoted token and inject extra argv elements into the
     emulator invocation. Only the path is escaped — *invocation* is trusted
     build-time text whose own ``-e "..."`` quoting must survive verbatim.
+
+    *invocation*'s switches are corrected into the spelling the emulator it names
+    accepts (:func:`domain.emulator_switches.normalise_switches`) before composing.
+    This is the one place a launch command becomes a Steam shortcut's options, so a
+    row spelling a switch PCSX2 refuses (``--fullscreen``) is rewritten here rather
+    than baked, and the frontend's pre-launch confirm-set copies the corrected value
+    onto the live shortcut — which is what heals a stored command that cannot start.
     """
     if not path:
         return ""
     escaped = path.replace("\\", "\\\\").replace('"', '\\"')
-    return f'{invocation} "{escaped}"'
+    return f'{normalise_switches(invocation)} "{escaped}"'
 
 
 def extract_version_metadata(rom: dict[str, Any]) -> dict[str, Any]:
