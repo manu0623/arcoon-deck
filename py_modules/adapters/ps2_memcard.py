@@ -16,17 +16,24 @@ So the bank's ps2 directory holds a folder card, and both launch shapes read it:
   into the emulator's system tree — so that folder is replaced with a symlink to the
   bank.
 
-**A file card already in place is left alone.** Converting it is PCSX2's own job (its
-Memory Card manager does it), and overwriting it would throw away the saves it holds —
-the exact loss this adapter exists to avoid. The status says which of the two it found
-so a caller can report it rather than guess.
+**A file card is converted, and the image is kept.** PCSX2 can convert a file card to a
+folder card, but only from its own Memory Card window; there is no command-line form
+(the Qt binary only starts when asked, measured on the reference Deck). A card that is
+never converted is a card whose saves can never sync, so the plugin does the same job
+itself: it reads every save folder out of the image with
+:func:`domain.ps2_file_card.read_file_card` and writes those files under
+``Mcd001.ps2/``. The image itself is moved aside, never overwritten — if the extraction
+is refused (an image that does not parse) the card stays exactly where it was and the
+status says why.
 """
 
 from __future__ import annotations
 
 import os
+import shutil
 from typing import TYPE_CHECKING
 
+from domain.ps2_file_card import Ps2CardError, Ps2CardFile, Ps2CardFolder, read_file_card
 from domain.save_bank import PS2_SUPERBLOCK_FILE, ps2_card_superblock
 
 if TYPE_CHECKING:
@@ -58,7 +65,9 @@ class Ps2MemcardAdapter:
 
         ``created`` — the card directory and its superblock were written;
         ``present`` — a folder card is already there and left untouched;
-        ``file_card`` — a file card occupies the name; it is not converted or replaced;
+        ``converted`` — a file card's saves were extracted into a folder card and the
+        image was kept beside it;
+        ``file_card`` — a file card is there and could not be read, so it was left alone;
         ``failed`` — the directory could not be written (logged).
         """
         card = os.path.join(bank_dir, FOLDER_CARD_NAME)
@@ -67,10 +76,7 @@ class Ps2MemcardAdapter:
                 self._ensure_superblock(card)
                 return "present"
             if os.path.isfile(card):
-                self._logger.info(
-                    f"ps2 memcard: {card} is a file card; leaving it for PCSX2 to convert before syncing"
-                )
-                return "file_card"
+                return self._convert(card, bank_dir)
             os.makedirs(card, exist_ok=True)
             self._ensure_superblock(card)
         except OSError as exc:
@@ -78,6 +84,74 @@ class Ps2MemcardAdapter:
             return "failed"
         self._logger.info(f"ps2 memcard: created the folder card {card}")
         return "created"
+
+    def _convert(self, card: str, bank_dir: str) -> str:
+        """Extract a file card's saves into a folder card, keeping the image.
+
+        The image is moved aside only after every file of every folder has been written,
+        so a conversion that fails halfway leaves the card that PCSX2 reads untouched.
+        """
+        staged = f"{card}.converting"
+        try:
+            with open(card, "rb") as handle:
+                image = handle.read()
+            folders = read_file_card(image)
+        except (OSError, Ps2CardError) as exc:
+            self._logger.warning(
+                f"ps2 memcard: {card} is a file card that could not be read ({exc}); leaving it as it is"
+            )
+            return "file_card"
+        try:
+            os.makedirs(staged, exist_ok=True)
+            written = 0
+            for folder in folders:
+                written += self._write_folder(image, os.path.join(staged, folder.name), folder)
+            self._ensure_superblock(staged)
+            if written == 0:
+                raise OSError("the card holds no save folder")
+            kept = self._keep_image(card, bank_dir)
+            os.replace(staged, card)
+        except OSError as exc:
+            self._logger.warning(f"ps2 memcard: cannot convert {card}: {exc}")
+            self._discard(staged)
+            return "file_card"
+        self._logger.info(
+            f"ps2 memcard: converted the file card {card} into a folder card "
+            f"({len(folders)} save folder(s), {written} file(s)); the image is kept at {kept}"
+        )
+        return "converted"
+
+    def _write_folder(self, image: bytes, target: str, folder: Ps2CardFolder) -> int:
+        """Write one save folder's files; answer how many were written."""
+        os.makedirs(target, exist_ok=True)
+        written = 0
+        for item in folder.files:
+            self._write_file(image, os.path.join(target, item.name), item)
+            written += 1
+        for child in folder.folders:
+            written += self._write_folder(image, os.path.join(target, child.name), child)
+        return written
+
+    @staticmethod
+    def _write_file(image: bytes, path: str, item: Ps2CardFile) -> None:
+        with open(path, "wb") as handle:
+            for offset, length in item.spans:
+                handle.write(image[offset:offset + length])
+
+    @staticmethod
+    def _keep_image(card: str, bank_dir: str) -> str:
+        """Move the file card beside the folder card, never deleting it."""
+        kept = os.path.join(bank_dir, f"{FOLDER_CARD_NAME}.file-card-image")
+        suffix = 1
+        while os.path.exists(kept):
+            suffix += 1
+            kept = os.path.join(bank_dir, f"{FOLDER_CARD_NAME}.file-card-image.{suffix}")
+        os.replace(card, kept)
+        return kept
+
+    @staticmethod
+    def _discard(path: str) -> None:
+        shutil.rmtree(path, ignore_errors=True)
 
     def ensure_core_card_link(self, retroarch_config_dir: str, bank_dir: str) -> str:
         """Point ``<retroarch>/system/pcsx2/memcards`` at *bank_dir*.

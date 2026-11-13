@@ -52,11 +52,26 @@ Three pieces, each measured:
    there when a launch is genuinely redirected, which is now true of both: the standalone
    through the link, the core through the system-tree symlink.
 
-**A file card already in place is never converted.** `ensure_folder_card` reports
-`file_card` and leaves the image untouched: it holds every game's saves, and only
-PCSX2's own Memory Card manager can turn it into a folder card without losing them. The
-plugin does not guess at that conversion, and until it happens a ps2 save stays
-unsyncable rather than being synced wrongly.
+**A file card in place is converted — and the image is kept.** The first version of this
+decision left the conversion to PCSX2's Memory Card window, on the grounds that only
+PCSX2 could do it without losing saves. That was half right: PCSX2 *does* have no
+command-line conversion (its Qt binary only ever starts a UI, measured on the reference
+Deck), and a card nobody opens that window for is a card that never syncs — the state the
+user was left in, with a session played and `uploaded=0`.
+
+So the plugin does the same job itself, because the card's own format says how:
+`domain.ps2_file_card` reads the image's superblock, indirect FAT, FAT and directory
+entries, and answers each save folder with the byte spans that hold its files. Measured
+against the reference card (8,650,752 bytes, `alloc_offset` 41, cluster 0 = page 82), it
+extracts `BASCUS-97198YAOTWTD!` holding `icon.sys` (magic `PS2D`), `sly.ico` and
+`save1`–`save3`. The adapter writes those files under `Mcd001.ps2/` with a formatted
+superblock and moves the image aside to `Mcd001.ps2.file-card-image`, never overwriting
+it.
+
+**Extraction is refused rather than approximated.** An image whose geometry does not
+parse, or which yields no save folder, leaves the card exactly as it was and returns
+`file_card` — a card the plugin does not understand is a save that stays put, not one
+that gets rewritten.
 
 ## What this does not do
 

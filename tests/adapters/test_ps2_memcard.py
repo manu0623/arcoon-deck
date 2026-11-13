@@ -11,6 +11,7 @@ import logging
 import os
 
 import pytest
+from fakes.ps2_card import build_file_card
 
 from adapters.ps2_memcard import FOLDER_CARD_NAME, Ps2MemcardAdapter
 from domain.save_bank import PS2_SUPERBLOCK_FILE, is_formatted_ps2_superblock
@@ -132,3 +133,41 @@ class TestEnsureCoreCardLink:
         _link_or_skip(_adapter(), ra, bank)
 
         assert (bank / "Mcd001.ps2").read_bytes() == b"bank copy"
+
+
+FOLDER = "BASCUS-97198YAOTWTD!"
+
+
+class TestFileCardConversion:
+    """A file card is converted rather than left unsyncable, and its image is kept."""
+
+    def test_a_file_card_is_converted_and_the_image_kept(self, tmp_path):
+        save = b"SLY-SAVE" * 400
+        image = build_file_card({FOLDER: {"save1": save, "icon.sys": b"PS2D" + b"\x00" * 60}})
+        card = tmp_path / FOLDER_CARD_NAME
+        card.write_bytes(image)
+
+        status = _adapter().ensure_folder_card(str(tmp_path))
+
+        assert status == "converted"
+        folder_card = tmp_path / FOLDER_CARD_NAME
+        assert folder_card.is_dir()
+        assert (folder_card / FOLDER / "save1").read_bytes() == save
+        assert (folder_card / PS2_SUPERBLOCK_FILE).is_file()
+        kept = tmp_path / f"{FOLDER_CARD_NAME}.file-card-image"
+        assert kept.read_bytes() == image
+
+    def test_an_image_that_does_not_parse_is_left_exactly_where_it_is(self, tmp_path):
+        card = tmp_path / FOLDER_CARD_NAME
+        card.write_bytes(b"not a memory card at all")
+
+        assert _adapter().ensure_folder_card(str(tmp_path)) == "file_card"
+        assert card.is_file()
+        assert card.read_bytes() == b"not a memory card at all"
+
+    def test_a_converted_card_is_present_on_the_next_run(self, tmp_path):
+        card = tmp_path / FOLDER_CARD_NAME
+        card.write_bytes(build_file_card({FOLDER: {"save1": b"x"}}))
+        _adapter().ensure_folder_card(str(tmp_path))
+
+        assert _adapter().ensure_folder_card(str(tmp_path)) == "present"
