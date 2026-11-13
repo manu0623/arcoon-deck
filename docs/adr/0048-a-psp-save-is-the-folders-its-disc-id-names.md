@@ -44,7 +44,15 @@ folder, and a restored member is tracked by its own relative name rather than it
 so a nested file's baseline points at where the file actually landed.
 
 Without an identity the answer stays a `save_id` hole rather than a guess — the same rule the
-bank already applies to PS2 cards and Switch profiles.
+bank already applies to PS2 cards and Switch profiles. An identity with **no folders yet** is
+the other way round: the game simply has not saved, so the answer stays syncable, the unit is
+still the packed archive, and the download is what creates the folders. Measured on the
+reference Deck, refusing that case left the server's three saves with nowhere to land — the
+first sync of a game the user had never played is exactly the case a fresh install hits.
+
+`PARAM.SFO`'s `DISC_ID` is the key; no header guess is made. Verified against the real image:
+`Burnout Legends.iso` answers `ULUS10025`, and its extracted folder `ULUS10025SAVE000` lands
+beside the redirected memory stick.
 
 ## Consequences
 
