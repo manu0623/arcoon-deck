@@ -87,6 +87,46 @@ async def test_download_without_a_bound_shortcut_emits_no_continuation_lease(plu
 
 
 @pytest.mark.asyncio
+async def test_a_finished_download_adopts_the_server_save(plugin):
+    """The game that just landed should already point at the user's own save (ADR-0047)."""
+    import decky
+
+    adopt = AsyncMock(return_value={"adopted": True, "reason": None, "slot": "desktop"})
+    plugin._save_sync_service.auto_adopt_server_slot = adopt
+    decky.emit.reset_mock()
+
+    await plugin._emit_with_prune_continuation("download_complete", {"app_id": 42, "rom_id": 2171})
+    await asyncio.gather(*list(plugin._save_adoption_tasks))
+
+    adopt.assert_awaited_once_with(2171)
+
+
+@pytest.mark.asyncio
+async def test_a_download_without_a_rom_id_schedules_no_adoption(plugin):
+    import decky
+
+    decky.emit.reset_mock()
+
+    await plugin._emit_with_prune_continuation("download_complete", {"app_id": 42})
+
+    assert getattr(plugin, "_save_adoption_tasks", set()) == set()
+
+
+@pytest.mark.asyncio
+async def test_a_failing_adoption_never_breaks_the_download_event(plugin):
+    import decky
+
+    adopt = AsyncMock(side_effect=RuntimeError("server exploded"))
+    plugin._save_sync_service.auto_adopt_server_slot = adopt
+    decky.emit.reset_mock()
+
+    await plugin._emit_with_prune_continuation("download_complete", {"app_id": 42, "rom_id": 2171})
+    await asyncio.gather(*list(plugin._save_adoption_tasks))
+
+    decky.emit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_terminal_prune_completion_holds_publication_lease_before_release_wait(plugin):
     import decky
 

@@ -439,12 +439,16 @@ async def test_get_save_setup_info_happy_shape(harness):
         "slot_confirmed",
         "active_slot",
         "recommended_action",
+        # Which slot "auto_adopt_server" means; null on every other action (ADR-0047).
+        "auto_slot",
         "server_query_failed",
     }
     assert set(result.keys()) == expected_keys
     assert result["server_query_failed"] is False
     # Server answered → recommendation is authoritative, never the unreachable slug.
-    assert result["recommended_action"] in {"auto_confirm_default", "show_wizard"}
+    assert result["recommended_action"] in {"auto_confirm_default", "auto_adopt_server", "show_wizard"}
+    if result["recommended_action"] == "auto_adopt_server":
+        assert isinstance(result["auto_slot"], str)
     assert isinstance(result["server_slots"], list)
 
 

@@ -73,6 +73,9 @@ class Plugin:
     # skips ``_main``) still tracks tasks.
     _playtime_flush_tasks: set[asyncio.Task[None]]
 
+    # The same tracking for background save adoption after a download (ADR-0047).
+    _save_adoption_tasks: set[asyncio.Task[None]]
+
     _MIN_REQUIRED_VERSION = (4, 9, 0)
 
     # -- logging ---------------------------------------------------------------
@@ -253,6 +256,7 @@ class Plugin:
         await self._migration_service.shutdown()
         await self._session_lifecycle_service.shutdown()
         await self._cancel_playtime_flush_tasks()
+        await self._cancel_save_adoption_tasks()
         decky.logger.info("Tender pluginunloaded")
 
     async def _cancel_playtime_flush_tasks(self):
@@ -263,6 +267,19 @@ class Plugin:
         none are pending (or the set was never created).
         """
         tasks = getattr(self, "_playtime_flush_tasks", None)
+        if not tasks:
+            return
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _cancel_save_adoption_tasks(self):
+        """Cancel and await any in-flight save-adoption task on unload.
+
+        A no-op when none are pending (or the set was never created); the same
+        boundary the play-session flush keeps.
+        """
+        tasks = getattr(self, "_save_adoption_tasks", None)
         if not tasks:
             return
         for task in tasks:
@@ -919,8 +936,13 @@ class Plugin:
 
     @migration_blocked
     @prune_active_blocked
-    async def auto_adopt_server_slot(self, rom_id):
-        """Adopt the newest server save slot when no local save exists (ADR-0047)."""
+    async def _auto_adopt_server_slot(self, rom_id):
+        """Adopt the newest server save slot when no local save exists (ADR-0047).
+
+        Private (no frontend declaration): the frontend already reaches adoption through
+        ``get_save_setup_info``'s recommendation and ``confirm_slot_choice``, so this
+        exists only for the download hook below.
+        """
         return await self._save_sync_service.auto_adopt_server_slot(rom_id)
 
     async def confirm_slot_choice(
@@ -985,16 +1007,26 @@ class Plugin:
         return result
 
     def _schedule_save_adoption(self, rom_id: int) -> None:
-        """Run the fresh-install save adoption in the background, logging failures."""
+        """Adopt the newest server save in the background, logging failures (ADR-0047).
+
+        Keeps a strong ref in ``_save_adoption_tasks`` so the loop cannot GC the task and
+        ``_unload`` can cancel it, the same way ``_schedule_playtime_flush`` does.
+        """
 
         async def run() -> None:
             try:
-                result = await self._save_sync_service.auto_adopt_server_slot(rom_id)
+                result = await self._auto_adopt_server_slot(rom_id)
                 self._debug_logger(f"[save-adoption] rom {rom_id}: {result}")
             except Exception as e:  # a save fetch must never break a download event
                 self._debug_logger(f"[save-adoption] rom {rom_id} failed: {e}")
 
-        self.loop.create_task(run())
+        tasks = getattr(self, "_save_adoption_tasks", None)
+        if tasks is None:
+            tasks = set()
+            self._save_adoption_tasks = tasks
+        task = asyncio.get_running_loop().create_task(run())
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
 
     def _schedule_playtime_flush(self):
         """Kick off the offline play-session flush as a tracked background task.
