@@ -44,6 +44,11 @@ hidden by the link).
 family whose core launch the plugin already redirects into a bank directory. A family whose save
 root nothing has redirected has nothing to be pointed at yet, and is not guessed at.
 
+**Only `native` and `flatpak` installs are linked.** An `emudeck` record is a launcher script, and
+the emulator behind it may be a flatpak that is not installed at all — measured on the reference
+Deck, linking it created `~/.var/app/org.ppsspp.PPSSPP` for a sandbox nothing had ever launched.
+A provider that cannot say which install it means does not get a link.
+
 **It runs at startup and right after an install**, because the window that matters is the first
 launch: an emulator opened before the link exists writes a save the next sync cannot see.
 

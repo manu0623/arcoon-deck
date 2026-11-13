@@ -41,6 +41,13 @@ _FAMILY_SAVE_SUBDIRS: dict[str, tuple[str, ...]] = {
     "ppsspp": ("PSP", "SAVEDATA"),
 }
 
+# The providers whose config root we know belongs to that install. ``emudeck`` is out
+# on purpose: its record is a launcher script, and the emulator behind it may be a
+# flatpak that is not installed at all — measured on the reference Deck, linking the
+# launcher created ``~/.var/app/org.ppsspp.PPSSPP`` for a sandbox nothing had ever
+# launched. A provider that cannot say which install it means does not get a link.
+_LINKED_PROVIDERS = ("native", "flatpak")
+
 
 @dataclass(frozen=True, slots=True)
 class SaveLink:
@@ -61,10 +68,13 @@ class SaveLink:
 def link_for(install: InstalledEmulator, *, config_root: str, saves_root: str) -> SaveLink | None:
     """The link this install needs, or ``None`` when it takes no part.
 
-    ``None`` covers three real answers, not one: a family with no declared subdir (the
-    emulator's saves are not ours to point), an install with no config root to point at
-    (a provider whose layout is unknown here), and a platform with no layout in the bank.
+    ``None`` covers four real answers, not one: a provider whose install is not a
+    directory of its own (EmuDeck's launcher), a family with no declared subdir (the
+    emulator's saves are not ours to point), an install with no config root to point at,
+    and a platform with no layout in the bank.
     """
+    if install.provider not in _LINKED_PROVIDERS:
+        return None
     family = install.definition.family
     subdir = _FAMILY_SAVE_SUBDIRS.get(family)
     if subdir is None or not config_root or not saves_root:

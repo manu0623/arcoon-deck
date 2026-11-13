@@ -89,6 +89,18 @@ class TestTheRefusals:
             is None
         )
 
+    def test_an_emudeck_launcher_does_not_get_a_link(self) -> None:
+        """Its record is a script, not an install: linking a flatpak sandbox for it
+        created one for an emulator that had never been launched."""
+        assert (
+            link_for(
+                _install(PPSSPP, "emudeck", "/home/deck/Emulation/tools/launchers/ppsspp.sh"),
+                config_root="/home/deck/.var/app/org.ppsspp.PPSSPP/config/ppsspp",
+                saves_root=SAVES,
+            )
+            is None
+        )
+
     def test_no_config_root_means_no_plan(self) -> None:
         assert (
             link_for(
