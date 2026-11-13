@@ -29,6 +29,7 @@ from services.disc import DiscService, DiscServiceConfig
 from services.disc_launch_resolver import DiscLaunchResolver, DiscLaunchResolverConfig
 from services.downloads import DownloadService, DownloadServiceConfig
 from services.emulator_provisioning import EmulatorProvisioningConfig, EmulatorProvisioningService
+from services.emulator_shortcuts import EmulatorShortcutConfig, EmulatorShortcutService
 from services.firmware import FirmwareService, FirmwareServiceConfig
 from services.game_detail import GameDetailService, GameDetailServiceConfig
 from services.game_process import GameProcessService, GameProcessServiceConfig
@@ -490,6 +491,18 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         ),
     )
 
+    # Names the emulators this machine has as a Steam collection's worth of tiles, so one
+    # can be opened for its own settings or to test a build (ADR-0050).
+    emulator_shortcut_service = EmulatorShortcutService(
+        config=EmulatorShortcutConfig(
+            logger=cfg.runtime.logger,
+            external_emulators=cfg.adapters.external_emulators,
+            sgdb_api=cfg.adapters.sgdb_adapter,
+            settings=cfg.stores.settings,
+            settings_persister=cfg.callbacks.settings_persister,
+        ),
+    )
+
     # Downloads the libretro cores the owned runtime needs into its own cores directory,
     # so a device without RetroDECK has something to load (ADR-0037).
     core_provisioning_service = CoreProvisioningService(
@@ -682,6 +695,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         "core_service": core_service,
         "core_provisioning_service": core_provisioning_service,
         "emulator_provisioning_service": emulator_provisioning_service,
+        "emulator_shortcut_service": emulator_shortcut_service,
         "disc_service": disc_service,
         "version_switch_service": version_switch_service,
         "connection_service": connection_service,

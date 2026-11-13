@@ -1283,6 +1283,11 @@ with them.
 
 ## Settings
 
+**Emulators & Cores** carries **Add Emulators to Steam**, which puts one tile per installed
+emulator into the `RomM: Emulators (<host>)` collection (ADR-0050) and reports what the run did.
+The same run happens once at every plugin start, because an emulator appears when it is installed
+and a collection nobody refreshes omits the one just added.
+
 Wide, untabbed, list and detail: the sections on the left, the focused section on the right. Five sections, where the
 narrow page stacked eight — the save-sort migration is a notice with its actions inside Save Sync, Registered Devices
 sits under Save Sync, and SteamGridDB joins the other external service under Connections.

@@ -182,6 +182,28 @@ export async function createOrUpdateRomMCollections(
   }
 }
 
+/**
+ * Point this machine's emulator collection at exactly *appIds*.
+ *
+ * Named like every other collection this plugin writes — `RomM: <base> (host)` — so
+ * the sweep that clears our collections finds it too, and so a second Deck's
+ * collection of the same name is left alone. It is rebuilt rather than appended to:
+ * an emulator that has since been uninstalled should lose its tile.
+ */
+export async function createOrUpdateEmulatorCollection(collectionName: string, appIds: number[]): Promise<void> {
+  try {
+    if (typeof collectionStore === "undefined") {
+      logWarn("collectionStore not available, skipping the emulator collection");
+      return;
+    }
+    const hostname = await getHostname();
+    const scopedName = `RomM: ${collectionName} (${hostname})`;
+    await saveCollection(scopedName, "emulator collection", getOverviews(appIds), appIds.length);
+  } catch (e) {
+    logError(`Failed to update the emulator collection: ${e}`);
+  }
+}
+
 export async function clearPlatformCollection(platformName: string, signal?: AbortSignal): Promise<void> {
   try {
     if (typeof collectionStore === "undefined") {

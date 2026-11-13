@@ -10,12 +10,20 @@ import { CoreSetupSection } from "./CoreSetupSection";
 describe("CoreSetupSection", () => {
   it("offers the install action", () => {
     const onInstall = vi.fn();
-    render(<CoreSetupSection
+    render(
+      <CoreSetupSection
         runtimeMode="builtin"
         onRuntimeChange={vi.fn()}
         structure="app"
         onStructureChange={vi.fn()}
-        busy={false} status="" onInstall={onInstall} />);
+        busy={false}
+        status=""
+        onInstall={onInstall}
+        onAddEmulatorShortcuts={vi.fn()}
+        shortcutsBusy={false}
+        shortcutStatus=""
+      />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Install Missing Cores" }));
 
@@ -24,12 +32,20 @@ describe("CoreSetupSection", () => {
 
   it("says what it is doing while a run is in flight, and refuses a second press", () => {
     const onInstall = vi.fn();
-    render(<CoreSetupSection
+    render(
+      <CoreSetupSection
         runtimeMode="builtin"
         onRuntimeChange={vi.fn()}
         structure="app"
         onStructureChange={vi.fn()}
-        busy status="" onInstall={onInstall} />);
+        busy
+        status=""
+        onInstall={onInstall}
+        onAddEmulatorShortcuts={vi.fn()}
+        shortcutsBusy={false}
+        shortcutStatus=""
+      />,
+    );
 
     const button = screen.getByRole("button", { name: "Installing cores…" });
     fireEvent.click(button);
@@ -49,6 +65,9 @@ describe("CoreSetupSection", () => {
         busy={false}
         status=""
         onInstall={vi.fn()}
+        onAddEmulatorShortcuts={vi.fn()}
+        shortcutsBusy={false}
+        shortcutStatus=""
       />,
     );
 
@@ -68,6 +87,9 @@ describe("CoreSetupSection", () => {
         busy={false}
         status=""
         onInstall={vi.fn()}
+        onAddEmulatorShortcuts={vi.fn()}
+        shortcutsBusy={false}
+        shortcutStatus=""
       />,
     );
 
@@ -77,26 +99,84 @@ describe("CoreSetupSection", () => {
   });
 
   it("reports the run's result under the button", () => {
-    render(<CoreSetupSection
+    render(
+      <CoreSetupSection
         runtimeMode="builtin"
         onRuntimeChange={vi.fn()}
         structure="app"
         onStructureChange={vi.fn()}
-        busy={false} status="Installed 2 cores." onInstall={vi.fn()} />);
+        busy={false}
+        status="Installed 2 cores."
+        onInstall={vi.fn()}
+        onAddEmulatorShortcuts={vi.fn()}
+        shortcutsBusy={false}
+        shortcutStatus=""
+      />,
+    );
 
     expect(screen.getByText("Installed 2 cores.")).toBeInTheDocument();
   });
 
   it("says nothing extra before a run has happened", () => {
-    const { container } = render(<CoreSetupSection
+    const { container } = render(
+      <CoreSetupSection
         runtimeMode="builtin"
         onRuntimeChange={vi.fn()}
         structure="app"
         onStructureChange={vi.fn()}
-        busy={false} status="" onInstall={vi.fn()} />);
+        busy={false}
+        status=""
+        onInstall={vi.fn()}
+        onAddEmulatorShortcuts={vi.fn()}
+        shortcutsBusy={false}
+        shortcutStatus=""
+      />,
+    );
 
     // The explainer is always there; a status line with no run behind it is not.
     expect(screen.queryByText(/Installed|failed|already installed/)).not.toBeInTheDocument();
     expect(container).toBeDefined();
+  });
+
+  it("offers the emulator collection action and its own status line", () => {
+    const onAddEmulatorShortcuts = vi.fn();
+    render(
+      <CoreSetupSection
+        runtimeMode="builtin"
+        onRuntimeChange={vi.fn()}
+        structure="app"
+        onStructureChange={vi.fn()}
+        busy={false}
+        status=""
+        onInstall={vi.fn()}
+        onAddEmulatorShortcuts={onAddEmulatorShortcuts}
+        shortcutsBusy={false}
+        shortcutStatus='Added 2 emulators to the "Emulators" collection.'
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add Emulators to Steam" }));
+
+    expect(onAddEmulatorShortcuts).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/Added 2 emulators/)).toBeInTheDocument();
+  });
+
+  it("refuses a second press while the emulator run is in flight", () => {
+    render(
+      <CoreSetupSection
+        runtimeMode="builtin"
+        onRuntimeChange={vi.fn()}
+        structure="app"
+        onStructureChange={vi.fn()}
+        busy={false}
+        status=""
+        onInstall={vi.fn()}
+        onAddEmulatorShortcuts={vi.fn()}
+        shortcutsBusy
+        shortcutStatus=""
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Adding emulators to Steam…" })).toBeDisabled();
   });
 });

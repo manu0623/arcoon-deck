@@ -21,6 +21,12 @@ export interface CoreSetupSectionProps {
   /** What the last run did — counts, or the failure it hit. */
   status: string;
   onInstall: () => void;
+  /** Adds/refreshes the Steam collection holding one tile per installed emulator. */
+  onAddEmulatorShortcuts: () => void;
+  /** True while that run is in flight. */
+  shortcutsBusy: boolean;
+  /** What the last emulator-collection run did. */
+  shortcutStatus: string;
   /** Which runtime is driving: "builtin" (default — the app installs and launches its own
    *  RetroArch), "retrodeck" or "auto" (ADR-0045). */
   runtimeMode: string;
@@ -50,6 +56,9 @@ export const CoreSetupSection: FC<CoreSetupSectionProps> = ({
   busy,
   status,
   onInstall,
+  onAddEmulatorShortcuts,
+  shortcutsBusy,
+  shortcutStatus,
   runtimeMode,
   onRuntimeChange,
   structure,
@@ -64,28 +73,20 @@ export const CoreSetupSection: FC<CoreSetupSectionProps> = ({
     </PanelSectionRow>
     {RUNTIME_CHOICES.map(({ id, label }) => (
       <PanelSectionRow key={id}>
-        <ButtonItem
-          layout="below"
-          onClick={() => onRuntimeChange(id)}
-          disabled={runtimeMode === id}
-        >
+        <ButtonItem layout="below" onClick={() => onRuntimeChange(id)} disabled={runtimeMode === id}>
           {runtimeMode === id ? `${label} — in use` : label}
         </ButtonItem>
       </PanelSectionRow>
     ))}
     <PanelSectionRow>
       <div style={{ fontSize: "11px", color: "#8f98a0", padding: "0 0 6px" }}>
-        Storage — where the built-in runtime keeps the ROMs, saves, states and BIOS it manages. Changing it affects
-        what is downloaded or launched next; nothing already on disk is moved.
+        Storage — where the built-in runtime keeps the ROMs, saves, states and BIOS it manages. Changing it affects what
+        is downloaded or launched next; nothing already on disk is moved.
       </div>
     </PanelSectionRow>
     {STRUCTURE_CHOICES.map(({ id, label }) => (
       <PanelSectionRow key={id}>
-        <ButtonItem
-          layout="below"
-          onClick={() => onStructureChange(id)}
-          disabled={structure === id}
-        >
+        <ButtonItem layout="below" onClick={() => onStructureChange(id)} disabled={structure === id}>
           {structure === id ? `${label} — in use` : label}
         </ButtonItem>
       </PanelSectionRow>
@@ -104,6 +105,22 @@ export const CoreSetupSection: FC<CoreSetupSectionProps> = ({
     {status !== "" && (
       <PanelSectionRow>
         <div style={{ fontSize: "12px", color: "#dcdedf" }}>{status}</div>
+      </PanelSectionRow>
+    )}
+    <PanelSectionRow>
+      <ButtonItem layout="below" onClick={onAddEmulatorShortcuts} disabled={shortcutsBusy}>
+        {shortcutsBusy ? "Adding emulators to Steam…" : "Add Emulators to Steam"}
+      </ButtonItem>
+    </PanelSectionRow>
+    <PanelSectionRow>
+      <div style={{ fontSize: "11px", color: "#8f98a0", padding: "0 0 6px" }}>
+        Puts every emulator installed on this Deck into a Steam collection, one tile each, so it can be opened for its
+        own settings or to test a build — no ROM needed. Emulators installed later are added by the next run.
+      </div>
+    </PanelSectionRow>
+    {shortcutStatus !== "" && (
+      <PanelSectionRow>
+        <div style={{ fontSize: "12px", color: "#dcdedf" }}>{shortcutStatus}</div>
       </PanelSectionRow>
     )}
   </PanelSection>

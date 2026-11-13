@@ -210,6 +210,7 @@ class Plugin:
         self._core_service = services["core_service"]
         self._core_provisioning_service = services["core_provisioning_service"]
         self._emulator_provisioning_service = services["emulator_provisioning_service"]
+        self._emulator_shortcut_service = services["emulator_shortcut_service"]
         self._disc_service = services["disc_service"]
         self._version_switch_service = services["version_switch_service"]
         self._prune_service = services["prune_service"]
@@ -482,6 +483,33 @@ class Plugin:
         than raised, so a single unavailable core does not hide the ones that landed.
         """
         return await self._core_provisioning_service.ensure_for_system(system_name)
+
+    async def get_emulator_shortcuts(self):
+        """Every emulator this machine has, each with the shortcut it already became.
+
+        The read half of the emulator collection: a Steam collection can only be
+        written by Steam, so the frontend creates the tiles and asks here what to
+        create — and which app id each tile already is, so a second run updates the
+        one it made rather than adding a twin beside it.
+        """
+        return self._emulator_shortcut_service.catalogue()
+
+    async def bind_emulator_shortcut(self, key, app_id):
+        """Remember which shortcut a row became, so the next run can find it."""
+        return self._emulator_shortcut_service.bind(key, app_id)
+
+    async def forget_emulator_shortcut(self, key):
+        """Drop a binding whose shortcut Steam no longer holds."""
+        return self._emulator_shortcut_service.forget(key)
+
+    async def get_emulator_artwork(self, key, asset_type_num):
+        """SteamGridDB art for one emulator, as base64 PNG — or nothing, never an error.
+
+        An emulator's art is looked up by its own name, so this is a best guess even
+        when it works; a shortcut with the default tile is the honest outcome of a
+        miss, and the collection is still complete.
+        """
+        return await self._emulator_shortcut_service.artwork(key, asset_type_num)
 
     async def get_platform_emulators(self, system_name):
         """What this system's inventory offers to install, and where each row comes from.

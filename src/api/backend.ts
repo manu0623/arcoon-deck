@@ -290,15 +290,56 @@ export interface EmulatorInstallResult {
   app_id?: string;
 }
 
+/** One emulator this machine has, as the Steam shortcut that opens it. */
+export interface EmulatorShortcutRow {
+  /** ``<definition id>@<provider>`` — the stable key, not the label. */
+  key: string;
+  name: string;
+  exe: string;
+  start_dir: string;
+  /** Empty for a native build; ``run <app_id>`` for a flatpak. */
+  launch_options: string;
+  /** The emulator's own name, for the SteamGridDB art search. */
+  search_term: string;
+  version: string | null;
+  /** The shortcut this row already became on this machine, or null. */
+  app_id: number | null;
+}
+
+export interface EmulatorShortcutCatalogue {
+  /** The collection's base name; the frontend machine-scopes it. */
+  collection: string;
+  emulators: EmulatorShortcutRow[];
+}
+
+export interface EmulatorBindingResult {
+  success: boolean;
+  reason?: string;
+  forgotten?: boolean;
+}
+
+export interface EmulatorArtworkAnswer {
+  base64: string | null;
+  no_api_key: boolean;
+  reason?: string;
+}
+
+export const getEmulatorShortcuts = callable<[], EmulatorShortcutCatalogue>("get_emulator_shortcuts");
+export const bindEmulatorShortcut = callable<[string, number], EmulatorBindingResult>("bind_emulator_shortcut");
+export const forgetEmulatorShortcut = callable<[string], EmulatorBindingResult>("forget_emulator_shortcut");
+/**
+ * SteamGridDB art for one emulator, by asset type (1 hero, 2 logo, 3 grid, 4 icon).
+ * A miss is a null `base64`, not a failure — the tile is still worth making.
+ */
+export const getEmulatorArtwork = callable<[string, number], EmulatorArtworkAnswer>("get_emulator_artwork");
+
 export const getPlatformEmulators = callable<[string], PlatformEmulatorsAnswer>("get_platform_emulators");
 /**
  * Install one of a platform's standalone emulators. The backend refuses anything it
  * cannot verify — a release asset with no published hash, or one whose download does not
  * match it — so `reason` is the failure to show, not an exception to swallow.
  */
-export const ensurePlatformEmulator = callable<[string, string], EmulatorInstallResult>(
-  "ensure_platform_emulators",
-);
+export const ensurePlatformEmulator = callable<[string, string], EmulatorInstallResult>("ensure_platform_emulators");
 
 /** Install the runtime and every enabled platform's missing cores, in one call. */
 export const ensureAllPlatformCores = callable<[], CoreProvisionResult>("ensure_all_platform_cores");
@@ -999,15 +1040,11 @@ export const saveSkipPreview = callable<[boolean], { success: boolean }>("save_s
 // app installs itself), or the opt-ins "retrodeck" and "auto". Typed as a plain string because the backend validates
 // it — a narrowed union here would make an unknown value a compile error in the panel
 // instead of the rejection the callable already returns.
-export const saveRuntimeMode = callable<[string], { success: boolean; runtime_mode?: string }>(
-  "save_runtime_mode",
-);
+export const saveRuntimeMode = callable<[string], { success: boolean; runtime_mode?: string }>("save_runtime_mode");
 
 // Where the built-in tree puts its data (ADR-0046). Read back through getSettings().structure;
 // a change applies to the next download or launch and never moves files that already exist.
-export const saveStructure = callable<[string], { success: boolean; structure?: string }>(
-  "save_structure",
-);
+export const saveStructure = callable<[string], { success: boolean; structure?: string }>("save_structure");
 // Distinct region values present in the locally synced library — the non-anchor
 // options for the Preferred-region dropdown. Pure local DB read, no server call.
 export const getKnownRegions = callable<[], string[]>("get_known_regions");

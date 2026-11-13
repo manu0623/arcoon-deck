@@ -154,6 +154,10 @@ function isCandidateVanished(value) {
 function isRenameCollisions(value) {
     return "reason" in value && value.reason === "rename_collisions";
 }
+const getEmulatorShortcuts = callable("get_emulator_shortcuts");
+const bindEmulatorShortcut = callable("bind_emulator_shortcut");
+const forgetEmulatorShortcut = callable("forget_emulator_shortcut");
+const getEmulatorArtwork = callable("get_emulator_artwork");
 const getPlatformEmulators = callable("get_platform_emulators");
 const ensurePlatformEmulator = callable("ensure_platform_emulators");
 const ensureAllPlatformCores = callable("ensure_all_platform_cores");
@@ -11300,7 +11304,296 @@ const STRUCTURE_CHOICES = [
     { id: "retroarch", label: "RetroArch folders" },
     { id: "custom", label: "Custom paths" },
 ];
-const CoreSetupSection = ({ busy, status, onInstall, runtimeMode, onRuntimeChange, structure, onStructureChange, }) => (SP_JSX.jsxs(DFL.PanelSection, { title: "Emulators & Cores", children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: "11px", color: "#8f98a0", padding: "0 0 6px" }, children: "Runtime \u2014 the app installs and launches its own RetroArch, so its saves are the ones it can answer for. RetroDECK is a fallback you choose, never a requirement." }) }), RUNTIME_CHOICES.map(({ id, label }) => (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => onRuntimeChange(id), disabled: runtimeMode === id, children: runtimeMode === id ? `${label} — in use` : label }) }, id))), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: "11px", color: "#8f98a0", padding: "0 0 6px" }, children: "Storage \u2014 where the built-in runtime keeps the ROMs, saves, states and BIOS it manages. Changing it affects what is downloaded or launched next; nothing already on disk is moved." }) }), STRUCTURE_CHOICES.map(({ id, label }) => (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => onStructureChange(id), disabled: structure === id, children: structure === id ? `${label} — in use` : label }) }, id))), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: onInstall, disabled: busy, children: busy ? "Installing cores…" : "Install Missing Cores" }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: "11px", color: "#8f98a0", padding: "0 0 6px" }, children: "Downloads the RetroArch runtime and the cores your enabled platforms launch with, then verifies each one. Standalone emulators are not covered yet." }) }), status !== "" && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: "12px", color: "#dcdedf" }, children: status }) }))] }));
+const CoreSetupSection = ({ busy, status, onInstall, onAddEmulatorShortcuts, shortcutsBusy, shortcutStatus, runtimeMode, onRuntimeChange, structure, onStructureChange, }) => (SP_JSX.jsxs(DFL.PanelSection, { title: "Emulators & Cores", children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: "11px", color: "#8f98a0", padding: "0 0 6px" }, children: "Runtime \u2014 the app installs and launches its own RetroArch, so its saves are the ones it can answer for. RetroDECK is a fallback you choose, never a requirement." }) }), RUNTIME_CHOICES.map(({ id, label }) => (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => onRuntimeChange(id), disabled: runtimeMode === id, children: runtimeMode === id ? `${label} — in use` : label }) }, id))), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: "11px", color: "#8f98a0", padding: "0 0 6px" }, children: "Storage \u2014 where the built-in runtime keeps the ROMs, saves, states and BIOS it manages. Changing it affects what is downloaded or launched next; nothing already on disk is moved." }) }), STRUCTURE_CHOICES.map(({ id, label }) => (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => onStructureChange(id), disabled: structure === id, children: structure === id ? `${label} — in use` : label }) }, id))), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: onInstall, disabled: busy, children: busy ? "Installing cores…" : "Install Missing Cores" }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: "11px", color: "#8f98a0", padding: "0 0 6px" }, children: "Downloads the RetroArch runtime and the cores your enabled platforms launch with, then verifies each one. Standalone emulators are not covered yet." }) }), status !== "" && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: "12px", color: "#dcdedf" }, children: status }) })), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: onAddEmulatorShortcuts, disabled: shortcutsBusy, children: shortcutsBusy ? "Adding emulators to Steam…" : "Add Emulators to Steam" }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: "11px", color: "#8f98a0", padding: "0 0 6px" }, children: "Puts every emulator installed on this Deck into a Steam collection, one tile each, so it can be opened for its own settings or to test a build \u2014 no ROM needed. Emulators installed later are added by the next run." }) }), shortcutStatus !== "" && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { style: { fontSize: "12px", color: "#dcdedf" }, children: shortcutStatus }) }))] }));
+
+let _hostname = "";
+async function getHostname() {
+    if (_hostname)
+        return _hostname;
+    try {
+        const info = await SteamClient.System.GetSystemInfo();
+        _hostname = info.sHostname || "unknown";
+    }
+    catch {
+        _hostname = "unknown";
+    }
+    return _hostname;
+}
+function getOverviews(appIds) {
+    const overviews = [];
+    for (const appId of appIds) {
+        if (typeof appStore !== "undefined") {
+            const overview = appStore.GetAppOverviewByAppID(appId);
+            if (overview) {
+                overviews.push(overview);
+                continue;
+            }
+        }
+        overviews.push({ appid: appId, display_name: "", strDisplayName: "" });
+    }
+    return overviews;
+}
+async function replaceCollectionApps(existing, overviews, signal) {
+    const existingApps = existing.allApps;
+    if (existingApps.length > 0) {
+        if (signal?.aborted)
+            return false;
+        existing.AsDragDropCollection().RemoveApps(existingApps);
+    }
+    if (signal?.aborted)
+        return false;
+    existing.AsDragDropCollection().AddApps(overviews);
+    if (signal?.aborted)
+        return false;
+    await existing.Save();
+    return true;
+}
+async function createCollectionWithApps(collectionName, overviews, signal) {
+    const collection = collectionStore.NewUnsavedCollection(collectionName, undefined, []);
+    if (signal?.aborted)
+        return false;
+    collection.AsDragDropCollection().AddApps(overviews);
+    if (signal?.aborted)
+        return false;
+    await collection.Save();
+    return true;
+}
+async function saveCollection(collectionName, noun, overviews, appCount, signal) {
+    const target = collectionName.toLowerCase();
+    const existing = collectionStore.userCollections.find((c) => c.displayName.toLowerCase() === target);
+    if (existing) {
+        logInfo(`Updating ${noun} "${collectionName}" with ${appCount} apps`);
+        if (!(await replaceCollectionApps(existing, overviews, signal)))
+            return false;
+    }
+    else {
+        logInfo(`Creating ${noun} "${collectionName}" with ${appCount} apps`);
+        if (!(await createCollectionWithApps(collectionName, overviews, signal)))
+            return false;
+    }
+    logInfo(`Successfully saved ${noun} "${collectionName}"`);
+    return true;
+}
+async function saveCollectionFamily(entries, noun, collectionNameFor, onProgress, signal) {
+    for (const [source, appIds] of entries) {
+        if (signal?.aborted)
+            return;
+        const collectionName = collectionNameFor(source);
+        const overviews = getOverviews(appIds);
+        try {
+            if (!(await saveCollection(collectionName, noun, overviews, appIds.length, signal)))
+                return;
+        }
+        catch (colErr) {
+            logError(`Failed to save ${noun} "${collectionName}": ${colErr}`);
+        }
+    }
+}
+async function createOrUpdateCollections(platformAppIds, onProgress, signal) {
+    try {
+        if (typeof collectionStore === "undefined") {
+            logWarn("collectionStore not available, skipping collections");
+            return;
+        }
+        const hostname = await getHostname();
+        if (signal?.aborted)
+            return;
+        logInfo(`Creating/updating collections for platforms: ${Object.keys(platformAppIds).join(", ")} (hostname: ${hostname})`);
+        await saveCollectionFamily(Object.entries(platformAppIds), "collection", (platformName) => `RomM: ${platformName} (${hostname})`, onProgress, signal);
+    }
+    catch (e) {
+        logError(`Failed to update collections: ${e}`);
+    }
+}
+async function createOrUpdateRomMCollections(collectionAppIds, onProgress, signal) {
+    try {
+        if (typeof collectionStore === "undefined") {
+            logWarn("collectionStore not available, skipping RomM collections");
+            return;
+        }
+        const hostname = await getHostname();
+        if (signal?.aborted)
+            return;
+        logInfo(`Creating/updating RomM collections: ${Object.keys(collectionAppIds).join(", ")} (hostname: ${hostname})`);
+        await saveCollectionFamily(Object.entries(collectionAppIds), "RomM collection", (collName) => `RomM: [${collName}] (${hostname})`, onProgress, signal);
+    }
+    catch (e) {
+        logError(`Failed to update RomM collections: ${e}`);
+    }
+}
+async function createOrUpdateEmulatorCollection(collectionName, appIds) {
+    try {
+        if (typeof collectionStore === "undefined") {
+            logWarn("collectionStore not available, skipping the emulator collection");
+            return;
+        }
+        const hostname = await getHostname();
+        const scopedName = `RomM: ${collectionName} (${hostname})`;
+        await saveCollection(scopedName, "emulator collection", getOverviews(appIds), appIds.length);
+    }
+    catch (e) {
+        logError(`Failed to update the emulator collection: ${e}`);
+    }
+}
+async function clearPlatformCollection(platformName, signal) {
+    try {
+        if (typeof collectionStore === "undefined") {
+            logWarn("collectionStore not available, cannot clear platform collection");
+            return;
+        }
+        const hostname = await getHostname();
+        if (signal?.aborted)
+            return;
+        const scopedName = `RomM: ${platformName} (${hostname})`;
+        const legacyName = `RomM: ${platformName}`;
+        const scopedTarget = scopedName.toLowerCase();
+        const legacyTarget = legacyName.toLowerCase();
+        const scoped = collectionStore.userCollections.find((c) => c.displayName.toLowerCase() === scopedTarget);
+        if (scoped) {
+            logInfo(`Deleting collection "${scopedName}" (id=${scoped.id})`);
+            if (signal?.aborted)
+                return;
+            await scoped.Delete();
+        }
+        const legacy = collectionStore.userCollections.find((c) => c.displayName.toLowerCase() === legacyTarget);
+        if (legacy) {
+            logInfo(`Deleting legacy collection "${legacyName}" (id=${legacy.id})`);
+            if (signal?.aborted)
+                return;
+            await legacy.Delete();
+        }
+        if (!scoped && !legacy) {
+            logInfo(`Collection "${scopedName}" not found, nothing to clear`);
+        }
+    }
+    catch (e) {
+        logError(`Failed to clear platform collection: ${e}`);
+    }
+}
+async function clearAllRomMCollections(signal) {
+    try {
+        if (typeof collectionStore === "undefined") {
+            logWarn("collectionStore not available, cannot clear collections");
+            return;
+        }
+        const hostname = await getHostname();
+        if (signal?.aborted)
+            return;
+        const suffix = ` (${hostname})`;
+        const lowerSuffix = suffix.toLowerCase();
+        const rommCollections = collectionStore.userCollections.filter((c) => {
+            const lower = c.displayName.toLowerCase();
+            if (!lower.startsWith("romm: "))
+                return false;
+            if (lower.endsWith(lowerSuffix))
+                return true;
+            if (!/\s\([^)]+\)$/.test(c.displayName))
+                return true;
+            return false;
+        });
+        logInfo(`Deleting ${rommCollections.length} RomM collections (hostname: ${hostname})`);
+        for (const c of rommCollections) {
+            if (signal?.aborted)
+                return;
+            logInfo(`Deleting collection "${c.displayName}" (id=${c.id})`);
+            await c.Delete();
+        }
+    }
+    catch (e) {
+        logError(`Failed to clear collections: ${e}`);
+    }
+}
+
+function liveShortcutAppIds() {
+    if (typeof collectionStore === "undefined")
+        return null;
+    const apps = collectionStore.deckDesktopApps?.apps;
+    return apps ? new Set(apps.keys()) : null;
+}
+async function applyAsset(appId, key, base64, assetType) {
+    if (!base64)
+        return false;
+    try {
+        if (assetType === 4) {
+            const saved = await saveShortcutIcon(appId, base64);
+            if (!saved.success || !saved.icon_path)
+                return false;
+            SteamClient.Apps.SetShortcutIcon(appId, saved.icon_path);
+            return true;
+        }
+        await SteamClient.Apps.SetCustomArtworkForApp(appId, base64, "png", assetType);
+        return true;
+    }
+    catch (e) {
+        logWarn(`Emulator artwork: applying asset ${assetType} to ${key} failed: ${e}`);
+        return false;
+    }
+}
+async function applyEmulatorArtwork(row, appId) {
+    const answers = await Promise.all([1, 2, 3, 4].map((assetType) => getEmulatorArtwork(row.key, assetType).catch(() => ({ base64: null, no_api_key: false }))));
+    if (answers.some((answer) => answer.no_api_key)) {
+        logInfo("Emulator artwork: no SteamGridDB key configured, leaving the default tiles");
+        return 0;
+    }
+    let applied = 0;
+    for (const [index, answer] of answers.entries()) {
+        if (await applyAsset(appId, row.key, answer.base64, index + 1))
+            applied++;
+    }
+    return applied;
+}
+async function syncEmulatorShortcuts() {
+    const catalogue = await getEmulatorShortcuts();
+    const live = liveShortcutAppIds();
+    const store = live !== null && live.size > 0 ? live : null;
+    const appIds = [];
+    let added = 0;
+    let existing = 0;
+    let art = 0;
+    for (const row of catalogue.emulators) {
+        let appId = row.app_id;
+        if (appId !== null && store !== null && !store.has(appId)) {
+            logWarn(`Emulator collection: ${row.name}'s shortcut (${appId}) is gone; creating it again`);
+            try {
+                await forgetEmulatorShortcut(row.key);
+            }
+            catch (e) {
+                logWarn(`Emulator collection: could not clear the stale binding for ${row.key}: ${e}`);
+            }
+            appId = null;
+        }
+        if (appId === null) {
+            const created = await addShortcut({
+                name: row.name,
+                exe: row.exe,
+                start_dir: row.start_dir,
+                launch_options: row.launch_options,
+            });
+            if (created === null) {
+                logError(`Emulator collection: could not create a shortcut for ${row.name}`);
+                continue;
+            }
+            appId = created;
+            added++;
+            try {
+                await bindEmulatorShortcut(row.key, created);
+            }
+            catch (e) {
+                logWarn(`Emulator collection: could not bind ${row.key} to ${created}: ${e}`);
+            }
+            art += await applyEmulatorArtwork(row, created);
+        }
+        else {
+            existing++;
+        }
+        appIds.push(appId);
+    }
+    if (appIds.length > 0) {
+        await createOrUpdateEmulatorCollection(catalogue.collection, appIds);
+    }
+    logInfo(`Emulator collection "${catalogue.collection}": ${added} added, ${existing} present, ${art} images applied`);
+    return { collection: catalogue.collection, added, existing, art, total: appIds.length };
+}
 
 const AUTO_REGION = "auto";
 const ANCHOR_REGIONS = ["World", "USA", "Europe", "Japan"];
@@ -11380,6 +11673,8 @@ const SettingsPage = ({ onBack, section }) => {
     const [steamInputStatus, setSteamInputStatus] = SP_REACT.useState("");
     const [applyingSteamInput, setApplyingSteamInput] = SP_REACT.useState(false);
     const [coresBusy, setCoresBusy] = SP_REACT.useState(false);
+    const [shortcutsBusy, setShortcutsBusy] = SP_REACT.useState(false);
+    const [shortcutStatus, setShortcutStatus] = SP_REACT.useState("");
     const [coresStatus, setCoresStatus] = SP_REACT.useState("");
     const [retroarchWarning, setRetroarchWarning] = SP_REACT.useState(null);
     const [retroarchFixStatus, setRetroarchFixStatus] = SP_REACT.useState("");
@@ -11653,6 +11948,31 @@ const SettingsPage = ({ onBack, section }) => {
         detach(saveSteamInputSetting(mode));
         setSteamInputStatus("");
     };
+    const handleAddEmulatorShortcuts = async () => {
+        setShortcutsBusy(true);
+        setShortcutStatus("Looking for the emulators on this Deck…");
+        try {
+            const outcome = await syncEmulatorShortcuts();
+            const images = outcome.art > 0 ? `, ${outcome.art} image${outcome.art === 1 ? "" : "s"} applied` : "";
+            if (outcome.total === 0) {
+                setShortcutStatus("No emulators found on this Deck yet.");
+            }
+            else if (outcome.added === 0) {
+                setShortcutStatus(`All ${outcome.total} emulators are already in the "${outcome.collection}" collection${images}.`);
+            }
+            else {
+                setShortcutStatus(`Added ${outcome.added} emulator${outcome.added === 1 ? "" : "s"} to the "${outcome.collection}" collection` +
+                    `${outcome.existing > 0 ? ` (${outcome.existing} already there)` : ""}${images}.`);
+            }
+        }
+        catch (e) {
+            logError(`Failed to add the emulators to Steam: ${e}`);
+            setShortcutStatus("Could not add the emulators to Steam. Check the log for the reason.");
+        }
+        finally {
+            setShortcutsBusy(false);
+        }
+    };
     const handleInstallCores = async () => {
         setCoresBusy(true);
         setCoresStatus("Installing the runtime and the cores your platforms need…");
@@ -11818,7 +12138,9 @@ const SettingsPage = ({ onBack, section }) => {
             case "cores":
                 return (SP_JSX.jsx(CoreSetupSection, { busy: coresBusy, status: coresStatus, runtimeMode: runtimeMode, onRuntimeChange: handleRuntimeChange, structure: structure, onStructureChange: handleStructureChange, onInstall: () => {
                         detach(handleInstallCores());
-                    } }));
+                    }, onAddEmulatorShortcuts: () => {
+                        detach(handleAddEmulatorShortcuts());
+                    }, shortcutsBusy: shortcutsBusy, shortcutStatus: shortcutStatus }));
             case "advanced":
                 return SP_JSX.jsx(AdvancedSection, { logLevel: logLevel, onLogLevelChange: handleLogLevelChange });
         }
@@ -12303,190 +12625,6 @@ const PlatformsTab = ({ state }) => {
             return SP_JSX.jsx(PlatformDetail, { row: row, state: state });
         } }));
 };
-
-let _hostname = "";
-async function getHostname() {
-    if (_hostname)
-        return _hostname;
-    try {
-        const info = await SteamClient.System.GetSystemInfo();
-        _hostname = info.sHostname || "unknown";
-    }
-    catch {
-        _hostname = "unknown";
-    }
-    return _hostname;
-}
-function getOverviews(appIds) {
-    const overviews = [];
-    for (const appId of appIds) {
-        if (typeof appStore !== "undefined") {
-            const overview = appStore.GetAppOverviewByAppID(appId);
-            if (overview) {
-                overviews.push(overview);
-                continue;
-            }
-        }
-        overviews.push({ appid: appId, display_name: "", strDisplayName: "" });
-    }
-    return overviews;
-}
-async function replaceCollectionApps(existing, overviews, signal) {
-    const existingApps = existing.allApps;
-    if (existingApps.length > 0) {
-        if (signal?.aborted)
-            return false;
-        existing.AsDragDropCollection().RemoveApps(existingApps);
-    }
-    if (signal?.aborted)
-        return false;
-    existing.AsDragDropCollection().AddApps(overviews);
-    if (signal?.aborted)
-        return false;
-    await existing.Save();
-    return true;
-}
-async function createCollectionWithApps(collectionName, overviews, signal) {
-    const collection = collectionStore.NewUnsavedCollection(collectionName, undefined, []);
-    if (signal?.aborted)
-        return false;
-    collection.AsDragDropCollection().AddApps(overviews);
-    if (signal?.aborted)
-        return false;
-    await collection.Save();
-    return true;
-}
-async function saveCollection(collectionName, noun, overviews, appCount, signal) {
-    const target = collectionName.toLowerCase();
-    const existing = collectionStore.userCollections.find((c) => c.displayName.toLowerCase() === target);
-    if (existing) {
-        logInfo(`Updating ${noun} "${collectionName}" with ${appCount} apps`);
-        if (!(await replaceCollectionApps(existing, overviews, signal)))
-            return false;
-    }
-    else {
-        logInfo(`Creating ${noun} "${collectionName}" with ${appCount} apps`);
-        if (!(await createCollectionWithApps(collectionName, overviews, signal)))
-            return false;
-    }
-    logInfo(`Successfully saved ${noun} "${collectionName}"`);
-    return true;
-}
-async function saveCollectionFamily(entries, noun, collectionNameFor, onProgress, signal) {
-    for (const [source, appIds] of entries) {
-        if (signal?.aborted)
-            return;
-        const collectionName = collectionNameFor(source);
-        const overviews = getOverviews(appIds);
-        try {
-            if (!(await saveCollection(collectionName, noun, overviews, appIds.length, signal)))
-                return;
-        }
-        catch (colErr) {
-            logError(`Failed to save ${noun} "${collectionName}": ${colErr}`);
-        }
-    }
-}
-async function createOrUpdateCollections(platformAppIds, onProgress, signal) {
-    try {
-        if (typeof collectionStore === "undefined") {
-            logWarn("collectionStore not available, skipping collections");
-            return;
-        }
-        const hostname = await getHostname();
-        if (signal?.aborted)
-            return;
-        logInfo(`Creating/updating collections for platforms: ${Object.keys(platformAppIds).join(", ")} (hostname: ${hostname})`);
-        await saveCollectionFamily(Object.entries(platformAppIds), "collection", (platformName) => `RomM: ${platformName} (${hostname})`, onProgress, signal);
-    }
-    catch (e) {
-        logError(`Failed to update collections: ${e}`);
-    }
-}
-async function createOrUpdateRomMCollections(collectionAppIds, onProgress, signal) {
-    try {
-        if (typeof collectionStore === "undefined") {
-            logWarn("collectionStore not available, skipping RomM collections");
-            return;
-        }
-        const hostname = await getHostname();
-        if (signal?.aborted)
-            return;
-        logInfo(`Creating/updating RomM collections: ${Object.keys(collectionAppIds).join(", ")} (hostname: ${hostname})`);
-        await saveCollectionFamily(Object.entries(collectionAppIds), "RomM collection", (collName) => `RomM: [${collName}] (${hostname})`, onProgress, signal);
-    }
-    catch (e) {
-        logError(`Failed to update RomM collections: ${e}`);
-    }
-}
-async function clearPlatformCollection(platformName, signal) {
-    try {
-        if (typeof collectionStore === "undefined") {
-            logWarn("collectionStore not available, cannot clear platform collection");
-            return;
-        }
-        const hostname = await getHostname();
-        if (signal?.aborted)
-            return;
-        const scopedName = `RomM: ${platformName} (${hostname})`;
-        const legacyName = `RomM: ${platformName}`;
-        const scopedTarget = scopedName.toLowerCase();
-        const legacyTarget = legacyName.toLowerCase();
-        const scoped = collectionStore.userCollections.find((c) => c.displayName.toLowerCase() === scopedTarget);
-        if (scoped) {
-            logInfo(`Deleting collection "${scopedName}" (id=${scoped.id})`);
-            if (signal?.aborted)
-                return;
-            await scoped.Delete();
-        }
-        const legacy = collectionStore.userCollections.find((c) => c.displayName.toLowerCase() === legacyTarget);
-        if (legacy) {
-            logInfo(`Deleting legacy collection "${legacyName}" (id=${legacy.id})`);
-            if (signal?.aborted)
-                return;
-            await legacy.Delete();
-        }
-        if (!scoped && !legacy) {
-            logInfo(`Collection "${scopedName}" not found, nothing to clear`);
-        }
-    }
-    catch (e) {
-        logError(`Failed to clear platform collection: ${e}`);
-    }
-}
-async function clearAllRomMCollections(signal) {
-    try {
-        if (typeof collectionStore === "undefined") {
-            logWarn("collectionStore not available, cannot clear collections");
-            return;
-        }
-        const hostname = await getHostname();
-        if (signal?.aborted)
-            return;
-        const suffix = ` (${hostname})`;
-        const lowerSuffix = suffix.toLowerCase();
-        const rommCollections = collectionStore.userCollections.filter((c) => {
-            const lower = c.displayName.toLowerCase();
-            if (!lower.startsWith("romm: "))
-                return false;
-            if (lower.endsWith(lowerSuffix))
-                return true;
-            if (!/\s\([^)]+\)$/.test(c.displayName))
-                return true;
-            return false;
-        });
-        logInfo(`Deleting ${rommCollections.length} RomM collections (hostname: ${hostname})`);
-        for (const c of rommCollections) {
-            if (signal?.aborted)
-                return;
-            logInfo(`Deleting collection "${c.displayName}" (id=${c.id})`);
-            await c.Delete();
-        }
-    }
-    catch (e) {
-        logError(`Failed to clear collections: ${e}`);
-    }
-}
 
 const REMOVAL_CHUNK_SIZE = 25;
 const REMOVAL_CHUNK_DELAY_MS = 50;
@@ -15166,6 +15304,14 @@ var index = definePlugin(() => {
         }
         catch (e) {
             logError(`Failed to point the shortcuts at the launcher: ${e}`);
+        }
+    })());
+    detach((async () => {
+        try {
+            await syncEmulatorShortcuts();
+        }
+        catch (e) {
+            logError(`Failed to refresh the emulator collection: ${e}`);
         }
     })());
     detach((async () => {

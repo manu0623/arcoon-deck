@@ -58,6 +58,7 @@ import { setMigrationStatus } from "./utils/migrationStore";
 import { fetchSettingsResetState } from "./utils/settingsResetStore";
 import { fetchLegacyInstallState } from "./utils/legacyInstallStore";
 import { relocateShortcutsToLauncher } from "./utils/launcherRelocation";
+import { syncEmulatorShortcuts } from "./utils/emulatorShortcuts";
 import { setLauncherRelocated } from "./utils/launcherStore";
 import { fetchDataLocationState } from "./utils/dataLocationStore";
 import { resetSyncDelta, recordSyncRemoved, getSyncDelta } from "./utils/syncDeltaStore";
@@ -536,6 +537,21 @@ export default definePlugin(() => {
         setLauncherRelocated(relocation.status === "relocated");
       } catch (e) {
         logError(`Failed to point the shortcuts at the launcher: ${e}`);
+      }
+    })(),
+  );
+
+  // Keep the emulator collection current without being asked. An emulator appears
+  // when it is installed — often by this plugin — and a collection the reader has to
+  // remember to refresh is one that silently omits the emulator they just added. The
+  // run is idempotent: existing tiles are found through the backend's bindings and
+  // every tile is checked against Steam's live store before it is created again.
+  detach(
+    (async () => {
+      try {
+        await syncEmulatorShortcuts();
+      } catch (e) {
+        logError(`Failed to refresh the emulator collection: ${e}`);
       }
     })(),
   );

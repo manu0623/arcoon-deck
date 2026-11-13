@@ -72,6 +72,7 @@ import { RegisteredDevicesSection } from "./settings/RegisteredDevicesSection";
 import { ControllerSection } from "./settings/ControllerSection";
 import { AdvancedSection } from "./settings/AdvancedSection";
 import { CoreSetupSection } from "./settings/CoreSetupSection";
+import { syncEmulatorShortcuts } from "../utils/emulatorShortcuts";
 import { LibrarySection, AUTO_REGION, DEFAULT_REGION_LABEL } from "./settings/LibrarySection";
 import { showPreferredRegionModal } from "./settings/PreferredRegionModal";
 
@@ -142,6 +143,8 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack, section }) => {
   // The Emulators & Cores section: one provisioning run at a time, with the
   // result it produced in words rather than a spinner that says nothing.
   const [coresBusy, setCoresBusy] = useState(false);
+  const [shortcutsBusy, setShortcutsBusy] = useState(false);
+  const [shortcutStatus, setShortcutStatus] = useState("");
   const [coresStatus, setCoresStatus] = useState("");
   const [retroarchWarning, setRetroarchWarning] = useState<RetroArchInputCheck | null>(null);
   const [retroarchFixStatus, setRetroarchFixStatus] = useState("");
@@ -468,6 +471,32 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack, section }) => {
     detach(saveSteamInputSetting(mode));
     setSteamInputStatus("");
   };
+  const handleAddEmulatorShortcuts = async () => {
+    setShortcutsBusy(true);
+    setShortcutStatus("Looking for the emulators on this Deck…");
+    try {
+      const outcome = await syncEmulatorShortcuts();
+      const images = outcome.art > 0 ? `, ${outcome.art} image${outcome.art === 1 ? "" : "s"} applied` : "";
+      if (outcome.total === 0) {
+        setShortcutStatus("No emulators found on this Deck yet.");
+      } else if (outcome.added === 0) {
+        setShortcutStatus(
+          `All ${outcome.total} emulators are already in the "${outcome.collection}" collection${images}.`,
+        );
+      } else {
+        setShortcutStatus(
+          `Added ${outcome.added} emulator${outcome.added === 1 ? "" : "s"} to the "${outcome.collection}" collection` +
+            `${outcome.existing > 0 ? ` (${outcome.existing} already there)` : ""}${images}.`,
+        );
+      }
+    } catch (e) {
+      logError(`Failed to add the emulators to Steam: ${e}`);
+      setShortcutStatus("Could not add the emulators to Steam. Check the log for the reason.");
+    } finally {
+      setShortcutsBusy(false);
+    }
+  };
+
   const handleInstallCores = async () => {
     setCoresBusy(true);
     setCoresStatus("Installing the runtime and the cores your platforms need…");
@@ -735,6 +764,11 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack, section }) => {
             onInstall={() => {
               detach(handleInstallCores());
             }}
+            onAddEmulatorShortcuts={() => {
+              detach(handleAddEmulatorShortcuts());
+            }}
+            shortcutsBusy={shortcutsBusy}
+            shortcutStatus={shortcutStatus}
           />
         );
       case "advanced":

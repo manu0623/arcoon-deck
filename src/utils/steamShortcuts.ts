@@ -212,10 +212,17 @@ async function waitForAppOverview(appId: number, timeoutMs: number): Promise<boo
   }
 }
 
+/** The four fields a shortcut is made of — what `addShortcut` actually reads. */
+export type ShortcutSpec = Pick<SyncAddItem, "name" | "exe" | "start_dir" | "launch_options">;
+
 /**
  * Add a single Steam shortcut. Returns the new steam app_id, or null on failure.
+ *
+ * Takes only the fields it uses rather than a whole `SyncAddItem`: a shortcut for
+ * an emulator has no rom id and no platform to name, and inventing both to satisfy
+ * a type would be a lie about what the tile is.
  */
-export async function addShortcut(data: SyncAddItem): Promise<number | null> {
+export async function addShortcut(data: ShortcutSpec): Promise<number | null> {
   try {
     // AddShortcut ignores most params (confirmed by MoonDeck plugin) —
     // must use Set* calls after creation to apply name, exe, startDir, launchOptions.
