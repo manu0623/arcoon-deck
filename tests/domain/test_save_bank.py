@@ -186,10 +186,21 @@ def n3ds_tree(id0: str = "00000000000000000000000000000001", id1: str = "0000000
 
 class TestN3dsTitle:
     def test_both_components_are_the_save_unit(self) -> None:
-        _, _, _, data, extdata, tree = n3ds_tree()
+        """The archive root is each member's path INSIDE the answer's directory.
+
+        For a prefix bundle that is the folder's own name (``ULUS10064DATA00``); a 3DS
+        title sits several levels lower, so its root spells those levels out. Naming it
+        "data" alone made the packed unit look for ``<base>/data`` — measured on the
+        reference Deck as a ``FileNotFoundError`` while packing a save that was right
+        there — and would have restored a download outside the tree Azahar reads.
+        """
+        _, id0, id1, data, extdata, tree = n3ds_tree()
         result = unit("n3ds", save_id="00040000/00113200", tree=tree)
         assert result.paths == (data, extdata)
-        assert result.archive_roots == ("data", "extdata")
+        assert result.archive_roots == (
+            f"{id0}/{id1}/title/00040000/00113200/data",
+            f"{id0}/{id1}/extdata/00000000/00001132",
+        )
         assert result.identified is False, "neither root names the title"
         assert result.place_path == data
 

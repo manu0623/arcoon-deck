@@ -615,6 +615,11 @@ def _prefix_bundle(
     return _unit(layout, base, base, members)
 
 
+def _archive_root(base: str, member_path: str) -> str:
+    """A member's name inside its answer's directory, in the archive's own spelling."""
+    return os.path.relpath(member_path, base).replace(os.sep, "/")
+
+
 def _n3ds_title(layout: SaveLayout, base: str, save_id: str | None, listing: Mapping[str, Sequence[str]]) -> SaveUnit:
     """One 3DS title's ``data`` tree and its derived ``extdata`` tree.
 
@@ -639,11 +644,18 @@ def _n3ds_title(layout: SaveLayout, base: str, save_id: str | None, listing: Map
     title_data = os.path.join(title_root, "title", category, low_id, "data")
     extdata = os.path.join(title_root, "extdata", _3DS_EXTDATA_HIGH, extdata_id) if extdata_id else None
 
+    # The archive roots are each member's path INSIDE the answer's directory — the one
+    # invariant every packed unit shares with a prefix bundle, where the member is the
+    # folder's own name. A 3DS title sits several levels below that directory, so its root
+    # spells those levels out (`id0/id1/title/<category>/<low id>/data`). Naming it "data"
+    # instead made the packed unit look for `<base>/data` — measured on the reference Deck
+    # as a FileNotFoundError while packing a game whose save was right there — and would
+    # have restored a download into a folder Azahar does not read.
     members = []
     if title_data in listing:
-        members.append(SaveMember(path=title_data, archive_root="data", is_directory=True))
+        members.append(SaveMember(path=title_data, archive_root=_archive_root(base, title_data), is_directory=True))
     if extdata is not None and extdata in listing:
-        members.append(SaveMember(path=extdata, archive_root="extdata", is_directory=True))
+        members.append(SaveMember(path=extdata, archive_root=_archive_root(base, extdata), is_directory=True))
 
     # The resolved path stays the title ``data`` directory whenever it exists, so
     # rows written before extdata joined the unit keep their paths; a title with

@@ -503,7 +503,11 @@ class Test3dsSaveAnswer:
 
         assert answer.syncable is True
         assert answer.directory == _BANK_3DS
-        assert [component.name for component in answer.components] == ["data"]
+        # The member is named by its path inside the answer's directory, which is what
+        # packing and restoring both walk from (see ``domain.save_bank._n3ds_title``).
+        assert [component.name for component in answer.components] == [
+            f"{_ID0}/{_ID1}/title/00040000/000ec300/data"
+        ]
         assert answer.components[0].directory == os.path.join(_TITLE_ROOT, "title", "00040000", "000ec300")
         assert catalogue.calls == []
 

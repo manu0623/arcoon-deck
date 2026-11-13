@@ -45,6 +45,16 @@ on disk:
   a failure is a warning — adopting a file is never worth failing the plugin's start. The
   same pass is exposed on demand as `adopt_roms_on_disk`.
 
+## The packing bug adoption exposed
+
+With the 3DS games finally installed, the first packed unit crashed: `FileNotFoundError` for
+`<base>/data` while packing a title whose save was at `<base>/id0/id1/title/.../data`. The
+unit had always named a 3DS member `"data"`, an archive root that is only correct when the
+member is a child of the answer's directory — which a prefix bundle's folder is and a title
+tree's member is not. The rule is now stated where the unit is built: an archive root is the
+member's path inside the answer's directory, so packing, the on-disk probe and the restore all
+walk the same distance and a download lands where Azahar reads.
+
 ## Consequences
 
 - A library that arrived another way becomes syncable without a re-download, which is what
