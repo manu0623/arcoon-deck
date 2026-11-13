@@ -49,8 +49,15 @@ export interface EmulatorCollectionOutcome {
 /** Steam's live non-Steam shortcut app ids, or `null` when it cannot be read. */
 function liveShortcutAppIds(): Set<number> | null {
   if (typeof collectionStore === "undefined") return null;
-  const apps = collectionStore.deckDesktopApps?.apps;
-  return apps ? new Set(apps.keys()) : null;
+  try {
+    // A getter that throws here would escape into whatever render asked for it, so the
+    // store is read defensively: no store, no live set, and staleness is simply not judged.
+    const apps = collectionStore.deckDesktopApps?.apps;
+    return apps ? new Set(apps.keys()) : null;
+  } catch (e) {
+    logWarn(`Emulator collection: Steam's shortcut store could not be read: ${e}`);
+    return null;
+  }
 }
 
 /**

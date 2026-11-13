@@ -45,7 +45,11 @@ describe("createOrUpdateRomMCollections — case-insensitive identity (#1569)", 
     // colliding "7 up" that Steam merges over the top of.
     const existing = fakeCollection("RomM: [7 Up] (test)");
     const NewUnsavedCollection = vi.fn();
-    vi.stubGlobal("collectionStore", { userCollections: [existing], NewUnsavedCollection });
+    vi.stubGlobal("collectionStore", {
+      deckDesktopApps: { apps: new Map() },
+      userCollections: [existing],
+      NewUnsavedCollection,
+    });
 
     await createOrUpdateRomMCollections({ "7 up": [1001, 1002] });
 
@@ -59,7 +63,11 @@ describe("createOrUpdateRomMCollections — case-insensitive identity (#1569)", 
     // new name still creates.
     const created = fakeCollection("RomM: [brand new] (test)");
     const NewUnsavedCollection = vi.fn(() => created);
-    vi.stubGlobal("collectionStore", { userCollections: [], NewUnsavedCollection });
+    vi.stubGlobal("collectionStore", {
+      deckDesktopApps: { apps: new Map() },
+      userCollections: [],
+      NewUnsavedCollection,
+    });
 
     await createOrUpdateRomMCollections({ "brand new": [1] });
 
@@ -76,7 +84,11 @@ describe("createOrUpdateCollections (platform) — case-insensitive identity (#1
   it("updates an existing case-variant platform collection instead of creating a duplicate", async () => {
     const existing = fakeCollection("RomM: Game Boy (test)");
     const NewUnsavedCollection = vi.fn();
-    vi.stubGlobal("collectionStore", { userCollections: [existing], NewUnsavedCollection });
+    vi.stubGlobal("collectionStore", {
+      deckDesktopApps: { apps: new Map() },
+      userCollections: [existing],
+      NewUnsavedCollection,
+    });
 
     await createOrUpdateCollections({ "game boy": [1001] });
 
@@ -92,7 +104,11 @@ describe("createOrUpdateCollections (platform) — case-insensitive identity (#1
     });
     first.Save.mockReturnValueOnce(pendingSave);
     const second = fakeCollection("RomM: Second (test)");
-    vi.stubGlobal("collectionStore", { userCollections: [first, second], NewUnsavedCollection: vi.fn() });
+    vi.stubGlobal("collectionStore", {
+      deckDesktopApps: { apps: new Map() },
+      userCollections: [first, second],
+      NewUnsavedCollection: vi.fn(),
+    });
     const controller = new AbortController();
     const applying = createOrUpdateCollections({ First: [1], Second: [2] }, undefined, controller.signal);
     await Promise.resolve();
@@ -115,10 +131,48 @@ describe("clearPlatformCollection — case-insensitive identity (#1569)", () => 
   it("deletes a case-variant scoped collection", async () => {
     // We ask to clear "game boy"; the live collection is "RomM: Game Boy (test)".
     const scoped = fakeCollection("RomM: Game Boy (test)");
-    vi.stubGlobal("collectionStore", { userCollections: [scoped] });
+    vi.stubGlobal("collectionStore", { deckDesktopApps: { apps: new Map() }, userCollections: [scoped] });
 
     await clearPlatformCollection("game boy");
 
     expect(scoped.Delete).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Steam's collection store when it cannot answer", () => {
+  /**
+   * Measured on the Deck, 2026-11-13: `collectionStore.userCollections` is a MobX computed
+   * over Steam's non-Steam shortcut store, and on that client it threw
+   * `Cannot read properties of undefined (reading 'values')`. MobX CACHES a computed's
+   * exception, so the throw resurfaced inside Steam's OWN library render and the library
+   * page died on a full-screen error. Nothing in this module may read a store that cannot
+   * answer, and a write it cannot deduplicate against must not happen at all.
+   */
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("leaves a RomM collection alone instead of reading an unreadable store", async () => {
+    const NewUnsavedCollection = vi.fn();
+    vi.stubGlobal("collectionStore", { NewUnsavedCollection });
+
+    await createOrUpdateRomMCollections({ "7 up": [1] });
+
+    expect(NewUnsavedCollection).not.toHaveBeenCalled();
+  });
+
+  it("leaves a platform collection alone too", async () => {
+    const NewUnsavedCollection = vi.fn();
+    vi.stubGlobal("collectionStore", { NewUnsavedCollection });
+
+    await createOrUpdateCollections({ "game boy": [1] });
+
+    expect(NewUnsavedCollection).not.toHaveBeenCalled();
+  });
+
+  it("clears nothing rather than throwing", async () => {
+    vi.stubGlobal("collectionStore", {});
+
+    await expect(clearPlatformCollection("game boy")).resolves.toBeUndefined();
   });
 });

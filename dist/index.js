@@ -11319,6 +11319,18 @@ async function getHostname() {
     }
     return _hostname;
 }
+function readUserCollections() {
+    const store = collectionStore;
+    try {
+        if (!store || store.deckDesktopApps == null)
+            return null;
+        return store.userCollections ?? [];
+    }
+    catch (e) {
+        logWarn(`Steam's collection store could not be read: ${e}`);
+        return null;
+    }
+}
 function getOverviews(appIds) {
     const overviews = [];
     for (const appId of appIds) {
@@ -11359,8 +11371,13 @@ async function createCollectionWithApps(collectionName, overviews, signal) {
     return true;
 }
 async function saveCollection(collectionName, noun, overviews, appCount, signal) {
+    const collections = readUserCollections();
+    if (collections === null) {
+        logWarn(`Steam's collections are not readable on this client; leaving "${collectionName}" alone`);
+        return false;
+    }
     const target = collectionName.toLowerCase();
-    const existing = collectionStore.userCollections.find((c) => c.displayName.toLowerCase() === target);
+    const existing = collections.find((c) => c.displayName.toLowerCase() === target);
     if (existing) {
         logInfo(`Updating ${noun} "${collectionName}" with ${appCount} apps`);
         if (!(await replaceCollectionApps(existing, overviews, signal)))
@@ -11437,8 +11454,9 @@ async function createOrUpdateEmulatorCollection(collectionName, appIds) {
 }
 async function clearPlatformCollection(platformName, signal) {
     try {
-        if (typeof collectionStore === "undefined") {
-            logWarn("collectionStore not available, cannot clear platform collection");
+        const collections = readUserCollections();
+        if (collections === null) {
+            logWarn("Steam's collections are not readable on this client, cannot clear platform collection");
             return;
         }
         const hostname = await getHostname();
@@ -11448,14 +11466,14 @@ async function clearPlatformCollection(platformName, signal) {
         const legacyName = `RomM: ${platformName}`;
         const scopedTarget = scopedName.toLowerCase();
         const legacyTarget = legacyName.toLowerCase();
-        const scoped = collectionStore.userCollections.find((c) => c.displayName.toLowerCase() === scopedTarget);
+        const scoped = collections.find((c) => c.displayName.toLowerCase() === scopedTarget);
         if (scoped) {
             logInfo(`Deleting collection "${scopedName}" (id=${scoped.id})`);
             if (signal?.aborted)
                 return;
             await scoped.Delete();
         }
-        const legacy = collectionStore.userCollections.find((c) => c.displayName.toLowerCase() === legacyTarget);
+        const legacy = collections.find((c) => c.displayName.toLowerCase() === legacyTarget);
         if (legacy) {
             logInfo(`Deleting legacy collection "${legacyName}" (id=${legacy.id})`);
             if (signal?.aborted)
@@ -11472,8 +11490,9 @@ async function clearPlatformCollection(platformName, signal) {
 }
 async function clearAllRomMCollections(signal) {
     try {
-        if (typeof collectionStore === "undefined") {
-            logWarn("collectionStore not available, cannot clear collections");
+        const collections = readUserCollections();
+        if (collections === null) {
+            logWarn("Steam's collections are not readable on this client, cannot clear collections");
             return;
         }
         const hostname = await getHostname();
@@ -11481,7 +11500,7 @@ async function clearAllRomMCollections(signal) {
             return;
         const suffix = ` (${hostname})`;
         const lowerSuffix = suffix.toLowerCase();
-        const rommCollections = collectionStore.userCollections.filter((c) => {
+        const rommCollections = collections.filter((c) => {
             const lower = c.displayName.toLowerCase();
             if (!lower.startsWith("romm: "))
                 return false;
@@ -11507,8 +11526,14 @@ async function clearAllRomMCollections(signal) {
 function liveShortcutAppIds() {
     if (typeof collectionStore === "undefined")
         return null;
-    const apps = collectionStore.deckDesktopApps?.apps;
-    return apps ? new Set(apps.keys()) : null;
+    try {
+        const apps = collectionStore.deckDesktopApps?.apps;
+        return apps ? new Set(apps.keys()) : null;
+    }
+    catch (e) {
+        logWarn(`Emulator collection: Steam's shortcut store could not be read: ${e}`);
+        return null;
+    }
 }
 async function applyAsset(appId, key, base64, assetType) {
     if (!base64)

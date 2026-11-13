@@ -21,6 +21,37 @@ export async function getHostname(): Promise<string> {
   return _hostname;
 }
 
+/**
+ * Steam's collections, or `null` when this client cannot answer for them.
+ *
+ * `collectionStore.userCollections` is a MobX computed that walks Steam's non-Steam
+ * shortcut store (`deckDesktopApps.values()`). Where that store is not exposed the getter
+ * throws `Cannot read properties of undefined (reading 'values')` — and **MobX caches a
+ * computed's exception**, so the throw resurfaces inside Steam's OWN library render and the
+ * library page dies on a full-screen error. Measured on the Deck (2026-11-13): the stack ran
+ * `syncEmulatorShortcuts` → `createOrUpdateEmulatorCollection` → `saveCollection` → the
+ * getter, and the component stack was the library route. Our own try/catch cannot undo a
+ * cached computed, so the getter is never evaluated unless the store it derives from exists,
+ * and the read itself is guarded for the builds where it exists and still throws.
+ *
+ * A `null` return means "leave Steam's collections exactly as they are": a collection we
+ * cannot read is one we cannot deduplicate against, and creating a second copy of it would
+ * lose the games already in the first.
+ */
+function readUserCollections(): SteamCollection[] | null {
+  // Read as a plain object: the shipped typings say both members always exist, and the
+  // whole point of this function is the client where one of them does not.
+  const store = collectionStore as unknown as
+    { deckDesktopApps?: unknown; userCollections?: SteamCollection[] } | undefined;
+  try {
+    if (!store || store.deckDesktopApps == null) return null;
+    return store.userCollections ?? [];
+  } catch (e) {
+    logWarn(`Steam's collection store could not be read: ${e}`);
+    return null;
+  }
+}
+
 function getOverviews(appIds: number[]): AppStoreOverview[] {
   const overviews: AppStoreOverview[] = [];
   for (const appId of appIds) {
@@ -85,8 +116,13 @@ async function saveCollection(
   // case-insensitive identity, so a case-variant collection ("RomM: [7 Up]
   // (host)" vs "RomM: [7 up] (host)") must be UPDATED, not shadowed by a
   // colliding new create that then overwrites it and loses its games (#1569).
+  const collections = readUserCollections();
+  if (collections === null) {
+    logWarn(`Steam's collections are not readable on this client; leaving "${collectionName}" alone`);
+    return false;
+  }
   const target = collectionName.toLowerCase();
-  const existing = collectionStore.userCollections.find((c) => c.displayName.toLowerCase() === target);
+  const existing = collections.find((c) => c.displayName.toLowerCase() === target);
 
   if (existing) {
     logInfo(`Updating ${noun} "${collectionName}" with ${appCount} apps`);
@@ -206,8 +242,9 @@ export async function createOrUpdateEmulatorCollection(collectionName: string, a
 
 export async function clearPlatformCollection(platformName: string, signal?: AbortSignal): Promise<void> {
   try {
-    if (typeof collectionStore === "undefined") {
-      logWarn("collectionStore not available, cannot clear platform collection");
+    const collections = readUserCollections();
+    if (collections === null) {
+      logWarn("Steam's collections are not readable on this client, cannot clear platform collection");
       return;
     }
     const hostname = await getHostname();
@@ -222,7 +259,7 @@ export async function clearPlatformCollection(platformName: string, signal?: Abo
     const legacyTarget = legacyName.toLowerCase();
 
     // Delete the machine-scoped collection
-    const scoped = collectionStore.userCollections.find((c) => c.displayName.toLowerCase() === scopedTarget);
+    const scoped = collections.find((c) => c.displayName.toLowerCase() === scopedTarget);
     if (scoped) {
       logInfo(`Deleting collection "${scopedName}" (id=${scoped.id})`);
       if (signal?.aborted) return;
@@ -230,7 +267,7 @@ export async function clearPlatformCollection(platformName: string, signal?: Abo
     }
 
     // Also clean up legacy collection (without hostname suffix) if it exists
-    const legacy = collectionStore.userCollections.find((c) => c.displayName.toLowerCase() === legacyTarget);
+    const legacy = collections.find((c) => c.displayName.toLowerCase() === legacyTarget);
     if (legacy) {
       logInfo(`Deleting legacy collection "${legacyName}" (id=${legacy.id})`);
       if (signal?.aborted) return;
@@ -247,8 +284,9 @@ export async function clearPlatformCollection(platformName: string, signal?: Abo
 
 export async function clearAllRomMCollections(signal?: AbortSignal): Promise<void> {
   try {
-    if (typeof collectionStore === "undefined") {
-      logWarn("collectionStore not available, cannot clear collections");
+    const collections = readUserCollections();
+    if (collections === null) {
+      logWarn("Steam's collections are not readable on this client, cannot clear collections");
       return;
     }
     const hostname = await getHostname();
@@ -264,7 +302,7 @@ export async function clearAllRomMCollections(signal?: AbortSignal): Promise<voi
     // Prefix + host-suffix are compared case-insensitively (Steam's collection
     // identity is case-insensitive, so a case-variant of one of our names is the
     // same collection and must still be swept, #1569).
-    const rommCollections = collectionStore.userCollections.filter((c) => {
+    const rommCollections = collections.filter((c) => {
       const lower = c.displayName.toLowerCase();
       if (!lower.startsWith("romm: ")) return false;
       // This machine's scoped collections (both platform and RomM collection style)
