@@ -130,12 +130,17 @@ class TestTheManifestStatesTheUnit:
         assert named.syncable is True
         assert named.synced_names == ("0", "1")
 
-    def test_an_empty_folder_keeps_the_refusal(self) -> None:
+    def test_an_empty_folder_is_a_restore_target(self) -> None:
+        """Measured on the reference Deck's Wii title: the managed folder was moved aside, the
+        sync refused, and the save just uploaded was never fetched back."""
         stated = manifest_answer(_entry(), content_installed=True)
         assert stated is not None
         with_id = fill_save_id(stated, _TITLE_ID)
 
-        assert fill_directory_members(with_id, []).syncable is False
+        empty = fill_directory_members(with_id, [])
+        assert empty.syncable is True
+        assert empty.components == ()
+        assert empty.directory == with_id.directory
 
     def test_the_entry_is_managed_only_while_the_id_survives(self) -> None:
         # No id means no folder to read, so the answer stays a hole rather than pointing at

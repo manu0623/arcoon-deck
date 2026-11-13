@@ -448,14 +448,24 @@ def fill_directory_members(answer: SaveAnswer, names: Sequence[str]) -> SaveAnsw
     an archive into ONE flat directory, and a nested name placed there would rebuild no tree —
     so a directory holding a subdirectory keeps its refusal rather than syncing half a save.
 
-    A directory with no files stays refused: there is nothing to carry yet, and the download
-    path places members by their own names.
+    A directory with no files is a TARGET rather than a refusal: the provisioner named this
+    folder, so a save the server holds belongs in it, and the restore names its members from
+    the archive itself. Measured on the reference Deck: the Wii title's ``data/`` was moved
+    aside and the sync refused with ``save_shape_unsupported``, so the save that had just been
+    uploaded was never fetched back — the same fresh-folder case a restore exists for, one
+    level below the card that rule was written for.
     """
     if not answer.directory or _FILE_NAMES_UNESTABLISHED not in answer.caveats:
         return answer
     wanted = tuple(name for name in names if name and not name.startswith("."))
     if not wanted:
-        return answer
+        return replace(
+            answer,
+            state=SAVE_STATE_PER_GAME_FILES,
+            unestablished=None,
+            components=(),
+            caveats=tuple(caveat for caveat in answer.caveats if caveat != _FILE_NAMES_UNESTABLISHED),
+        )
     components = tuple(
         SaveComponent(name=name, directory=answer.directory, role="save", granularity=answer.granularity)
         for name in wanted
