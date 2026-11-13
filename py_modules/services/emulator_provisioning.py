@@ -61,7 +61,7 @@ class EmulatorProvisioningService:
             "system": system_name,
             "known": True,
             "emulators": [_describe(emulator) for emulator in platform.emulators if install_plan(emulator) is not None],
-            "manual": [emulator.label for emulator in platform.emulators if install_plan(emulator) is None],
+            "manual": _manual_labels(platform),
         }
 
     async def ensure_for_system(self, system_name: str, *, label: str | None = None) -> dict[str, Any]:
@@ -82,7 +82,7 @@ class EmulatorProvisioningService:
         if platform is None:
             return {"success": False, "reason": "unknown_system", "system": system_name, "emulators": []}
         installable = [emulator for emulator in platform.emulators if install_plan(emulator) is not None]
-        manual = [emulator.label for emulator in platform.emulators if install_plan(emulator) is None]
+        manual = _manual_labels(platform)
         if label is not None:
             matched = [emulator for emulator in installable if emulator.label == label]
             if not matched:
@@ -119,6 +119,21 @@ class EmulatorProvisioningService:
             "failed": failed,
             "manual": manual,
         }
+
+
+def _manual_labels(platform: InventoryPlatform) -> list[str]:
+    """The STANDALONE rows with no stated source — the emulators a user must fetch.
+
+    A libretro row has no install plan either, by design: its core is the core
+    provisioner's to fetch. Counting it here named mGBA and VBA-M as "install by hand"
+    on every libretro platform, which is both wrong and the loudest line on a pane that
+    usually has nothing to install at all.
+    """
+    return [
+        emulator.label
+        for emulator in platform.emulators
+        if emulator.kind == "standalone" and install_plan(emulator) is None
+    ]
 
 
 def _describe(emulator: InventoryEmulator) -> dict[str, Any]:

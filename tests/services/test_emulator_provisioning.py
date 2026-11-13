@@ -27,6 +27,9 @@ _GC = InventoryPlatform(
             kind="standalone",
             install=InventoryInstall(flatpak="org.DolphinEmu.dolphin-emu"),
         ),
+        # A libretro row has no install plan either, and it is NOT "install by hand":
+        # its core is the core provisioner's to fetch.
+        InventoryEmulator(label="Dolphin (libretro)", emulator="dolphin", kind="libretro", core_so="dolphin_libretro"),
     ),
 )
 
@@ -158,6 +161,13 @@ class TestTheReading:
         assert answer["emulators"] == [
             {"label": "Dolphin (Standalone)", "source": "store", "app_id": "org.DolphinEmu.dolphin-emu", "repo": None}
         ]
+        assert answer["manual"] == []
+
+    @pytest.mark.asyncio
+    async def test_a_libretro_core_is_not_listed_as_install_by_hand(self, harness: _Harness) -> None:
+        """The core provisioner fetches those; naming them here would be wrong and loud."""
+        answer = self._service(harness).describe_for_system("gc")
+
         assert answer["manual"] == []
 
     @pytest.mark.asyncio
