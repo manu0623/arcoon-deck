@@ -40,6 +40,7 @@ import os
 import time
 from typing import TYPE_CHECKING, Any
 
+from adapters.flatpak_install import flatpak_app_files_dirs
 from domain.runtime import RuntimeMode, resolve_mode, resolve_roots
 from lib.retrodeck_health import RetroDeckConfigHealth
 
@@ -128,8 +129,17 @@ class RetroDeckPathsAdapter:
         ``ROOT_MISSING`` counts as present: the config exists and names a home that is not
         on disk (an ejected card), which is a broken install of something installed — not
         the absent case that hands the roots to the standalone tree.
+
+        **The config alone is not presence.** Uninstalling the RetroDECK flatpak leaves
+        ``retrodeck.json`` and ``~/retrodeck`` behind; measured on the reference Deck, that
+        made every query answer "RetroDECK is here" and kept the plugin pointed at a
+        launcher that no longer existed. So presence is the *app* being installed in either
+        flatpak tree, with the config as the second half of the answer.
         """
-        present = self.config_health() in (RetroDeckConfigHealth.OK, RetroDeckConfigHealth.ROOT_MISSING)
+        present = self.config_health() in (
+            RetroDeckConfigHealth.OK,
+            RetroDeckConfigHealth.ROOT_MISSING,
+        ) and bool(flatpak_app_files_dirs(self._user_home))
         setting = None if self._settings is None else self._settings().get("runtime_mode")
         return resolve_mode(setting, retrodeck_present=present)
 
