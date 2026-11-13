@@ -1485,7 +1485,6 @@ const appActionButtonClasses = DFL.appActionButtonClasses;
 const basicAppDetailsSectionStylerClasses = DFL.basicAppDetailsSectionStylerClasses;
 const appDetailsClasses = DFL.appDetailsClasses;
 const playSectionClasses = DFL.playSectionClasses;
-const quickAccessMenuClasses = DFL.quickAccessMenuClasses;
 const Tabs = DFL.Tabs;
 const ScrollPanel = DFL.ScrollPanel;
 const findSP = () => DFL.findSP();
@@ -10663,67 +10662,6 @@ function isHttpsUrl(url) {
 }
 
 const WIDE_ROOT_CLASS = "romm-wide-qam-root";
-const WIDE_PANEL_STYLE_ID = "romm-wide-qam-styles";
-const PANEL_ID_SELECTOR = '[id^="quickaccess_content_"]';
-const TAB_PANEL_SELECTOR = quickAccessMenuClasses?.TabGroupPanel
-    ? `.${quickAccessMenuClasses.TabGroupPanel}`
-    : PANEL_ID_SELECTOR;
-const WIDE_PANEL_CSS = `
-${TAB_PANEL_SELECTOR}:has(.${WIDE_ROOT_CLASS}) { max-width: none; }
-${TAB_PANEL_SELECTOR}:has(.${WIDE_ROOT_CLASS}) > * { max-width: none; }
-.${WIDE_ROOT_CLASS} button.DialogButton[disabled].gpfocus,
-.${WIDE_ROOT_CLASS} button.DialogButton.Disabled.gpfocus { outline: outset #fff 2px; }
-.${WIDE_ROOT_CLASS} ._TabContentsScroll { padding-bottom: 0; }
-`;
-let injectedStyle = null;
-function setQamExpanded(expanded) {
-    window.postMessage({ message: expanded ? "QamFriendsExpanded" : "QamFriendsHidden" }, window.origin);
-}
-function collapseWidePanel() {
-    const style = injectedStyle;
-    if (!style)
-        return;
-    injectedStyle = null;
-    style.remove();
-    setQamExpanded(false);
-}
-function expandWidePanel(root) {
-    if (injectedStyle)
-        return;
-    setQamExpanded(true);
-    const doc = root.ownerDocument;
-    const style = doc.createElement("style");
-    style.id = WIDE_PANEL_STYLE_ID;
-    style.textContent = WIDE_PANEL_CSS;
-    doc.head.appendChild(style);
-    injectedStyle = style;
-}
-function collapseQamOnDismount() {
-    collapseWidePanel();
-}
-function useWideQamPanel(rootRef) {
-    const qamVisible = DFL.useQuickAccessVisible();
-    SP_REACT.useEffect(() => {
-        const root = rootRef.current;
-        if (!qamVisible || !root)
-            return;
-        const activeTabClass = quickAccessMenuClasses?.ActiveTab;
-        const panelParent = root.closest(PANEL_ID_SELECTOR)?.parentElement;
-        const deckyTabActive = () => !activeTabClass || !panelParent || panelParent.classList.contains(activeTabClass);
-        const syncPanelWidth = () => (deckyTabActive() ? expandWidePanel(root) : collapseWidePanel());
-        syncPanelWidth();
-        let observer = null;
-        const panelView = panelParent?.ownerDocument.defaultView;
-        if (activeTabClass && panelParent && panelView) {
-            observer = new panelView.MutationObserver(syncPanelWidth);
-            observer.observe(panelParent, { attributes: true, attributeFilter: ["class"] });
-        }
-        return () => {
-            observer?.disconnect();
-            collapseWidePanel();
-        };
-    }, [qamVisible, rootRef]);
-}
 
 const BOUNDS = { height: "100%", minHeight: 0, overscrollBehavior: "contain" };
 const AFTER_STEAMS_OWN_SCROLL_MS = 50;
@@ -10797,7 +10735,6 @@ const WidePage = ({ title, onBack, tabs, activeTab, onShowTab, children, ownRegi
     const rootRef = SP_REACT.useRef(null);
     const bodyRef = SP_REACT.useRef(null);
     const [fit, setFit] = SP_REACT.useState(null);
-    useWideQamPanel(rootRef);
     SP_REACT.useLayoutEffect(() => {
         const body = bodyRef.current;
         const view = body?.ownerDocument.defaultView;
@@ -10832,73 +10769,10 @@ const WidePage = ({ title, onBack, tabs, activeTab, onShowTab, children, ownRegi
     return (SP_JSX.jsxs("div", { className: WIDE_ROOT_CLASS, ref: rootRef, style: rootStyle, [OWNS_ENTRY_FOCUS_ATTR]: "", children: [SP_JSX.jsxs(DFL.Focusable, { style: { display: "flex", alignItems: "center", gap: "10px", padding: "4px 16px 6px" }, children: [SP_JSX.jsx(DFL.DialogButton, { style: { flex: "0 0 auto", minWidth: 0, width: "auto", padding: "4px 10px", fontSize: "13px" }, onClick: onBack, children: SP_JSX.jsx(BackChipLabel, {}) }), SP_JSX.jsx("span", { style: { fontSize: "16px", fontWeight: 600, color: "#dcdedf" }, children: title })] }), SP_JSX.jsx("div", { ref: bodyRef, style: bodyStyle, "data-testid": "wide-page-body", children: body })] }));
 };
 
-const Columns = ({ columns }) => (SP_JSX.jsx(DFL.Focusable, { "flow-children": "horizontal", style: { display: "flex", gap: "12px", height: "100%", minHeight: 0 }, children: columns.map((column) => (SP_JSX.jsx(ScrollRegion, { style: column.width === undefined
-            ? { flex: "1 1 auto", minWidth: 0 }
-            : { flex: `0 0 ${column.width}`, width: column.width }, children: column.content }, `${column.id}:${column.regionKey ?? ""}`))) }));
-
-const LIST_WIDTH = "264px";
-const TWO_COLUMN_MIN_WIDTH = 520;
-const ListDetail = ({ items, selectedId, onSelect, renderDetail, listHeader, selectOnActivate, }) => {
-    const containerRef = SP_REACT.useRef(null);
-    const [narrow, setNarrow] = SP_REACT.useState(false);
-    const [drilled, setDrilled] = SP_REACT.useState(null);
-    const lastReport = SP_REACT.useRef("");
-    SP_REACT.useEffect(() => {
-        const node = containerRef.current;
-        const view = node?.ownerDocument.defaultView;
-        if (!node || !view) {
-            return;
-        }
-        const panel = node.closest('[id^="quickaccess_content_"]');
-        const measure = () => {
-            const width = node.clientWidth;
-            const panelWidth = panel?.clientWidth ?? 0;
-            const available = panelWidth > 0 ? Math.min(width > 0 ? width : panelWidth, panelWidth) : width;
-            const nextNarrow = available > 0 && available < TWO_COLUMN_MIN_WIDTH;
-            setNarrow(nextNarrow);
-            const report = `${panelWidth}x${width}`;
-            if (report !== lastReport.current) {
-                lastReport.current = report;
-                void debugLog(`ListDetail: panel=${panelWidth} container=${width} narrow=${nextNarrow}`);
-            }
-        };
-        measure();
-        const observer = new view.ResizeObserver(measure);
-        observer.observe(node);
-        if (panel) {
-            observer.observe(panel);
-        }
-        return () => observer.disconnect();
-    }, []);
-    const openRow = (id) => {
-        onSelect(id);
-        setDrilled(id);
-    };
-    const rows = () => (SP_JSX.jsxs(DFL.Focusable, { "flow-children": "vertical", children: [listHeader, items.map((item) => (SP_JSX.jsx("div", { style: { display: "contents" }, ...(item.id === selectedId ? { [ENTRY_STOP_ATTR]: "" } : {}), children: SP_JSX.jsx(DFL.Focusable, { ...(narrow
-                        ? { onActivate: () => openRow(item.id) }
-                        : {
-                            onFocus: () => {
-                                if (item.id !== selectedId)
-                                    onSelect(item.id);
-                            },
-                            ...(selectOnActivate ? { onActivate: () => onSelect(item.id) } : {}),
-                        }), children: item.render(item.id === selectedId) }) }, item.id)))] }));
-    if (narrow) {
-        return (SP_JSX.jsx("div", { ref: containerRef, style: { height: "100%", minHeight: 0, overflowY: "auto" }, children: drilled === null ? (rows()) : (SP_JSX.jsxs(DFL.Focusable, { "flow-children": "vertical", style: { height: "100%", overflowY: "auto" }, children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => setDrilled(null), children: "\u2039 Back" }) }), SP_JSX.jsx(DFL.Focusable, { "flow-children": "vertical", children: renderDetail(drilled) })] })) }));
-    }
-    return (SP_JSX.jsx("div", { ref: containerRef, style: { height: "100%", minHeight: 0 }, children: SP_JSX.jsx(Columns, { columns: [
-                {
-                    id: "list",
-                    width: LIST_WIDTH,
-                    content: rows(),
-                },
-                {
-                    id: "detail",
-                    regionKey: selectedId ?? "",
-                    content: SP_JSX.jsx(DFL.Focusable, { "flow-children": "vertical", children: renderDetail(selectedId) }),
-                },
-            ] }) }));
-};
+const ListDetail = ({ items, selectedId, onSelect, renderDetail, listHeader, selectOnActivate, }) => (SP_JSX.jsxs("div", { style: { height: "100%", minHeight: 0, overflowY: "auto" }, children: [SP_JSX.jsxs(DFL.Focusable, { "flow-children": "vertical", children: [listHeader, items.map((item) => (SP_JSX.jsx("div", { style: { display: "contents" }, ...(item.id === selectedId ? { [ENTRY_STOP_ATTR]: "" } : {}), children: SP_JSX.jsx(DFL.Focusable, { onFocus: () => {
+                            if (item.id !== selectedId)
+                                onSelect(item.id);
+                        }, ...(selectOnActivate ? { onActivate: () => onSelect(item.id) } : {}), children: item.render(item.id === selectedId) }) }, item.id)))] }), SP_JSX.jsx("div", { style: { borderTop: "1px solid rgba(255, 255, 255, 0.12)", marginTop: "8px" }, children: SP_JSX.jsx(DFL.Focusable, { "flow-children": "vertical", children: renderDetail(selectedId) }) })] }));
 
 const SECONDARY_FONT = "11px";
 const MUTED = "#8f98a0";
@@ -13276,6 +13150,8 @@ const SessionBudgetBanner = ({ lastAttemptStatus, syncButton, rssKb, resumeReady
     return (SP_JSX.jsxs(SP_JSX.Fragment, { children: [card, !memoryFreedForResume && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: restartSteam, disabled: (restartDisabled ?? false) || gameRunning, description: gameRunning ? "Close your running game first — restarting Steam would close it." : undefined, children: "Restart Steam now" }) }))] }));
 };
 
+const Columns = ({ columns }) => (SP_JSX.jsx(DFL.Focusable, { "flow-children": "vertical", style: { display: "flex", flexDirection: "column", gap: "12px", height: "100%", minHeight: 0 }, children: columns.map((column) => (SP_JSX.jsx(ScrollRegion, { style: { flex: "0 0 auto", width: "100%", minWidth: 0, height: "auto" }, children: column.content }, `${column.id}:${column.regionKey ?? ""}`))) }));
+
 const SYNC_TABLE_REGISTER = {
     rowPadding: `2px ${PANE_GUTTER}`,
     headerPadding: `0 ${PANE_GUTTER} 3px`,
@@ -15438,7 +15314,6 @@ var index = definePlugin(() => {
         content: SP_JSX.jsx(QAMPanel, {}),
         alwaysRender: true,
         onDismount() {
-            collapseQamOnDismount();
             syncContinuationController.abort();
             destroySessionManager();
             unregisterLaunchInterceptor();

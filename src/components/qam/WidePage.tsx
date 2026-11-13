@@ -23,7 +23,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type FC, type ReactNode }
 import { DialogButton, Focusable } from "@decky/ui";
 import { ControllerGlyph, GLYPH_BUTTON_B, Tabs } from "../../utils/deckyUiInternals";
 import { ENTRY_FOCUS_DELAY_MS, pageEntryStop, placeEntryFocus } from "../../utils/entryFocus";
-import { WIDE_ROOT_CLASS, useWideQamPanel } from "../../utils/qamExpansion";
+import { WIDE_ROOT_CLASS } from "../../utils/qamExpansion";
 import { offsetWithinScroller } from "../../utils/scrollHelpers";
 import { ScrollRegion } from "./ScrollRegion";
 
@@ -281,8 +281,11 @@ export const WidePage: FC<WidePageProps> = ({ title, onBack, tabs, activeTab, on
   const bodyRef = useRef<HTMLDivElement>(null);
   const [fit, setFit] = useState<BodyFit | null>(null);
 
-  useWideQamPanel(rootRef);
-
+  // The panel is NOT widened: this fork keeps the QAM at Steam's own 348 px and
+  // lays every page out in one column, so pages fit the panel a reader already
+  // sees instead of asking Steam to expand around them. `useWideQamPanel` is
+  // still here in the module for the pages that predate this, but a page built
+  // by this frame no longer calls it.
   useLayoutEffect(() => {
     const body = bodyRef.current;
     const view = body?.ownerDocument.defaultView;

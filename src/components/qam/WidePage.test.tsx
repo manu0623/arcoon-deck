@@ -370,7 +370,7 @@ describe("WidePage", () => {
     expect(container.firstElementChild).toHaveClass(WIDE_ROOT_CLASS);
   });
 
-  it("engages the panel's width levers while it is mounted", async () => {
+  it("leaves the panel at Steam's own width instead of asking for an expansion", async () => {
     const WidePage = await loadWidePage(StubTabs);
     const post = vi.spyOn(window, "postMessage").mockImplementation(() => {});
 
@@ -380,10 +380,11 @@ describe("WidePage", () => {
       </WidePage>,
     );
 
-    // The frame holding `useWideQamPanel` is the whole reason a page is wide.
-    // Dropping the hook while the module stays imported elsewhere leaves the
-    // rest of this file green.
-    expect(post).toHaveBeenCalledWith({ message: "QamFriendsExpanded" }, window.origin);
+    // This fork keeps the QAM at 348 px and lays every page out in one column,
+    // so the frame must not drive Steam's Friends expansion: an expanded panel
+    // is exactly the "extended" surface this layout replaced, and on the Deck
+    // it covers the whole screen.
+    expect(post).not.toHaveBeenCalledWith({ message: "QamFriendsExpanded" }, window.origin);
   });
 
   it("gives an untabbed body a scroll panel of its own", async () => {

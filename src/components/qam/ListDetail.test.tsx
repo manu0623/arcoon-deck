@@ -8,9 +8,9 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { useState, type CSSProperties, type FC, type ReactNode } from "react";
+import { useState, type FC } from "react";
 import { ENTRY_STOP_ATTR } from "../../utils/entryFocus";
-import { ListDetail, type ListDetailItem, type ListDetailProps } from "./ListDetail";
+import { ListDetail, type ListDetailItem } from "./ListDetail";
 
 const PLATFORMS = [
   { id: "n64", name: "Nintendo 64" },
@@ -108,52 +108,48 @@ describe("ListDetail", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it("puts the list and the detail in two separately navigable regions", () => {
-    render(<ControlledHost />);
-    const [list, detail] = [...screen.getAllByTestId("focusable")[0]!.children] as HTMLElement[];
+  it("keeps the list and its detail in ONE scrolling column", () => {
+    const { container } = render(<ControlledHost />);
+    const column = container.firstElementChild as HTMLElement;
 
-    expect(list).toContainElement(screen.getByRole("button", { name: /Nintendo 64/ }));
-    expect(list).toContainElement(screen.getByRole("button", { name: /PlayStation/ }));
-    expect(detail).toContainElement(screen.getByText("detail for n64"));
-    expect(list?.style.overflow).toBe("auto");
-    expect(detail?.style.overflow).toBe("auto");
+    // The panel is Steam's own 348 px — never widened — so a second column would
+    // be a sliver clipped off the edge. Both halves live in one scroller.
+    expect(column.style.overflowY).toBe("auto");
+    expect(column).toContainElement(screen.getByRole("button", { name: /Nintendo 64/ }));
+    expect(column).toContainElement(screen.getByText("detail for n64"));
   });
 
-  it("gives each pane Steam's scroll panel, so the two scroll independently", async () => {
-    vi.resetModules();
-    vi.doMock("../../utils/deckyUiInternals", () => ({
-      ScrollPanel: ({ style, children }: { style?: CSSProperties; children?: ReactNode }) => (
-        <div data-testid="scroll-panel" style={style}>
-          {children}
-        </div>
-      ),
-    }));
-    const Scrolling = (await import("./ListDetail")).ListDetail as FC<ListDetailProps>;
+  it("puts the detail under the list rather than beside it", () => {
+    render(<ControlledHost />);
 
+    const row = screen.getByRole("button", { name: /Nintendo 64/ });
+    const detail = screen.getByText("detail for n64");
+
+    // Below, in document order: the reader reaches the detail by scrolling past
+    // the rows, which is what one column means here.
+    expect(row.compareDocumentPosition(detail) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("reaches a detail row by scrolling the one column it shares with the list", () => {
     render(
-      <Scrolling
+      <ListDetail
         items={platformItems(() => {})}
         selectedId="n64"
         onSelect={vi.fn()}
         renderDetail={() => <button>a detail row</button>}
       />,
     );
-    const [list, detail] = screen.getAllByTestId("scroll-panel");
 
-    // Two panels rather than one around both: the panes scroll independently, so
-    // a long detail must not carry the list up with it.
-    expect(list).toContainElement(screen.getByRole("button", { name: /Nintendo 64/ }));
-    expect(detail).toContainElement(screen.getByRole("button", { name: "a detail row" }));
-    expect(list?.style.width).toBe("264px");
-    expect(detail?.style.height).toBe("100%");
+    // Nothing nests a second scroller: the detail is a sibling of the rows inside
+    // the same scrolling column, so the stick reaches it in one direction.
+    const column = screen.getByRole("button", { name: /Nintendo 64/ }).closest("[style]");
+    expect(column).not.toBeNull();
+    expect(screen.getByRole("button", { name: "a detail row" })).toBeInTheDocument();
   });
 
-  it("opens a newly selected entry's detail at its own top", () => {
-    // The pane is remounted on selection, so its scroll position cannot carry
-    // over from the platform before it — a new pane opening part-way down its
-    // own BIOS table is what this prevents. happy-dom lays nothing out, so what
-    // is pinned is the remount; that the scroll actually returns to the top is
-    // the browser's own behaviour for a fresh element.
+  it("swaps the detail in place when the selection changes", () => {
+    // No second pane to remount: the detail is one region under the list, and a
+    // new selection replaces its content where it stands.
     const { rerender } = render(
       <ListDetail
         items={platformItems(() => {})}
@@ -174,7 +170,8 @@ describe("ListDetail", () => {
     );
 
     expect(screen.getByText("detail for psx")).toBeInTheDocument();
-    expect(before).not.toBeInTheDocument();
+    expect(screen.queryByText("detail for n64")).not.toBeInTheDocument();
+    expect(before).not.toBeNull();
   });
 
   it("puts a whole-list control above the rows without making it a selection", () => {

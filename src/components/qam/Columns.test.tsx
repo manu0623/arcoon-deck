@@ -52,7 +52,7 @@ describe("Columns", () => {
     expect(table).not.toContainElement(screen.getByRole("button", { name: "a control" }));
   });
 
-  it("pins a column to its width and lets the one without take the rest", async () => {
+  it("gives every column the full width, whatever width it names", async () => {
     const Columns = await loadColumns();
 
     render(
@@ -65,21 +65,22 @@ describe("Columns", () => {
     );
     const [fixed, rest] = screen.getAllByTestId("scroll-panel");
 
-    expect(fixed?.style.flex).toBe("0 0 264px");
-    expect(fixed?.style.width).toBe("264px");
-    expect(rest?.style.flex).toBe("1 1 auto");
-    // A flex item's floor is its content, so without the reset one over-wide row
-    // widens the column past its share.
-    expect(rest?.style.minWidth).toBe("0");
+    // One column, not a share: a 264 px column would leave the panel's other
+    // 84 px empty and clip every row at the same place the old layout did.
+    expect(fixed?.style.width).toBe("100%");
+    expect(rest?.style.width).toBe("100%");
+    expect(fixed?.style.flex).toBe("0 0 auto");
+    expect(fixed?.style.height).toBe("auto");
   });
 
-  it("lays the columns out in one horizontal row the stick can cross", async () => {
+  it("stacks the columns in one column the stick moves down through", async () => {
     const Columns = await loadColumns();
 
     const { container } = render(<Columns columns={[{ id: "only", content: <div>only</div> }]} />);
     const row = container.firstElementChild as HTMLElement;
 
     expect(row.style.display).toBe("flex");
+    expect(row.style.flexDirection).toBe("column");
     expect(row.style.gap).toBe("12px");
     // The row is bounded by the height the frame measured, and a flex child's
     // min-height is its content unless the floor is reset — without both the

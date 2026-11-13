@@ -38,11 +38,16 @@ without restating it. The width mechanism's decision record is
 | `src/utils/syncProgress.ts`                                   | The frame every page reads a run from, and the one rule it enforces on its writers: a run that has ended stays ended                                                |
 | `src/utils/` module stores                                    | State that must outlive a page: sync progress, pending preview, downloads, prune, the game-detail caches                                                            |
 
-## Two widths
+## One width, one column (this fork)
 
-Every page is either narrow (348 px, 300 px of content) or wide (854 px, 806 px of content). The width belongs to the
-page: a page is wide or it is not, and no view inside a page changes it. Main and Downloads are narrow; Sync, Library,
-Settings and Data Management are wide.
+**This fork does not widen the QAM.** Every page renders in Steam's own 348 px panel and lays its content out in a
+single column, so nothing is clipped and no page covers the screen (ADR-0040). `WidePage` still supplies the frame —
+Back, title, tabs, the measured body height — but it no longer asks Steam for the Friends expansion, and `Columns`
+stacks what it is given instead of placing it side by side.
+
+The sections below describe the *upstream* two-width design and remain accurate as the history of the code that is
+still in the tree (`src/utils/qamExpansion.ts`, the injected CSS, the drill-down fallback). Where they say a page is
+wide, read: this fork renders it narrow, in one column.
 
 **A wide page can stop being visible while still measuring wide.** The expansion above is Steam's own and has no
 compatibility promise, so it can stop taking effect without the plugin's own boxes changing shape: the page still
