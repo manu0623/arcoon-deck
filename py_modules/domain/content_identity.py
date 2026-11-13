@@ -277,7 +277,10 @@ _SFO_MAGIC = b"\x00PSF"
 _SFO_HEADER_SIZE = 20
 _SFO_ENTRY_SIZE = 16
 _SFO_MAX_ENTRIES = 64
-_PSP_DISC_ID = re.compile(r"[A-Z]{4}[0-9]{5}")
+#: A disc id: four letters and five digits, no separator (``ULUS10064``, ``BCUS98247``).
+#: PSP and PS3 both spell their id this way and the bank's prefix rule matches it
+#: verbatim, so one shape covers both vocabularies.
+_DISC_ID_SHAPE = re.compile(r"[A-Z]{4}[0-9]{5}")
 
 
 def iso9660_root_directory(pvd: bytes) -> tuple[int, int] | None:
@@ -339,8 +342,35 @@ def psp_disc_id(sfo: bytes) -> ContentIdentity | None:
         if key != "DISC_ID":
             continue
         text = value.decode("ascii", errors="replace").replace("\x00", "").strip().upper()
-        if _PSP_DISC_ID.fullmatch(text):
+        if _DISC_ID_SHAPE.fullmatch(text):
             return ContentIdentity(save_id=text, kind=IdentityKind.DISC_ID, source="PSP PARAM.SFO DISC_ID")
+        return None
+    return None
+
+
+def ps3_title_id(sfo: bytes) -> ContentIdentity | None:
+    """The ``TITLE_ID`` (``BCUS98247``) from a PS3 ``PARAM.SFO``, or ``None``.
+
+    A PS3 save folder is named after this id plus whatever the game appends
+    (``BCUS98247_SAVE_SLOT_00000``), so the bank's prefix rule matches on it exactly as
+    it does a PSP ``DISC_ID``, and the same :data:`IdentityKind.DISC_ID` vocabulary is
+    the honest one to carry it under.
+
+    Measured on the reference Deck: Sly Cooper: Thieves in Time wrote its save under the
+    id its own ``PARAM.SFO`` states, and 3D Dot Game Heroes' disc states ``BLUS30490``.
+    The format byte is not consulted: the real disc states ``TITLE_ID`` as ``0x0204``,
+    while the NUL-terminated ``0x0404`` is what a hand-written file tends to use, and
+    both name the same thing.
+    """
+    entries = _sfo_entries(sfo)
+    if entries is None:
+        return None
+    for key, value in entries:
+        if key != "TITLE_ID":
+            continue
+        text = value.decode("ascii", errors="replace").replace("\x00", "").strip().upper()
+        if _DISC_ID_SHAPE.fullmatch(text):
+            return ContentIdentity(save_id=text, kind=IdentityKind.DISC_ID, source="PS3 PARAM.SFO TITLE_ID")
         return None
     return None
 

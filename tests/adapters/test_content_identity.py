@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import struct
 from typing import TYPE_CHECKING
 
 from adapters.content_identity import ContentIdentityAdapter
@@ -104,3 +105,101 @@ class TestDegradation:
         rom.write_bytes(b"BOOT2 = cdrom0:\\SLUS_203.12;1\n")
 
         assert _adapter()(str(rom), "gba") is None
+
+
+
+_SECTOR = 2048
+_NUL = chr(0)
+
+
+def _iso_record(name: str, extent: int, size: int, *, directory: bool = False) -> bytes:
+    raw = name.encode()
+    length = 33 + len(raw)
+    if length % 2:
+        length += 1
+    out = bytearray(length)
+    out[0] = length
+    struct.pack_into("<I", out, 2, extent)
+    struct.pack_into(">I", out, 6, extent)
+    struct.pack_into("<I", out, 10, size)
+    struct.pack_into(">I", out, 14, size)
+    if directory:
+        out[25] = 0x02
+    out[28] = out[31] = 1
+    out[32] = len(raw)
+    out[33 : 33 + len(raw)] = raw
+    return bytes(out)
+
+
+def _param_sfo(**entries: str) -> bytes:
+    keys = b""
+    offsets: list[int] = []
+    for key in entries:
+        offsets.append(len(keys))
+        keys += key.encode() + bytes(1)
+    data = b""
+    values: list[tuple[int, int]] = []
+    for value in entries.values():
+        values.append((len(data), len(value) + 1))
+        data += value.encode() + bytes(1)
+    key_table = 20 + 16 * len(entries)
+    data_table = key_table + len(keys)
+    out = struct.pack("<4sIIII", bytes(1) + b"PSF", 0x00000101, key_table, data_table, len(entries))
+    for offset, (value_offset, length) in zip(offsets, values, strict=True):
+        out += struct.pack("<HHIII", offset, 0x0204, length, length, value_offset)
+    return out + keys + data
+
+
+def _ps3_iso(sfo: bytes, *, game_dir: str = "PS3_GAME") -> bytes:
+    """An image whose root lists *game_dir*, holding ``PARAM.SFO``."""
+    pvd = bytearray(_SECTOR)
+    pvd[0] = 1  # primary volume descriptor
+    pvd[1:6] = b"CD001"
+    pvd[6] = 1
+    root = _iso_record(_NUL, 17, _SECTOR, directory=True)
+    pvd[156 : 156 + len(root)] = root
+    listing = _iso_record(game_dir, 18, _SECTOR, directory=True)
+    sfo_entry = _iso_record("PARAM.SFO;1", 19, len(sfo))
+    sectors = {
+        16: bytes(pvd),
+        17: listing.ljust(_SECTOR, bytes(1)),
+        18: sfo_entry.ljust(_SECTOR, bytes(1)),
+        19: sfo.ljust(_SECTOR, bytes(1)),
+    }
+    return b"".join(sectors.get(index, bytes(_SECTOR)) for index in range(20))
+
+
+class TestPs3:
+    """Measured on the reference Deck: ``3D Dot Game Heroes (USA).iso`` is a plain ISO 9660
+    image whose root lists ``PS3_GAME``, and the id it states is ``BLUS30490``."""
+
+    def test_a_disc_image_reads_its_param_sfo(self, tmp_path: Path) -> None:
+        rom = tmp_path / "3D Dot Game Heroes (USA).iso"
+        rom.write_bytes(_ps3_iso(_param_sfo(TITLE="3D DOT GAME HEROES", TITLE_ID="BLUS30490")))
+
+        identity = _adapter()(str(rom), "ps3")
+
+        assert identity is not None
+        assert identity.save_id == "BLUS30490"
+
+    def test_a_disc_without_a_ps3_game_directory_answers_nothing(self, tmp_path: Path) -> None:
+        rom = tmp_path / "game.iso"
+        rom.write_bytes(_ps3_iso(_param_sfo(TITLE_ID="BLUS30490"), game_dir="PSP_GAME"))
+
+        assert _adapter()(str(rom), "ps3") is None
+
+    def test_a_folder_boot_install_states_its_id(self, tmp_path: Path) -> None:
+        game = tmp_path / "Game.ps3"
+        (game / "PS3_GAME" / "USRDIR").mkdir(parents=True)
+        (game / "PS3_GAME" / "PARAM.SFO").write_bytes(_param_sfo(TITLE_ID="BCUS98247"))
+
+        identity = _adapter()(str(game), "ps3")
+
+        assert identity is not None
+        assert identity.save_id == "BCUS98247"
+
+    def test_a_folder_without_a_param_sfo_answers_nothing(self, tmp_path: Path) -> None:
+        game = tmp_path / "Game.ps3"
+        (game / "USRDIR").mkdir(parents=True)
+
+        assert _adapter()(str(game), "ps3") is None

@@ -6,6 +6,8 @@ format's layout, and a fixture states exactly which offsets a reader depends on.
 
 from __future__ import annotations
 
+import struct
+
 import pytest
 
 from domain.content_identity import (
@@ -16,6 +18,7 @@ from domain.content_identity import (
     gamecube_game_code,
     n3ds_partition_offset,
     n3ds_title_id,
+    ps3_title_id,
 )
 
 
@@ -128,3 +131,43 @@ class TestN3ds:
     @pytest.mark.parametrize("size", [0, 4, 0x118, 0x11F])
     def test_a_header_too_short_for_the_field_refuses(self, size: int) -> None:
         assert n3ds_title_id(b"NCCH" + b"\x00" * max(size - 4, 0)) is None
+
+def _param_sfo(**entries: str) -> bytes:
+    """A PARAM.SFO holding *entries*, laid out the way the format states."""
+    keys = b''
+    offsets: list[int] = []
+    for key in entries:
+        offsets.append(len(keys))
+        keys += key.encode() + bytes(1)
+    data = b''
+    values: list[tuple[int, int]] = []
+    for value in entries.values():
+        values.append((len(data), len(value) + 1))
+        data += value.encode() + bytes(1)
+    key_table = 20 + 16 * len(entries)
+    data_table = key_table + len(keys)
+    out = struct.pack('<4sIIII', bytes(1) + b'PSF', 0x00000101, key_table, data_table, len(entries))
+    for offset, (value_offset, length) in zip(offsets, values, strict=True):
+        out += struct.pack('<HHIII', offset, 0x0204, length, length, value_offset)
+    return out + keys + data
+
+
+class TestPs3TitleId:
+    def test_the_title_id_is_the_save_id(self) -> None:
+        """Measured on the reference Deck: Sly Cooper: Thieves in Time wrote its save under
+        BCUS98247_SAVE_SLOT_00000, the id its own PARAM.SFO states."""
+        identity = ps3_title_id(_param_sfo(TITLE_ID='BCUS98247', TITLE='Sly Cooper: Thieves in Time'))
+
+        assert identity is not None
+        assert identity.save_id == 'BCUS98247'
+        assert identity.kind == IdentityKind.DISC_ID
+
+    def test_a_file_without_a_title_id_is_not_given_one(self) -> None:
+        assert ps3_title_id(_param_sfo(TITLE='Some Game')) is None
+
+    def test_a_value_that_is_not_a_disc_id_refuses(self) -> None:
+        assert ps3_title_id(_param_sfo(TITLE_ID='DEMO')) is None
+
+    def test_something_that_is_not_an_sfo_refuses(self) -> None:
+        assert ps3_title_id(b'not an sfo, just bytes') is None
+        assert ps3_title_id(b'') is None

@@ -60,6 +60,11 @@ _SAVE_POINTS: dict[str, SavePoint] = {
     # Measured on the reference Deck: "Nintendo 3DS" holds the console's id0/id1 tree, the
     # same shape the bank's n3ds layout reads, so the two sides line up level for level.
     "azahar": SavePoint(in_data_dir=True, subdir=("sdmc", "Nintendo 3DS")),
+    # Measured on the reference Deck: RPCS3's home is ``config/rpcs3`` — its
+    # ``config.yml``, ``dev_flash`` and ``dev_hdd0`` are all there — and its saves sit
+    # under ``dev_hdd0/home/<user>/savedata``. ``00000001`` is the first local user
+    # RPCS3 creates, and the only one in both trees that hold its data here.
+    "rpcs3": SavePoint(in_data_dir=False, subdir=("dev_hdd0", "home", "00000001", "savedata")),
 }
 
 # The providers whose config root we know belongs to that install. ``emudeck`` is out

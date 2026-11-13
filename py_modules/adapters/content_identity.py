@@ -27,6 +27,7 @@ from domain.content_identity import (
     iso9660_root_directory,
     n3ds_partition_offset,
     n3ds_title_id,
+    ps3_title_id,
     psp_disc_id,
     rvz_gamecube_game_code,
 )
@@ -51,6 +52,7 @@ _GAMECUBE_PLATFORMS = frozenset({"gc", "ngc", "gamecube", "gcn"})
 _DREAMCAST_PLATFORMS = frozenset({"dreamcast", "dc"})
 _N3DS_PLATFORMS = frozenset({"n3ds", "3ds"})
 _PSP_PLATFORMS = frozenset({"psp"})
+_PS3_PLATFORMS = frozenset({"ps3"})
 _SWITCH_PLATFORMS = frozenset({"switch", "nsw"})
 # An ``.nsp`` keeps its ticket list in the PFS0 header's string table, which sits in the
 # first few kilobytes; 64 KiB is margin, not a scan.
@@ -92,6 +94,8 @@ class ContentIdentityAdapter:
                 return disc_serial(self._read(path, 0, _DISC_HEAD_BYTES).decode("latin-1", errors="replace"))
             if slug in _PSP_PLATFORMS:
                 return self._psp(path)
+            if slug in _PS3_PLATFORMS:
+                return self._ps3(path)
             if slug in _DREAMCAST_PLATFORMS:
                 return dreamcast_product_number(self._read(path, 0, _SECTOR_HEAD_BYTES))
             if slug in _GAMECUBE_PLATFORMS:
@@ -113,21 +117,50 @@ class ContentIdentityAdapter:
         addressable this way, and reading a "sector" out of a compressed stream would
         hand back bytes that mean nothing.
         """
+        return self._iso_param_sfo(path, "PSP_GAME", psp_disc_id, "DISC_ID")
+
+    def _ps3(self, path: str) -> ContentIdentity | None:
+        """The same walk, one directory name over — unless the game is a folder on disk.
+
+        A PS3 install is either a disc image or a directory whose ``PS3_GAME`` sits beside
+        the boot file, and both keep the id in the same ``PARAM.SFO``. Measured on the
+        reference Deck: the plugin's own PS3 installs are ``.iso`` files inside a folder
+        of the same name, and a folder-boot install is the other shape it can take.
+        """
+        if os.path.isdir(path):
+            parents = (path, os.path.dirname(path))
+            for parent in parents:
+                sfo_path = os.path.join(parent, "PS3_GAME", "PARAM.SFO")
+                if not os.path.isfile(sfo_path):
+                    continue
+                with open(sfo_path, "rb") as handle:
+                    identity = ps3_title_id(handle.read(_SFO_MAX_BYTES))
+                if identity is None:
+                    self._logger.warning(f"content_identity: no TITLE_ID in {os.path.basename(sfo_path)}")
+                return identity
+            self._logger.warning(f"content_identity: no PS3_GAME/PARAM.SFO beside {os.path.basename(path)}")
+            return None
+        return self._iso_param_sfo(path, "PS3_GAME", ps3_title_id, "TITLE_ID")
+
+    def _iso_param_sfo(
+        self, path: str, game_dir_name: str, parse: Callable[[bytes], ContentIdentity | None], key: str
+    ) -> ContentIdentity | None:
+        """Walk ``<game_dir_name>/PARAM.SFO`` in an ISO 9660 image and read *key* out of it."""
         root = iso9660_root_directory(self._read(path, _ISO_PVD_OFFSET, _ISO_SECTOR))
         if root is None:
             self._logger.warning(f"content_identity: no ISO 9660 volume descriptor in {os.path.basename(path)}")
             return None
-        game_dir = self._iso_entry(path, root, "PSP_GAME")
+        game_dir = self._iso_entry(path, root, game_dir_name)
         if game_dir is None:
-            self._logger.warning(f"content_identity: no PSP_GAME directory in {os.path.basename(path)}")
+            self._logger.warning(f"content_identity: no {game_dir_name} directory in {os.path.basename(path)}")
             return None
         sfo = self._iso_entry(path, game_dir, "PARAM.SFO")
         if sfo is None:
-            self._logger.warning(f"content_identity: no PSP_GAME/PARAM.SFO in {os.path.basename(path)}")
+            self._logger.warning(f"content_identity: no {game_dir_name}/PARAM.SFO in {os.path.basename(path)}")
             return None
-        identity = psp_disc_id(self._read(path, sfo[0] * _ISO_SECTOR, min(sfo[1], _SFO_MAX_BYTES)))
+        identity = parse(self._read(path, sfo[0] * _ISO_SECTOR, min(sfo[1], _SFO_MAX_BYTES)))
         if identity is None:
-            self._logger.warning(f"content_identity: no DISC_ID in {os.path.basename(path)}")
+            self._logger.warning(f"content_identity: no {key} in {os.path.basename(path)}")
         return identity
 
     def _iso_entry(self, path: str, extent: tuple[int, int], name: str) -> tuple[int, int] | None:
