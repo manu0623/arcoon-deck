@@ -601,9 +601,11 @@ class TestOwnedLibretroInvocation:
     def test_owned_core_renders_direct_argv(self):
         invocation = EmulatorInvocation.libretro("mgba_libretro", "mGBA", runner=self._RUNNER)
 
+        # No %ROM%: build_launch_options appends the real path, and nothing substitutes
+        # the placeholder once RetroDECK's run_game.sh is out of the path (ADR-0042).
         assert resolve_emulator_invocation({}, invocation) == (
             "flatpak run org.libretro.RetroArch "
-            "-L /home/deck/.var/app/org.libretro.RetroArch/config/retroarch/cores/mgba_libretro.so %ROM%"
+            "-L /home/deck/.var/app/org.libretro.RetroArch/config/retroarch/cores/mgba_libretro.so"
         )
 
     def test_owned_core_keeps_its_appendconfig(self):
@@ -614,7 +616,8 @@ class TestOwnedLibretroInvocation:
         rendered = resolve_emulator_invocation({}, invocation)
 
         assert "--appendconfig=/data/retroarch/gba.cfg" in rendered
-        assert rendered.endswith("%ROM%")
+        assert rendered.endswith("--appendconfig=/data/retroarch/gba.cfg")
+        assert "%ROM%" not in rendered
         assert "retrodeck" not in rendered.lower()
 
     def test_without_a_runner_the_retrodeck_override_is_unchanged(self):

@@ -75,7 +75,16 @@ def resolve_backend(value: object) -> LaunchBackend:
 
 
 def retroarch_command(runner: RetroArchRunner, *, core_so: str, appendconfig: str | None) -> str:
-    """The owned launch command for one core, ending in :data:`ROM_PLACEHOLDER`.
+    """The owned launch argv for one core, **without** the content path.
+
+    ``build_launch_options`` appends the quoted ROM path as the last argument, so a
+    trailing :data:`ROM_PLACEHOLDER` here would not be substituted by anything — no
+    ``run_game.sh`` runs on this path — and RetroArch would take the literal ``%ROM%``
+    as its content and fail to load. That was the shape measured on the reference Deck:
+    ``… -L mgba_libretro.so --appendconfig=… %ROM% "/…/game.gba"``, a launch that
+    produced no window and no emulator log (ADR-0042). This is the rule ``_host_argv``
+    already follows for a host binary: the placeholder is RetroDECK's, and it leaves with
+    RetroDECK.
 
     The appendconfig is dropped when its path cannot ride unquoted (see
     :func:`domain.command_text.representable_in_override`): the command is built as
@@ -83,4 +92,4 @@ def retroarch_command(runner: RetroArchRunner, *, core_so: str, appendconfig: st
     to the user's own save directory still plays the game.
     """
     core_path = f"{runner.cores_dir}/{core_so}.so"
-    return f"{runner.prefix} -L {core_path}{appendconfig_flag(appendconfig)} {ROM_PLACEHOLDER}"
+    return f"{runner.prefix} -L {core_path}{appendconfig_flag(appendconfig)}"

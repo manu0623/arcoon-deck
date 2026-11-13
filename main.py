@@ -394,14 +394,35 @@ class Plugin:
         return await self._core_service.get_platform_core_info(rom_id)
 
     async def ensure_all_platform_cores(self):
-        """Install the runtime and every enabled platform's missing cores.
+        """Install the runtime and the missing cores of every platform this device syncs.
 
         What the Settings page's button calls: one action for a device that has no
         emulators at all, so the reader does not have to know which platform needs which
         core. Platforms the inventory does not describe are skipped rather than failing.
+
+        ``enabled_platforms`` is empty until ``get_platforms`` materialises it, so on a
+        fresh device the sweep would have found no platform at all and reported
+        "everything installed" without looking — the wrong answer in the one situation
+        the button exists for. When that dict names nothing, the synced platforms are the
+        answer instead.
         """
         enabled = [slug for slug, on in (self.settings.get("enabled_platforms") or {}).items() if on]
+        if not enabled:
+            enabled = await self._synced_platform_slugs()
         return await self._core_provisioning_service.ensure_for_platforms(enabled)
+
+    async def _synced_platform_slugs(self):
+        """The platform slugs this device knows about, preferring the ones it syncs."""
+        try:
+            answer = await self.get_platforms()
+        except Exception as e:
+            # A failed listing must not turn the button into a crash; an empty sweep
+            # reports honestly that it had nothing to install for.
+            self._debug_logger(f"core sweep: could not list platforms: {e}")
+            return []
+        platforms = answer.get("platforms") or [] if isinstance(answer, dict) else []
+        synced = [p.get("slug") for p in platforms if p.get("sync_enabled") and p.get("slug")]
+        return synced or [p.get("slug") for p in platforms if p.get("slug")]
 
     async def ensure_libretro_runtime(self):
         """Install the runtime the plugin drives, when there is none to start.
