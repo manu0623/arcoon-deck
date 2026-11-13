@@ -2734,12 +2734,19 @@ class TestAnEmptyMemberSetAndTheServersOwnEntry:
     """
 
     _DIR = "/tmp/saves/gc/User/GC/USA/Card A"
+    _ENTRY = "01-GZ2E-gczelda2"
 
     def _outcomes(self, tmp_path, *, server_target_filter):
         svc, _ = make_service(tmp_path)
         _install_rom(svc, tmp_path)
         info = svc._rom_info.get_rom_save_info(42)
-        server = [_server_save(100, filename="pokemon [2026-03-24_15-19-26].srm")]
+        server = [
+            _server_save(
+                100,
+                filename=f"{self._ENTRY} [2026-03-24_15-19-26].gci",
+                file_name_no_tags=self._ENTRY,
+            )
+        ]
         return list(
             svc._sync_engine._matrix.iter_matrix_outcomes(
                 server,
@@ -2752,13 +2759,14 @@ class TestAnEmptyMemberSetAndTheServersOwnEntry:
             )
         )
 
-    def test_an_admitted_target_is_downloaded(self, tmp_path) -> None:
-        outcomes = self._outcomes(tmp_path, server_target_filter=lambda t: t == "pokemon.srm")
-        assert [outcome.filename for outcome in outcomes] == ["pokemon.srm"]
+    def test_an_admitted_entry_keeps_the_servers_own_name(self, tmp_path) -> None:
+        """The card entry's name, never ``<rom_name>.gci`` — no card folder holds that."""
+        outcomes = self._outcomes(tmp_path, server_target_filter=lambda target: target == f"{self._ENTRY}.gci")
+        assert [outcome.filename for outcome in outcomes] == [f"{self._ENTRY}.gci"]
         assert outcomes[0].local_path is None
 
     def test_a_target_the_filter_refuses_is_left_alone(self, tmp_path) -> None:
-        assert self._outcomes(tmp_path, server_target_filter=lambda t: False) == []
+        assert self._outcomes(tmp_path, server_target_filter=lambda target: False) == []
 
     def test_without_a_filter_nothing_new_is_placed(self, tmp_path) -> None:
         assert self._outcomes(tmp_path, server_target_filter=None) == []

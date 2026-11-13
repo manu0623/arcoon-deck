@@ -51,13 +51,28 @@ if TYPE_CHECKING:
 _BACKUP_RETENTION = 10  # max .romm-backup copies kept per save file (#974)
 
 
-def _novel_target_accepted(target: str, server_target_filter: Callable[[str], bool] | None) -> bool:
-    """Whether a server-only target may be placed while the answer names no members.
+def _novel_server_target(
+    server_save: dict[str, Any], server_target_filter: Callable[[str], bool] | None
+) -> str | None:
+    """The name an empty member set may place *server_save* under, or ``None``.
 
-    No filter at all is the ordinary case — the answer names what it carries — and it admits
-    nothing, so a target the answer never mentioned is still passed over in both directions.
+    Two things are different here from every other download. The name is the SERVER's own —
+    ``file_name_no_tags`` plus the extension, which for a card entry is
+    ``01-GZ2E-gczelda2.gci`` — because a member set has no ``<rom_name>.<ext>`` rule to
+    canonicalise against; the path math would name the file after the ROM, which is a name no
+    card folder holds. And the filter decides whether the platform could have written that
+    name at all, so an older shape sitting in the same slot is passed over rather than placed.
+
+    No filter is the ordinary case — the answer names what it carries — and admits nothing.
     """
-    return server_target_filter is not None and server_target_filter(target)
+    if server_target_filter is None:
+        return None
+    stem = server_save.get("file_name_no_tags") or ""
+    extension = server_save.get("file_extension") or ""
+    if not stem or not extension:
+        return None
+    target = f"{stem}.{extension}"
+    return target if server_target_filter(target) else None
 
 
 def _extension(name: str) -> str:
@@ -1009,12 +1024,15 @@ class MatrixExecutor:
             target = local_save_target(ss, rom_name, known_names=save_names)
             if target in handled_filenames:
                 continue
-            if target not in carried and not _novel_target_accepted(target, server_target_filter):
-                self._log_debug(
-                    f"iter_matrix_outcomes({rom_name!r}): server save {target!r} is not a file this emulator's "
-                    f"answer carries — leaving both copies alone"
-                )
-                continue
+            if target not in carried:
+                novel = _novel_server_target(ss, server_target_filter)
+                if novel is None:
+                    self._log_debug(
+                        f"iter_matrix_outcomes({rom_name!r}): server save {target!r} is not a file this "
+                        f"emulator's answer carries — leaving both copies alone"
+                    )
+                    continue
+                target = novel
             server_only_groups.setdefault(target, []).append(ss)
 
         for target_filename, group in server_only_groups.items():
