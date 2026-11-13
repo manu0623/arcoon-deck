@@ -28,6 +28,7 @@ from services.data_location import DataLocationService, DataLocationServiceConfi
 from services.disc import DiscService, DiscServiceConfig
 from services.disc_launch_resolver import DiscLaunchResolver, DiscLaunchResolverConfig
 from services.downloads import DownloadService, DownloadServiceConfig
+from services.emulator_provisioning import EmulatorProvisioningConfig, EmulatorProvisioningService
 from services.firmware import FirmwareService, FirmwareServiceConfig
 from services.game_detail import GameDetailService, GameDetailServiceConfig
 from services.game_process import GameProcessService, GameProcessServiceConfig
@@ -478,6 +479,17 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         ),
     )
 
+    # Obtains the standalone emulators a system's inventory row names a source for, so a
+    # platform the plugin can only launch with one is installable from Game Mode (ADR-0049).
+    emulator_provisioning_service = EmulatorProvisioningService(
+        config=EmulatorProvisioningConfig(
+            loop=cfg.runtime.loop,
+            logger=cfg.runtime.logger,
+            inventory=cfg.adapters.owned_catalogue.platform_for,
+            installer=cfg.adapters.emulator_install.install,
+        ),
+    )
+
     # Downloads the libretro cores the owned runtime needs into its own cores directory,
     # so a device without RetroDECK has something to load (ADR-0037).
     core_provisioning_service = CoreProvisioningService(
@@ -669,6 +681,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         "settings_service": settings_service,
         "core_service": core_service,
         "core_provisioning_service": core_provisioning_service,
+        "emulator_provisioning_service": emulator_provisioning_service,
         "disc_service": disc_service,
         "version_switch_service": version_switch_service,
         "connection_service": connection_service,

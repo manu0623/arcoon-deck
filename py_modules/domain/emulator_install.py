@@ -27,6 +27,7 @@ adapter's to check before it writes.
 from __future__ import annotations
 
 import fnmatch
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -103,3 +104,44 @@ def matching_asset(names: Iterable[str], pattern: str) -> str | None:
 def download_url(repo: str, tag: str, asset: str) -> str:
     """The direct URL for one asset of one release."""
     return f"https://github.com/{repo}/releases/download/{tag}/{asset}"
+
+
+#: The directory an AppImage lives in, relative to the user's home. No emulator looks
+#: here by itself: it is where the inventory's own launch paths point, which is the
+#: reason an install has to land in it.
+APPIMAGE_DIR_NAME = "Applications"
+
+
+def appimage_path(emulator: InventoryEmulator, *, user_home: str) -> str | None:
+    """The stable file an AppImage is installed as, or ``None`` when the row names none.
+
+    Taken from the row's own launch paths rather than built from the label: a release
+    asset is versioned (``PPSSPP-v1.20.4-anylinux-x86_64.AppImage``) and installing under
+    that name would leave the emulator on disk and undetectable at once. The first
+    ``~/Applications/*.AppImage`` candidate IS the name the picker probes, so it is the
+    name the download is written to.
+    """
+    for candidate in emulator.host_binaries:
+        if not candidate.startswith("~/"):
+            continue
+        relative = candidate[2:]
+        if relative.startswith(f"{APPIMAGE_DIR_NAME}/") and relative.lower().endswith(".appimage"):
+            return os.path.join(user_home, *relative.split("/"))
+    return None
+
+
+def digest_from_asset(asset: object) -> str | None:
+    """The ``sha256`` GitHub publishes for one release asset, or ``None``.
+
+    This is the whole verification story for a release build: the hash travels with the
+    asset from the project's own CI, so a download either matches the bytes that project
+    published or is refused. ``None`` is a refusal and not a fallback — an asset with no
+    digest is a file nobody can vouch for.
+    """
+    if not isinstance(asset, dict):
+        return None
+    digest = asset.get("digest")
+    if not isinstance(digest, str) or not digest.startswith("sha256:"):
+        return None
+    value = digest.split(":", 1)[1].strip().lower()
+    return value if len(value) == 64 and all(char in "0123456789abcdef" for char in value) else None

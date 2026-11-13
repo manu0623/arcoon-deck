@@ -209,6 +209,7 @@ class Plugin:
         self._settings_service = services["settings_service"]
         self._core_service = services["core_service"]
         self._core_provisioning_service = services["core_provisioning_service"]
+        self._emulator_provisioning_service = services["emulator_provisioning_service"]
         self._disc_service = services["disc_service"]
         self._version_switch_service = services["version_switch_service"]
         self._prune_service = services["prune_service"]
@@ -481,6 +482,17 @@ class Plugin:
         than raised, so a single unavailable core does not hide the ones that landed.
         """
         return await self._core_provisioning_service.ensure_for_system(system_name)
+
+    async def ensure_platform_emulators(self, system_name):
+        """Install this system's standalone emulators from the sources the inventory states.
+
+        The other half of :meth:`ensure_platform_cores`: Switch, PS3, 3DS and Wii U have no
+        libretro core at all, so for them a store or release install is the only way a game
+        launches. A store build goes through ``flatpak install --user``; a release build is
+        the project's own AppImage, refused unless its hash matches the release's. Rows
+        with no source come back under ``manual`` — an emulator this plugin cannot fetch.
+        """
+        return await self._emulator_provisioning_service.ensure_for_system(system_name)
 
     async def get_system_core_info(self, platform_slug):
         return await self._core_service.get_system_core_info(platform_slug)

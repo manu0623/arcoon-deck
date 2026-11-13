@@ -61,7 +61,32 @@ unnoticed because nothing read them for anything but detection.
 - Vita is deliberately **not** added. Vita3K's command line takes a *title id* (`-r
   PCSB00952`), and a path handed to it is an install, not a boot, so a path-based shortcut
   cannot launch a downloaded `.vpk`. A row that cannot launch is worse than a missing one.
-- Nothing downloads yet: this change states the plan and leaves fetching, hash checking,
-  writing and the save-folder link to the adapter that follows. A plan with no consumer
-  would be dead code, so `install_plan` is tested against the shipped document — including
-  the rule that every platform expected to be installable carries a source.
+## The install itself
+
+`adapters.emulator_install` carries out one plan:
+
+- **A store build** is `flatpak install --user -y flathub <id>` — the runtime installer's
+  own command, so nothing is written by this plugin and the store's signatures are the
+  verification. The resulting state decides success, not the exit code: `flatpak` exits
+  non-zero for a transaction it refused because the app is already installed.
+- **A release build** is fetched only after the release metadata states a hash for it
+  (`assets[].digest: "sha256:…"`). The download streams into `<target>.part` while being
+  hashed, a mismatch deletes the partial and leaves any existing install untouched, and an
+  asset with **no digest is refused** — a program that launches games is not something to
+  run on TLS alone. A local file whose hash already equals the release's is reported
+  `already_present` without downloading a byte, which is also how an update starts.
+- **The file name is the row's own first `~/Applications/*.AppImage` candidate**, never the
+  asset's. Assets are versioned (`PPSSPP-v1.20.4-anylinux-x86_64.AppImage`); installing
+  under that name would leave the emulator correct on disk and undetectable in the picker,
+  which is a worse failure than not installing it at all.
+
+`services.emulator_provisioning` iterates a system's rows that name a source, installs
+serially in the executor, and reports rows with no source under `manual` — "this plugin
+cannot fetch it" is an answer a surface can show, not an error. `main.ensure_platform_emulators`
+exposes it, mirroring `ensure_platform_cores`.
+
+## What is still not done
+
+The save-folder link (an emulator's own path pointing at the bank) is the next change, and
+this one deliberately leaves it out: an install that rearranges the user's saves before it
+has ever launched the emulator would be doing two risky things at once.

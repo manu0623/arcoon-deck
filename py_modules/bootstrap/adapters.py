@@ -31,6 +31,7 @@ from adapters.core_install import CoreInstallAdapter
 from adapters.cover_art_file_store import CoverArtFileStoreAdapter
 from adapters.debug_logger import SettingsAwareDebugLogger
 from adapters.download_file import DownloadFileAdapter
+from adapters.emulator_install import EmulatorInstallAdapter
 from adapters.emulator_save_base import EmulatorSaveBaseAdapter
 from adapters.es_find_rules import EsFindRulesAdapter
 from adapters.external_emulators import ExternalEmulatorsAdapter
@@ -184,6 +185,9 @@ class AdapterBundle:
     core_install: CoreInstallAdapter
     # Installs the owned runtime itself (the RetroArch Flatpak), so cores have a loader.
     runtime_install: RuntimeInstallAdapter
+    # Obtains the standalone emulators the inventory names a source for: a store build
+    # through flatpak, a release build as a hash-verified AppImage (ADR-0049).
+    emulator_install: EmulatorInstallAdapter
     external_emulators: ExternalEmulatorProvider
     retroarch_appendconfig: RetroArchAppendConfigFn
     retroarch_runner: RetroArchRunnerFn
@@ -629,6 +633,7 @@ def bootstrap(
         owned_catalogue=owned_catalogue,
         core_install=CoreInstallAdapter(cores_dir=retrodeck_paths.cores_path, logger=logger),
         runtime_install=RuntimeInstallAdapter(user_home=user_home, logger=logger),
+        emulator_install=EmulatorInstallAdapter(user_home=user_home, logger=logger),
         external_emulators=external_emulators,
         retroarch_appendconfig=retroarch_appendconfig.ensure,
         retroarch_runner=retroarch_runner,
