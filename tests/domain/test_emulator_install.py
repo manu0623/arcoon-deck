@@ -155,17 +155,25 @@ class TestTheShippedDocument:
         with open(path, encoding="utf-8") as handle:
             return json.load(handle)
 
-    def test_every_named_source_resolves_to_a_plan(self) -> None:
-        inventory = parse_inventory(self._document())
-        plans = {
-            emulator.label: install_plan(emulator)
-            for platform in {id(entry): entry for entry in inventory.values()}.values()
-            for emulator in platform.emulators
-            if emulator.kind == "standalone"
-        }
+    def _standalone(self, inventory: dict) -> list:
+        platforms = {id(entry): entry for entry in inventory.values()}.values()
+        return [row for platform in platforms for row in platform.emulators if row.kind == "standalone"]
 
-        assert plans, "the shipped inventory states no standalone emulator at all"
-        assert all(plan is not None for plan in plans.values()), plans
+    def test_every_named_source_resolves_to_a_plan(self) -> None:
+        rows = self._standalone(parse_inventory(self._document()))
+        named = [row for row in rows if row.install is not None]
+
+        assert named, "the shipped inventory states no source at all"
+        unresolved = [row.label for row in named if install_plan(row) is None]
+        assert not unresolved, unresolved
+
+    def test_a_row_without_a_source_stays_honest(self) -> None:
+        """Eden is the measured case: its GitHub mirror answers 451, so it is manual."""
+        rows = self._standalone(parse_inventory(self._document()))
+
+        manual = [row.label for row in rows if row.install is None]
+
+        assert manual == ["Eden (Standalone)"], manual
 
     def test_the_platforms_that_must_be_installable_carry_a_source(self) -> None:
         inventory = parse_inventory(self._document())

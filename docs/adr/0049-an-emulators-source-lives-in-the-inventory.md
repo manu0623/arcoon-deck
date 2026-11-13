@@ -85,6 +85,26 @@ serially in the executor, and reports rows with no source under `manual` — "th
 cannot fetch it" is an answer a surface can show, not an error. `main.ensure_platform_emulators`
 exposes it, mirroring `ensure_platform_cores`.
 
+## What the sources answered, measured on the reference Deck
+
+Four rows were checked against the live API before any of this was called done, and two
+of the assumptions did not survive:
+
+- **PPSSPP** — `v1.20.4`, `PPSSPP-v1.20.4-anylinux-x86_64.AppImage`, digest published.
+- **DuckStation** — the release attaches `DuckStation-x64.AppImage` **beside**
+  `DuckStation-x64-SSE2.AppImage`, so the first glob (`*x64*.AppImage`) matched two and was
+  refused by the ambiguity rule; the row now names the baseline build exactly. The digest is
+  published.
+- **Citron** — `citron-neo/emulator` answers 404 on both endpoints, and the builds live in
+  their CI repository as a **nightly** release, which `/releases/latest` never returns. That
+  is why the listing fallback exists; the x86_64 baseline asset is
+  `citron_nightly-*-linux-x86_64-use-nopgo.AppImage` (the `_v3` build beside it needs a
+  newer CPU, so it is not the default).
+- **Eden** — GitHub answers **451** for `eden-emulator/Releases`, and the `emuall/eden`
+  mirror carries no releases. Eden's own host is a Forgejo instance, whose API is not the
+  GitHub one; rather than ship a row that can only fail, Eden is left without a source and
+  reported as `manual`.
+
 ## What is still not done
 
 The save-folder link (an emulator's own path pointing at the bank) is the next change, and
