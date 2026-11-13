@@ -62,7 +62,7 @@ class EmulatorSaveLinkConfig:
     #: PS2's extra step, taken once PCSX2 is linked: the bank needs a folder memory
     #: card, and the libretro core's own card folder is pointed at it (it ignores
     #: ``savefile_directory`` for cards). ``None`` for a caller with no card source.
-    ps2_cards: Callable[[str], dict[str, str]] | None = None
+    ps2_cards: Callable[[str], dict[str, Any]] | None = None
 
 
 class EmulatorSaveLinkService:
@@ -113,7 +113,7 @@ class EmulatorSaveLinkService:
         cards = self._ensure_ps2_cards(outcomes, saves_root)
         return {"saves_root": saves_root, "links": outcomes, "ps2_cards": cards}
 
-    def _ensure_ps2_cards(self, outcomes: list[dict[str, Any]], saves_root: str) -> dict[str, str] | None:
+    def _ensure_ps2_cards(self, outcomes: list[dict[str, Any]], saves_root: str) -> dict[str, Any] | None:
         """The ps2 card step, run only when this pass linked PCSX2.
 
         Keyed off the link rather than the platform: a Deck with no PCSX2 installed has

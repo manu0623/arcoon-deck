@@ -171,3 +171,40 @@ class TestFileCardConversion:
         _adapter().ensure_folder_card(str(tmp_path))
 
         assert _adapter().ensure_folder_card(str(tmp_path)) == "present"
+
+
+class TestBothSlots:
+    """Slot 2 is not special: whatever card the bank holds is made syncable."""
+
+    def test_an_empty_bank_gets_slot_one(self, tmp_path):
+        assert _adapter().ensure_folder_cards(str(tmp_path)) == {FOLDER_CARD_NAME: "created"}
+
+    def test_a_second_file_card_is_converted_beside_the_first(self, tmp_path):
+        save_two = b"SECOND-CARD" * 300
+        (tmp_path / FOLDER_CARD_NAME).mkdir()
+        (tmp_path / FOLDER_CARD_NAME / PS2_SUPERBLOCK_FILE).write_bytes(b"\xff" * 0x2000)
+        (tmp_path / "Mcd002.ps2").write_bytes(build_file_card({FOLDER: {"save1": save_two}}))
+
+        status = _adapter().ensure_folder_cards(str(tmp_path))
+
+        assert status == {FOLDER_CARD_NAME: "present", "Mcd002.ps2": "converted"}
+        assert (tmp_path / "Mcd002.ps2" / FOLDER / "save1").read_bytes() == save_two
+        assert (tmp_path / "Mcd002.ps2" / PS2_SUPERBLOCK_FILE).is_file()
+        assert (tmp_path / "Mcd002.ps2.file-card-image").is_file()
+
+    def test_the_scan_reports_each_card_by_its_own_name(self, tmp_path):
+        (tmp_path / "Other.ps2").write_bytes(build_file_card({FOLDER: {"save1": b"x"}}))
+
+        status = _adapter().ensure_folder_cards(str(tmp_path))
+
+        assert status == {"Other.ps2": "converted"}
+
+    def test_an_unformatted_card_becomes_an_empty_folder_card(self, tmp_path):
+        # Slot 2 on the reference Deck: 8,650,752 bytes of 0xff, never used.
+        (tmp_path / "Mcd002.ps2").write_bytes(b"\xff" * 0x2000)
+
+        status = _adapter().ensure_folder_cards(str(tmp_path))
+
+        assert status == {"Mcd002.ps2": "replaced_blank"}
+        assert (tmp_path / "Mcd002.ps2").is_dir()
+        assert (tmp_path / "Mcd002.ps2" / PS2_SUPERBLOCK_FILE).is_file()

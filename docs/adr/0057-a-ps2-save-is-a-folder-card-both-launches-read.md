@@ -80,9 +80,13 @@ that gets rewritten.
   subfolders and sync can bundle just this game's.
 - It does not touch the superblock in an archive, and it does not create the per-serial
   subfolder: PCSX2 writes `SCUS-97198/` when the game saves.
-- It does not redirect a second slot (`Mcd002.ps2`). Slot 1 is the measured case; a user
-  with saves in slot 2 reaches the bank through the same linked folder but only slot 1's
-  card name is created.
+- It creates a card only when the bank holds none, and that one is slot 1's name. Every
+  other card in the bank is converted in place: the plugin finds cards by the ``.ps2``
+  extension rather than by a slot list, because a slot name is a PCSX2 setting a user may
+  change, and a card the emulator writes is a card whose saves must sync. Measured: slot 2
+  held 8,650,752 bytes of `0xff` — created but never formatted — so it was replaced with
+  an empty folder card; nothing was there to keep. An image that is not blank and does not
+  parse is still refused.
 - It does not keep the two halves of a round trip symmetric on its own. A ps2 save is
   carried as ONE archive (`<rom>.zip`, staged in `.arcoon-archive` beside the card), so
   `restores_by_extraction("ps2")` is true and a download unpacks that archive back into
