@@ -62,3 +62,29 @@ command on no evidence — the same mistake as guessing a save path.
 - It does not rewrite a shortcut whose *emulator* is wrong, only the spelling of the
   switches its emulator refuses. A command naming a different emulator than the one
   baked is replaced wholesale by the confirm-set, not repaired in place.
+
+## Amendment — `-nogui` becomes `-batch` (measured abort)
+
+A replacement is not always a respelling of the same switch. On the reference Deck,
+PCSX2 2.8.2 launched as
+
+```
+pcsx2-qt -fullscreen -nogui -- "/home/deck/.local/share/romm-tender/roms/ps2/Sly Cooper and the Thievius Raccoonus (USA).iso"
+```
+
+ran a game for seven minutes and then **died of SIGABRT** on the way out — twice in a
+row (`coredumpctl`: 16:12:44 and 16:13:24, both `pcsx2-qt` with that command line), with
+the abort raised from the process's own code rather than a signal from outside. Three
+minutes later the journal ends at 16:16:30 with no shutdown sequence and the Deck came back
+at 16:17:17: the session did not survive the emulator's exit.
+
+Upstream states the same failure: PCSX2 issue #7620 reports `-nogui` dying with
+`Unhandled page fault … assertion failed in function void SysPageFaultSignalFilter …
+Aborting application`, and that **batch mode works where `-nogui` does not**. Issue #7976
+and the LaunchBox thread reach the same workaround (`-batch`), and ES-DE's own ps2 entry on
+this Deck is `%EMULATOR_PCSX2% -batch %ROM%` with no `-nogui` at all.
+
+So `--nogui` and `-nogui` are rewritten to `-batch` for PCSX2. Both switches mean "close
+the emulator when the game shuts down", which is what a launcher needs; only one of them
+survives shutdown. Nothing else about the launch changes: `-fullscreen` is kept, `--` is
+kept, and every other emulator is untouched.

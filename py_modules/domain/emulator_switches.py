@@ -21,25 +21,36 @@ same mistake as guessing a save path.
 
 PCSX2's own list (https://pcsx2.net/docs/advanced/cli) states the single-dash forms
 and keeps ``--`` as the "no more arguments" separator, so ``--`` is never rewritten.
+
+A replacement need not be a respelling of the same switch. ``-nogui`` is rewritten to
+``-batch``, which is a *different* switch doing what the caller meant: PCSX2's Qt build
+aborts instead of running under ``-nogui`` (the page-fault handler asserts and calls
+``abort()``; upstream issue #7620 records that batch mode works where ``-nogui`` does
+not), and it was the switch in the command line of two real ``SIGABRT`` dumps on the
+reference Deck. Both imply "close when the game shuts down"; only one survives.
 """
 
 from __future__ import annotations
 
 import re
 
-#: Emulator name token -> {rejected switch: accepted switch}.
+#: Emulator name token -> {rejected switch: switch to bake instead}.
 #:
 #: The token is matched case-insensitively between alphanumeric boundaries, so
 #: ``net.pcsx2.PCSX2``, ``pcsx2-qt`` and ``%EMULATOR_PCSX2%`` all name PCSX2 while an
 #: unrelated command that merely contains the letters (``pcsx2nothing``) does not.
+#:
+#: Both spellings of ``nogui`` are listed: ``--nogui`` is rewritten first, so the bare
+#: ``-nogui`` rule only ever sees a command that used the single-dash form.
 SWITCH_SPELLINGS: dict[str, dict[str, str]] = {
     "pcsx2": {
         "--batch": "-batch",
         "--bigpicture": "-bigpicture",
         "--fastboot": "-fastboot",
         "--fullscreen": "-fullscreen",
-        "--nogui": "-nogui",
+        "--nogui": "-batch",
         "--slowboot": "-slowboot",
+        "-nogui": "-batch",
     },
 }
 

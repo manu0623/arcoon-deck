@@ -17,7 +17,19 @@ PCSX2_REJECTED = '/usr/bin/flatpak run net.pcsx2.PCSX2 --fullscreen --nogui -- %
 
 class TestNormaliseSwitches:
     def test_pcsx2_double_dash_switches_take_the_single_dash_form(self):
-        assert normalise_switches(PCSX2_REJECTED) == '/usr/bin/flatpak run net.pcsx2.PCSX2 -fullscreen -nogui -- %ROM%'
+        # ``--nogui`` lands on ``-batch`` rather than ``-nogui``: see the abort rule below.
+        assert normalise_switches(PCSX2_REJECTED) == '/usr/bin/flatpak run net.pcsx2.PCSX2 -fullscreen -batch -- %ROM%'
+
+    def test_nogui_becomes_batch_because_pcsx2_aborts_under_nogui(self):
+        # Measured: two SIGABRT dumps whose command line carried ``-nogui``, and
+        # upstream issue #7620 — the page-fault handler asserts and aborts, while
+        # batch mode runs. Both mean "close when the game shuts down".
+        assert normalise_switches("flatpak run net.pcsx2.PCSX2 -fullscreen -nogui -- %ROM%") == (
+            "flatpak run net.pcsx2.PCSX2 -fullscreen -batch -- %ROM%"
+        )
+        assert normalise_switches("%EMULATOR_PCSX2% --fullscreen --nogui -- %ROM%") == (
+            "%EMULATOR_PCSX2% -fullscreen -batch -- %ROM%"
+        )
 
     def test_the_positional_separator_survives(self):
         # PCSX2's own option list keeps ``--`` as "no more arguments"; only the
@@ -49,7 +61,7 @@ class TestNormaliseAtTheBake:
             "/games/ps2/Sly Cooper and the Thievius Raccoonus (USA).iso",
         )
         assert options == (
-            'flatpak run net.pcsx2.PCSX2 -fullscreen -nogui -- '
+            'flatpak run net.pcsx2.PCSX2 -fullscreen -batch -- '
             '"/games/ps2/Sly Cooper and the Thievius Raccoonus (USA).iso"'
         )
 
