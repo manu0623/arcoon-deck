@@ -202,6 +202,13 @@ _DEFINITIONS: tuple[EmulatorDef, ...] = (
             appimage_prefixes=("pcsx2",),
             binary_prefixes=("pcsx2",),
             launcher_names=("pcsx2-qt", "pcsx2"),
+            # Measured on the reference Deck: the plugin's own emulator install put
+            # ``net.pcsx2.PCSX2`` on this machine, and without this id the scan did not
+            # see it — ``flatpak list`` answered the app, ``identify_flatpak`` said no,
+            # so PCSX2 never appeared among the standalone emulators it had just
+            # installed. The flatpak's own tree (``config/PCSX2/inis/PCSX2.ini``) is the
+            # root ``domain.emulator_config`` already names for it.
+            flatpak_ids=("net.pcsx2.PCSX2",),
         ),
     ),
     EmulatorDef(

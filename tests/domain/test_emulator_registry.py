@@ -110,6 +110,9 @@ class TestIdentifyProviderSurfaces:
         for app_id, expected in (
             ("org.libretro.RetroArch", RETROARCH_ID),
             ("org.DolphinEmu.dolphin-emu", "dolphin"),
+            # Measured on the reference Deck: the plugin installed this flatpak and then
+            # could not see it, because the definition named no flatpak id at all.
+            ("net.pcsx2.PCSX2", "pcsx2"),
         ):
             found = identify_flatpak(app_id)
             assert found is not None, app_id
