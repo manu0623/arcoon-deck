@@ -28,6 +28,7 @@ rather than silently classifying everything as a refusal.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal
 
@@ -287,6 +288,51 @@ def owned_dolphin_answer(user_dir: str, *, content_installed: bool) -> SaveAnswe
         needs=(SAVE_REGION_NEED,),
         components=(),
         caveats=("file-names-unestablished",),
+        content_installed=content_installed,
+    )
+
+
+def owned_libretro_answer(
+    save_dir: str,
+    *,
+    rom_name: str,
+    emulator: str | None,
+    content_installed: bool,
+    extensions: Sequence[str] = ("srm", "rtc"),
+) -> SaveAnswer:
+    """The answer for a ROM launched by the plugin's OWNED RetroArch command.
+
+    Not a reading of an emulator catalogue, and deliberately so: the launch states where
+    the save goes. The generated ``--appendconfig`` sets ``savefile_directory`` to the
+    platform's bank directory, and RetroArch writes one file per game there, named after
+    the content — ``<stem>.srm``, plus ``<stem>.rtc`` for a core with a real-time clock.
+    Measured on the reference Deck (mGBA), RetroArch's own log: ``[Override] Redirecting
+    save file to ".../saves/gba/<stem>.srm"``.
+
+    Without this, a device with no ES-DE had no save answer at all for its own launches:
+    the resolver was asked for an entry labelled ``VBA-M`` in a catalogue that is not
+    installed, and every sync path reported ``save_shape_unsupported`` — a game whose save
+    path the plugin itself had just written was described as unestablished.
+
+    Listing ``.rtc`` beside ``.srm`` is safe because only files that exist are probed for
+    upload; a core without a clock simply has none. A core that keeps its save under some
+    other name (Caprice32, Opera) writes nothing these names match, and the sync finds
+    nothing rather than carrying a wrong file.
+    """
+    stem = os.path.splitext(rom_name)[0]
+    return SaveAnswer(
+        state=SAVE_STATE_PER_GAME_FILES,
+        unestablished=None,
+        emulator=emulator,
+        directory=save_dir,
+        backing_directory=None,
+        granularity="per-game files",
+        needs=(),
+        components=tuple(
+            SaveComponent(name=f"{stem}.{extension}", directory=save_dir, role="battery", granularity=None)
+            for extension in extensions
+        ),
+        caveats=(),
         content_installed=content_installed,
     )
 

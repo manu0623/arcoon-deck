@@ -406,13 +406,20 @@ class Plugin:
         the button exists for. When that dict names nothing, the synced platforms are the
         answer instead.
         """
-        enabled = [slug for slug, on in (self.settings.get("enabled_platforms") or {}).items() if on]
-        if not enabled:
-            enabled = await self._synced_platform_slugs()
-        return await self._core_provisioning_service.ensure_for_platforms(enabled)
+        return await self._core_provisioning_service.ensure_for_platforms(
+            await self._platforms_to_provision()
+        )
 
-    async def _synced_platform_slugs(self):
-        """The platform slugs this device knows about, preferring the ones it syncs."""
+    async def _platforms_to_provision(self):
+        """The platform slugs to sweep cores for, as slugs rather than ids.
+
+        ``enabled_platforms`` is keyed by RomM platform **id** (``{"1": true, …}``), so
+        handing its keys to a resolver that expects slugs reported every one of them as an
+        unknown system — which the button then read as "everything is installed" over a
+        device where nothing had been looked at. The ids are translated through the
+        platform list, and a list that cannot answer falls back to the platforms this
+        device syncs.
+        """
         try:
             answer = await self.get_platforms()
         except Exception as e:
@@ -421,6 +428,11 @@ class Plugin:
             self._debug_logger(f"core sweep: could not list platforms: {e}")
             return []
         platforms = answer.get("platforms") or [] if isinstance(answer, dict) else []
+        by_id = {str(p.get("id")): p.get("slug") for p in platforms if p.get("slug")}
+        enabled_ids = [str(key) for key, on in (self.settings.get("enabled_platforms") or {}).items() if on]
+        enabled = [by_id[platform_id] for platform_id in enabled_ids if platform_id in by_id]
+        if enabled:
+            return enabled
         synced = [p.get("slug") for p in platforms if p.get("sync_enabled") and p.get("slug")]
         return synced or [p.get("slug") for p in platforms if p.get("slug")]
 

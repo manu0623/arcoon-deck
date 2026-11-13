@@ -28,6 +28,7 @@ from domain.save_answer import (
     fill_save_id,
     manifest_answer,
     owned_dolphin_answer,
+    owned_libretro_answer,
     unestablished_answer,
 )
 from domain.save_bank import canonical_platform, restores_by_extraction
@@ -353,7 +354,20 @@ class RomInfoService:
         # An owned launch states where it will write, and that statement outranks any
         # catalogue reading: the catalogue models an emulator's DEFAULT user directory,
         # which on this Deck is not the directory the launched emulator uses.
-        if emulator is not None and emulator.user_dir is not None:
+        bank_dir = self._save_bank_dir(platform) if self._save_bank_dir is not None and platform else None
+        # The bank is on only while the launch is redirected into it, and a libretro launch
+        # is redirected by the appendconfig this plugin wrote — so the answer is the plugin's
+        # own statement, not a catalogue reading. Asking the catalogue here is what made every
+        # owned launch report an unestablished save: on a device with no ES-DE there is no
+        # entry labelled with the core's name, and sync was skipped for a path we wrote.
+        if bank_dir and (emulator is None or emulator.kind == "libretro"):
+            answer = owned_libretro_answer(
+                bank_dir,
+                rom_name=os.path.basename(content_path),
+                emulator=emulator.label if emulator is not None else None,
+                content_installed=installed,
+            )
+        elif emulator is not None and emulator.user_dir is not None:
             answer = owned_dolphin_answer(emulator.user_dir, content_installed=installed)
         else:
             answer = self._save_locations.resolve_save_answer(

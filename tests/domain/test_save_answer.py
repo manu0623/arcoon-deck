@@ -373,3 +373,49 @@ class TestFillSaveId:
         filled = fill_save_id(self._hole(granularity="shared-card"), "SLUS-20312")
 
         assert filled.state == SAVE_STATE_SHARED
+
+
+class TestOwnedLibretroAnswer:
+    """The answer an owned RetroArch launch states about itself.
+
+    The appendconfig the plugin writes sets the save directory, so the plugin knows
+    what the core will write and does not need to ask a catalogue — which on a device
+    with no ES-DE has no entry for a core's label at all.
+    """
+
+    def _answer(self, **overrides):
+        from domain.save_answer import owned_libretro_answer
+
+        kwargs = {
+            "rom_name": "Legend of Zelda, The - The Minish Cap (USA).gba",
+            "emulator": "mGBA",
+            "content_installed": True,
+        }
+        kwargs.update(overrides)
+        return owned_libretro_answer(_DIR, **kwargs)
+
+    def test_it_is_syncable_and_names_the_platform_directory(self) -> None:
+        answer = self._answer()
+
+        assert answer.state == SAVE_STATE_PER_GAME_FILES
+        assert answer.syncable is True
+        assert answer.directory == _DIR
+        assert answer.unestablished is None
+        assert answer.content_installed is True
+
+    def test_the_save_is_named_after_the_content_stem(self) -> None:
+        # RetroArch's own override log: "Redirecting save file to .../saves/gba/<stem>.srm".
+        answer = self._answer()
+
+        assert answer.synced_names == (
+            "Legend of Zelda, The - The Minish Cap (USA).srm",
+            "Legend of Zelda, The - The Minish Cap (USA).rtc",
+        )
+
+    def test_every_name_is_progress_so_none_is_withheld(self) -> None:
+        assert all(component.is_progress for component in self._answer().synced_files)
+
+    def test_a_dot_in_the_name_does_not_truncate_the_stem(self) -> None:
+        answer = self._answer(rom_name="Sonic 3.5 (USA).md")
+
+        assert answer.synced_names[0] == "Sonic 3.5 (USA).srm"
