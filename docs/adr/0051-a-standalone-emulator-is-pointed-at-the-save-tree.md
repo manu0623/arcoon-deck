@@ -68,14 +68,51 @@ The gate is `domain.emulator_save_link.links_emulator`, which reads the same tab
 reads, so a launch whose folder nothing points keeps the catalogue's answer — and its refusal —
 because the bank would describe a program that writes somewhere else.
 
+## 3DS, and the second emulator in the table
+
+Azahar is the second row, and it made two things general that the PSP row had got away with:
+
+- **The table is keyed by emulator, not family, and says which root the saves hang off.**
+  Azahar keeps its settings in `config/azahar-emu` and its NAND in `data/azahar-emu` —
+  measured on the reference Deck — so a row that only names a subdirectory of the *config*
+  root would have pointed at a directory the emulator never reads. A row is now
+  `(data-or-config, subdir)`. Keying by id rather than family matters for the same reason:
+  Citra shares Azahar's save format but not its directory, so an unverified sibling gets no
+  row instead of inheriting one.
+- **The discovery tree is as deep as the layout needs.** The 3DS rule enumerates
+  `id0/id1/title/<category>/<low id>/data` rather than inventing a level, which is seven
+  levels of listing; the two levels that were enough for a PSP prefix rule returned a
+  title with no members and no reason. `SaveLayout.tree_depth` states that fact next to the
+  layout instead of leaving it in the caller.
+- **A bank directory is not a redirect.** With 3DS answered, the bank-directory lookup had
+  to stop answering by family alone: a *libretro* 3DS core is not pointed anywhere by this
+  plugin, so the save answer now requires the family the appendconfig redirects for a
+  libretro launch and a linked emulator for a standalone one. The two sets live in
+  `domain.save_bank.LAUNCH_REDIRECTED_FAMILIES` and `domain.emulator_save_link`.
+
+Azahar's own settings directory was also wrong before this: `_LAYOUTS` said `azahar`, and
+the flatpak keeps both roots under `azahar-emu`. Its `qt-config.ini` was therefore never
+found, so its emulator entry read as unconfigured.
+
+**The title-id path was verified before anything was moved**, which is the rule this table
+now lives by: reading each installed `.3ds` on the reference Deck through the content
+identity adapter gave `00040000000ec300` (A Link Between Worlds) and `00040000000a0600`…
+`0004000000054000` (Super Mario 3D Land), and both ids exist as
+`title/<category>/<low id>` folders inside Azahar's `sdmc` — the same folders the title
+tree rule then resolved, with the neighbouring title (`00054000`, `0001d1e00`) excluded.
+An id that matched no folder would have meant the emulator was looked at through the
+wrong root, and the link would have moved saves nothing could name.
+
 ## What this does not do
 
 - **Other standalone emulators.** The mechanism generalises — one table row plus the bank answer
   above — but each family has to be *verified* before its row exists, and they fall into three
   groups:
-  - **A straight directory match, so a row is all it needs once checked on a device**: RPCS3's
-    `dev_hdd0/home/00000001/savedata`, Dolphin's `Wii/title/00010000`, Cemu's `mlc01/usr/save`,
-    Citra/Azahar's `sdmc`.
+  - **A straight directory match, so a row is all it needs once checked on a device**:
+    RPCS3's `dev_hdd0/home/00000001/savedata`, Dolphin's `Wii/title/00010000`, Cemu's
+    `mlc01/usr/save`, Citra's and Lime3DS's own `sdmc`. Each needs its path read on the
+    device before its row exists — Azahar's row is the example of what that verification
+    costs and buys.
   - **Answered already, unlinked**: the yuzu lineage's Switch tree is read from the emulator's own
     settings today (`_stated_platform_unit`), so it syncs without a link.
   - **Needs more than a link**: PS2 and GameCube saves are *cards* (one file holding many games),

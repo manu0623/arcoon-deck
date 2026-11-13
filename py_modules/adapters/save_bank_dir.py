@@ -10,29 +10,23 @@ So this adapter answers ``None`` unless the switch is on. A ``None`` makes the c
 keep the path it always used, which is the whole point: with the switch off, the plugin
 is byte-for-byte what it was, and with it on, both halves address the same directory.
 
-Only the libretro family is answered here. A standalone emulator (GameCube's GCI folder,
-a PS2 card, a 3DS title tree) writes where *it* decides, and the bank's family for those
-platforms describes a shape the emulator has not been pointed at yet — naming that
-directory as the place to read would promise a redirect nobody performs.
+Two families of redirect are answered. The launch the plugin writes itself (a RetroArch
+appendconfig) covers the libretro family, and a save link covers the emulators
+``domain.emulator_save_link`` points at the bank — Azahar's 3DS title tree is the second
+one. Everything else is ``None``: a standalone emulator nobody has pointed writes where
+*it* decides, and naming the bank for it would promise a redirect nobody performs.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from domain.save_bank import SaveFamily, layout_for, save_bank_base, save_bank_root
+from domain.emulator_save_link import linked_save_families
+from domain.save_bank import LAUNCH_REDIRECTED_FAMILIES, layout_for, save_bank_base, save_bank_root
 
 if TYPE_CHECKING:
     import logging
     from collections.abc import Callable
-
-
-#: The families a libretro launch can redirect into the bank. A plain per-ROM file and
-#: PSP's folder set are both written where the appendconfig says, so both have a bank
-#: directory to read. A standalone emulator's families (a PS2 card, a Dolphin card
-#: folder, a 3DS title tree) stay out: the bank describes a shape nothing has pointed
-#: that emulator at yet, and naming the directory would promise a redirect nobody makes.
-_REDIRECTED_FAMILIES = frozenset({SaveFamily.LIBRETRO_FILE, SaveFamily.PREFIX_BUNDLE})
 
 
 class SaveBankDirAdapter:
@@ -59,6 +53,10 @@ class SaveBankDirAdapter:
         if self._enabled is not None and not self._enabled():
             return None
         layout = layout_for(platform)
-        if layout.family not in _REDIRECTED_FAMILIES:
+        # A libretro family the plugin's own appendconfig redirects, or a family a save
+        # link points at the bank. The caller still decides which of the two applies to
+        # the launch it is answering for (``services/saves/rom_info``); this only says
+        # the directory is somebody's real save root.
+        if layout.family not in LAUNCH_REDIRECTED_FAMILIES and layout.family not in linked_save_families():
             return None
         return save_bank_base(save_bank_root(self._data_dir), platform)

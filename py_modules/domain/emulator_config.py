@@ -276,7 +276,11 @@ _LAYOUTS: dict[str, ConfigLayout] = {
     "primehack": ConfigLayout("primehack", "Dolphin.ini", ConfigFormat.INI),
     "ppsspp": ConfigLayout("ppsspp", "PSP/SYSTEM/ppsspp.ini", ConfigFormat.INI),
     "melonds": ConfigLayout("melonDS", "melonDS.toml", ConfigFormat.TOML),
-    "azahar": ConfigLayout("azahar", "qt-config.ini", ConfigFormat.INI),
+    # Azahar keeps BOTH roots under ``azahar-emu`` — measured on the reference Deck:
+    # ``config/azahar-emu/qt-config.ini`` beside ``data/azahar-emu/{nand,sdmc}``. The
+    # ``azahar`` spelling found neither, so its settings read as unconfigured and a save
+    # link would have pointed at a directory the emulator does not use.
+    "azahar": ConfigLayout("azahar-emu", "qt-config.ini", ConfigFormat.INI),
     "lime3ds": ConfigLayout("lime3ds", "qt-config.ini", ConfigFormat.INI),
     "citra": ConfigLayout("citra-emu", "qt-config.ini", ConfigFormat.INI),
     "eden": ConfigLayout("eden", "qt-config.ini", ConfigFormat.INI),

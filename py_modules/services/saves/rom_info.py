@@ -33,7 +33,13 @@ from domain.save_answer import (
     unestablished_answer,
     unit_answer,
 )
-from domain.save_bank import SaveFamily, canonical_platform, describe_unit, restores_by_extraction
+from domain.save_bank import (
+    LAUNCH_REDIRECTED_FAMILIES,
+    SaveFamily,
+    canonical_platform,
+    describe_unit,
+    restores_by_extraction,
+)
 from domain.save_bank import layout_for as save_layout_for
 from domain.save_layout import InSaveDir
 from domain.save_path import resolve_save_dir
@@ -378,8 +384,13 @@ class RomInfoService:
         pointed_standalone = (
             emulator is not None and emulator.kind == "standalone" and links_emulator(emulator.emulator)
         )
-        if bank_dir and (emulator is None or emulator.kind == "libretro" or pointed_standalone):
-            layout = save_layout_for(platform)
+        layout = save_layout_for(platform)
+        # A launch nobody resolved or a libretro launch is only the bank's business when the
+        # plugin's own appendconfig is what redirects it. The bank DIRECTORY exists for a
+        # linked standalone family too (3DS), and that family is not one a libretro core is
+        # pointed at — so the family, not the directory's existence, decides here.
+        redirected = (emulator is None or emulator.kind == "libretro") and (layout.family in LAUNCH_REDIRECTED_FAMILIES)
+        if bank_dir and (redirected or pointed_standalone):
             if layout.family is not SaveFamily.LIBRETRO_FILE:
                 # A redirected launch whose save is a folder set (PSP): the appendconfig
                 # states the directory, and the layout rule names the members from the
@@ -421,12 +432,14 @@ class RomInfoService:
         installed: bool,
         emulator: Any,
     ) -> SaveAnswer:
-        """The answer for a folder-shaped save the plugin's own launch redirects into the bank.
+        """The answer for a folder-shaped save a redirected launch writes into the bank.
 
-        PSP is the platform this exists for. Its save is a set of directories named after
-        the disc's id (``ULUS10064DATA00`` beside ``ULUS10064SETTINGS``), and the id is
-        read from the image's ``PSP_GAME/PARAM.SFO`` — nothing about the file's path
-        carries it.
+        PSP is the platform this was written for. Its save is a set of directories named
+        after the disc's id (``ULUS10064DATA00`` beside ``ULUS10064SETTINGS``), and the id
+        is read from the image's ``PSP_GAME/PARAM.SFO`` — nothing about the file's path
+        carries it. A 3DS save is the same idea one level deeper: the title id read from
+        the image's NCCH header names ``id0/id1/title/<category>/<low id>/data``, and the
+        tree handed to the rule is as deep as that layout needs (``layout.tree_depth``).
 
         Without an identity there is no answer, only the hole that says so: a guessed
         disc id points at another game's save, and a sync that writes it there is worse
@@ -437,9 +450,7 @@ class RomInfoService:
         hole can only rewrite the id, not re-resolve the member set the id decides.
         """
         identity = (
-            self._content_identity(content_path, platform)
-            if self._content_identity is not None and installed
-            else None
+            self._content_identity(content_path, platform) if self._content_identity is not None and installed else None
         )
         unit = describe_unit(
             layout,
@@ -447,7 +458,7 @@ class RomInfoService:
             base=bank_dir,
             save_id=save_id_text(identity) if identity is not None else None,
             rom_stem=os.path.splitext(os.path.basename(content_path))[0],
-            tree=self._shallow_tree(bank_dir, depth=2),
+            tree=self._shallow_tree(bank_dir, depth=layout.tree_depth),
         )
         return unit_answer(
             unit,
@@ -455,9 +466,7 @@ class RomInfoService:
             content_installed=installed,
         )
 
-    def _stated_platform_unit(
-        self, platform: str | None, content_path: str, installed: bool
-    ) -> Any | None:
+    def _stated_platform_unit(self, platform: str | None, content_path: str, installed: bool) -> Any | None:
         """The save unit a standalone emulator states for this ROM, or ``None``.
 
         Only the families whose rules are measured are described here: the yuzu lineage's

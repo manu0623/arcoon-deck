@@ -53,13 +53,14 @@ class _Roots:
         self.asked: list[str] = []
 
     class _Roots:
-        def __init__(self, config: str) -> None:
+        def __init__(self, config: str, data: str) -> None:
             self.config = config
+            self.data = data
 
     def root_variants(self, install: InstalledEmulator, *, app_dir: str) -> tuple[Any, ...]:
         self.asked.append(f"{install.provider}:{app_dir}")
         root = self._roots.get(install.provider)
-        return (self._Roots(root),) if root else ()
+        return (self._Roots(root, root.replace("/config/", "/data/")),) if root else ()
 
 
 class _Recorder:
@@ -97,9 +98,7 @@ def _service(
 
 NATIVE_PPSSPP = InstalledEmulator(definition=PPSSPP, provider="native", path="/home/deck/Applications/PPSSPP.AppImage")
 FLATPAK_PPSSPP = InstalledEmulator(definition=PPSSPP, provider="flatpak", path="org.ppsspp.PPSSPP")
-FLATPAK_DOLPHIN = InstalledEmulator(
-    definition=DOLPHIN, provider="flatpak", path="org.DolphinEmu.dolphin-emu"
-)
+FLATPAK_DOLPHIN = InstalledEmulator(definition=DOLPHIN, provider="flatpak", path="org.DolphinEmu.dolphin-emu")
 
 
 class TestSelection:
@@ -168,3 +167,32 @@ class TestSelection:
         assert entry["status"] == "linked"
         assert entry["adopted"] == 0
         assert entry["owned_dir"] == f"{SAVES}/psp/PSP/SAVEDATA"
+
+
+AZAHAR = EmulatorDef(
+    id="azahar",
+    display_name="Azahar",
+    family="citra",
+    platforms=("n3ds",),
+    hints=DetectionHints(flatpak_ids=("org.azahar_emu.Azahar",)),
+)
+
+FLATPAK_AZAHAR = InstalledEmulator(definition=AZAHAR, provider="flatpak", path="org.azahar_emu.Azahar")
+
+
+class TestTheDataRootedEmulator:
+    @pytest.mark.asyncio
+    async def test_the_sandbox_data_root_is_what_gets_pointed(self) -> None:
+        """Azahar's saves sit beside its data, and the data root the reader computes is
+        the sandbox's own — so the link lands inside the flatpak, not on the host."""
+        built, recorder, _ = _service(
+            [FLATPAK_AZAHAR],
+            {"flatpak": "/home/deck/.var/app/org.azahar_emu.Azahar/config/azahar-emu"},
+        )
+
+        answer = await built.ensure_all()
+
+        assert [entry["emulator_dir"] for entry in answer["links"]] == [
+            "/home/deck/.var/app/org.azahar_emu.Azahar/data/azahar-emu/sdmc/Nintendo 3DS"
+        ]
+        assert recorder.applied[0].owned_dir == f"{SAVES}/3ds/sdmc/Nintendo 3DS"

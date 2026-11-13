@@ -96,9 +96,7 @@ class TestOwnedLibretroSaveAnswer:
         assert answer.synced_names[0] == "Legend of Zelda, The - The Minish Cap (USA).srm"
 
     def test_the_catalogue_is_not_asked_for_a_launch_we_wrote(self) -> None:
-        service, catalogue = _service(
-            emulator=EmulatorInvocation.libretro("mgba_libretro", "mGBA"), bank_dir=_BANK_DIR
-        )
+        service, catalogue = _service(emulator=EmulatorInvocation.libretro("mgba_libretro", "mGBA"), bank_dir=_BANK_DIR)
 
         service.save_answer(_ROM_ID)
 
@@ -107,9 +105,7 @@ class TestOwnedLibretroSaveAnswer:
     def test_without_the_bank_the_catalogue_still_answers(self) -> None:
         # The bank is the switch that says the launch is redirected; with it off the
         # launch writes wherever the catalogue says, so the catalogue is asked.
-        service, catalogue = _service(
-            emulator=EmulatorInvocation.libretro("mgba_libretro", "mGBA"), bank_dir=None
-        )
+        service, catalogue = _service(emulator=EmulatorInvocation.libretro("mgba_libretro", "mGBA"), bank_dir=None)
 
         service.save_answer(_ROM_ID)
 
@@ -362,6 +358,7 @@ def test_a_fresh_psp_game_still_has_a_download_target() -> None:
     assert directory == os.path.join(os.path.dirname(_PSP_BASE), PACKED_ARCHIVE_DIR_NAME)
     assert extract_dir == _PSP_BASE
 
+
 def _standalone_ppsspp() -> EmulatorInvocation:
     """The AppImage the install action put in ~/Applications — the one the plugin links."""
     return EmulatorInvocation.standalone(
@@ -403,6 +400,124 @@ class TestPspStandaloneSaveAnswer:
         """DuckStation's folder is nobody's redirect yet, so claiming the bank here would
         describe a program that writes somewhere else."""
         service, catalogue = _psp_service(with_identity=True, emulator=_standalone_unlinked())
+
+        service.save_answer(_ROM_ID)
+
+        assert catalogue.calls != []
+
+
+_BANK_3DS = "/home/deck/.local/share/romm-tender/saves/3ds/sdmc/Nintendo 3DS"
+_ID0 = "0" * 32
+_ID1 = "0" * 32
+# Joined with the host's separator, because the layout rule joins the discovered levels
+# onto the base the same way: the keys must be the ones it will look up.
+_TITLE_ROOT = os.path.join(_BANK_3DS, _ID0, _ID1)
+
+
+class _N3dsStore:
+    """Azahar's save tree as it looks after the link: two titles, one of them ours."""
+
+    _TREE: ClassVar[dict[str, list[str]]] = {
+        _BANK_3DS: [_ID0],
+        os.path.join(_BANK_3DS, _ID0): [_ID1],
+        _TITLE_ROOT: ["title", "extdata"],
+        os.path.join(_TITLE_ROOT, "title"): ["00040000"],
+        os.path.join(_TITLE_ROOT, "title", "00040000"): ["000ec300", "00054000"],
+        os.path.join(_TITLE_ROOT, "title", "00040000", "000ec300"): ["data"],
+        os.path.join(_TITLE_ROOT, "title", "00040000", "000ec300", "data"): ["00000001"],
+        os.path.join(_TITLE_ROOT, "title", "00040000", "00054000"): ["data"],
+    }
+
+    def listdir(self, path: str) -> list[str]:
+        return self._TREE.get(path, [])
+
+    def is_file(self, path: str) -> bool:
+        return False
+
+    def exists(self, path: str) -> bool:
+        return False
+
+
+def _n3ds_service(*, emulator: EmulatorInvocation | None) -> tuple[RomInfoService, FakeSaveLocationReader]:
+    uow = FakeUnitOfWork()
+    with uow:
+        uow.roms.save(
+            Rom(
+                rom_id=_ROM_ID,
+                platform_slug="3ds",
+                name="The Legend of Zelda: A Link Between Worlds",
+                fs_name="Legend of Zelda A Link Between Worlds.3ds",
+                shortcut_app_id=4242,
+                last_synced_at="2025-01-01T00:00:00",
+            )
+        )
+        uow.rom_installs.save(
+            RomInstall.mark_installed(
+                rom_id=_ROM_ID,
+                file_path="/home/deck/Emulation/roms/n3ds/Legend of Zelda A Link Between Worlds.3ds",
+                rom_dir=None,
+                platform_slug="3ds",
+                system="3ds",
+                installed_at="2025-01-01T00:00:00",
+            )
+        )
+    catalogue = FakeSaveLocationReader()
+    service = RomInfoService(
+        config=RomInfoServiceConfig(
+            uow_factory=lambda: uow,
+            save_file_store=_N3dsStore(),
+            retrodeck_paths=FakeRetroDeckPaths(),
+            active_core=FakeActiveCoreResolver(default_emulator=emulator),
+            save_locations=catalogue,
+            resolve_system=lambda slug: slug,
+            get_core_name=lambda core: None,
+            logger=logging.getLogger("test_saves_owned_answer"),
+            save_bank_dir=lambda platform: _BANK_3DS,
+            content_identity=lambda path, platform: ContentIdentity(
+                save_id="00040000000ec300", kind=IdentityKind.TITLE_ID, source="test"
+            ),
+        )
+    )
+    return service, catalogue
+
+
+class Test3dsSaveAnswer:
+    """A 3DS save is one title's ``data`` (and ``extdata``) tree, named by the ROM's id.
+
+    Measured on the reference Deck: the ROM's NCCH header states ``00040000000ec300`` and
+    Azahar's ``sdmc/Nintendo 3DS`` holds that title under
+    ``title/00040000/000ec300/data`` — which is the tree this answer has to name, or the
+    sync carries the wrong game's folder.
+    """
+
+    def test_a_linked_azahar_launch_answers_from_the_bank(self) -> None:
+        service, catalogue = _n3ds_service(
+            emulator=EmulatorInvocation.standalone(
+                '"/usr/bin/flatpak" run org.azahar_emu.Azahar %ROM%',
+                label="Azahar (Flatpak)",
+                emulator="azahar",
+            )
+        )
+
+        answer = service.save_answer(_ROM_ID)
+
+        assert answer.syncable is True
+        assert answer.directory == _BANK_3DS
+        assert [component.name for component in answer.components] == ["data"]
+        assert answer.components[0].directory == os.path.join(_TITLE_ROOT, "title", "00040000", "000ec300")
+        assert catalogue.calls == []
+
+    def test_another_titles_folder_is_not_part_of_it(self) -> None:
+        service, _catalogue = _n3ds_service(emulator=EmulatorInvocation.standalone("azahar %ROM%", emulator="azahar"))
+
+        answer = service.save_answer(_ROM_ID)
+
+        assert all("00054000" not in component.directory for component in answer.components)
+
+    def test_an_unlinked_3ds_emulator_keeps_the_catalogue_refusal(self) -> None:
+        """Citra's tree is somewhere else, so claiming the bank would describe a program
+        that writes in a directory this answer never looks at."""
+        service, catalogue = _n3ds_service(emulator=EmulatorInvocation.standalone("citra-qt %ROM%", emulator="citra"))
 
         service.save_answer(_ROM_ID)
 

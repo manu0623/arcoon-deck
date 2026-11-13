@@ -52,11 +52,12 @@ class TestWhichPlatforms:
         # RomM says "ps1", the bank says "psx": one system, one directory.
         assert _adapter()("ps1") == os.path.join(DATA, "saves", "psx")
 
-    def test_a_standalone_platform_is_not_answered(self) -> None:
-        # 3DS saves live in Azahar's tree; the bank knows that shape but no launch has
-        # been pointed at it, so naming a directory here would promise a redirect nobody
-        # performs — and a sync would carry files from an empty folder.
-        assert _adapter()("n3ds") is None
+    def test_a_standalone_platform_nobody_points_is_not_answered(self) -> None:
+        # GameCube saves live in Dolphin's tree and Dreamcast's in Flycast's; the bank
+        # knows those shapes but no launch has been pointed at them, so naming a
+        # directory here would promise a redirect nobody performs — and a sync would
+        # carry files from an empty folder. (3DS moved the other way: Azahar is linked,
+        # which the next class pins.)
         assert _adapter()("gc") is None
         assert _adapter()("dreamcast") is None
 
@@ -64,3 +65,21 @@ class TestWhichPlatforms:
         # The bank treats anything unlisted as <stem>.srm in saves/<slug>, which is what
         # the appendconfig already redirects; answering keeps the two in step.
         assert _adapter()("some-new-platform") == os.path.join(DATA, "saves", "some-new-platform")
+
+
+class TestWhichFamiliesAnswer:
+    def test_a_redirected_libretro_platform_answers(self) -> None:
+        # The appendconfig the plugin writes sends these launches into the bank.
+        assert _adapter(lambda: True)("gba") == os.path.join(DATA, "saves", "gba")
+        assert _adapter(lambda: True)("psp") == os.path.join(DATA, "saves", "psp", "PSP", "SAVEDATA")
+
+    def test_a_linked_standalone_platform_answers(self) -> None:
+        # Azahar's title tree is a symlink into the bank (ADR-0051), so the bank is where
+        # its saves really are.
+        assert _adapter(lambda: True)("3ds") == os.path.join(DATA, "saves", "3ds", "sdmc", "Nintendo 3DS")
+
+    def test_a_platform_nobody_points_still_answers_nothing(self) -> None:
+        """Wii saves live where Dolphin decides; naming the bank would promise a redirect
+        nobody makes. (Whichever caller asks, the platform is not covered.)"""
+        assert _adapter(lambda: True)("wii") is None
+        assert _adapter(lambda: True)("gc") is None

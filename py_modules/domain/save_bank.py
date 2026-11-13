@@ -200,6 +200,17 @@ class SaveLayout:
     # ``SAVEDATA/PSP/SAVEDATA`` that no lookup reads.
     core_subdir: tuple[str, ...] = ()
 
+    @property
+    def tree_depth(self) -> int:
+        """How many directory levels below the base a discovery rule has to see.
+
+        A prefix rule reads the base's children and a per-ROM file reads the base itself,
+        so two levels cover both. A 3DS title is reached through
+        ``id0/id1/title/<category>/<low id>/data``: the rule enumerates each of those
+        levels rather than inventing one, which is why it has to be handed all seven.
+        """
+        return 7 if self.family is SaveFamily.N3DS_TITLE else 2
+
 
 # The platforms whose saves are not a plain per-ROM file. Everything absent from
 # this table is the libretro default — ``<rom_stem>.srm`` in ``saves/<slug>`` —
@@ -242,6 +253,12 @@ _PLATFORM_LAYOUTS: dict[str, SaveLayout] = {
     "gc": SaveLayout("gc", SaveFamily.GCI_SET, SaveUsage.FILE_PREFIX, ("gc", "Card A")),
     "dreamcast": SaveLayout("dreamcast", SaveFamily.DREAMCAST_VMU, SaveUsage.FILE_EXACT, ("dreamcast",)),
 }
+
+#: The families a launch the plugin itself writes (a RetroArch appendconfig) redirects
+#: into the bank. A standalone emulator reaches the bank through a save link instead, so
+#: its families are the ones ``domain.emulator_save_link`` declares — and the two sets
+#: are kept apart because a redirect the plugin did not make must not be claimed here.
+LAUNCH_REDIRECTED_FAMILIES = frozenset({SaveFamily.LIBRETRO_FILE, SaveFamily.PREFIX_BUNDLE})
 
 # RomM, Argosy and RomM's own client pick different spellings for four systems.
 # Normalising here means a caller never has to know which vocabulary it holds.

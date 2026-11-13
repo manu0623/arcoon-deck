@@ -1,10 +1,11 @@
 """Keep every standalone emulator pointed at the save tree the plugin syncs.
 
 The platforms this covers are the ones the plugin already redirects its own runtime
-into — today PSP, whose savedata is a folder set under ``<saves>/psp/PSP/SAVEDATA``.
-A standalone PPSSPP is the case the first measurement caught: installed by this
-plugin's own install action, it read an empty memory stick while the game's save sat
-in the plugin's directory.
+into — today PSP, whose savedata is a folder set under ``<saves>/psp/PSP/SAVEDATA``,
+and 3DS, whose title tree lives under ``<saves>/3ds/sdmc/Nintendo 3DS``. A standalone
+PPSSPP is the case the first measurement caught: installed by this plugin's own install
+action, it read an empty memory stick while the game's save sat in the plugin's
+directory.
 
 **Which providers take part is the domain's answer, not this service's.** An install
 whose emulator has a declared save subdir is linked at the folder *its* provider keeps
@@ -113,4 +114,7 @@ class EmulatorSaveLinkService:
         roots = self._config_reader.root_variants(install, app_dir=layout.app_dir)
         if not roots:
             return None
-        return link_for(install, config_root=roots[0].config, saves_root=saves_root)
+        # Both roots are handed over: which one the saves hang off is the emulator's own
+        # fact (``domain.emulator_save_link``), and the reader computed both together so a
+        # flatpak's ``data/`` is the sandbox's, never the host's.
+        return link_for(install, config_root=roots[0].config, data_root=roots[0].data, saves_root=saves_root)
