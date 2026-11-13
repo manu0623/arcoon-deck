@@ -193,6 +193,9 @@ class AdapterBundle:
     emulator_config: EmulatorConfigReader
     retroarch_appendconfig: RetroArchAppendConfigFn
     retroarch_runner: RetroArchRunnerFn
+    # Reads ``retroarch.cfg``, and answers the directory it sits in — the ps2 core's
+    # memory-card folder lives below that directory and is linked at the save bank.
+    retroarch_config: RetroArchConfigAdapter
     content_identity: ContentIdentityFn
     save_bank_dir: SaveBankDirFn
     # Reads a standalone emulator's own settings for the directory it keeps this
@@ -643,6 +646,7 @@ def bootstrap(
         emulator_config=emulator_config,
         retroarch_appendconfig=retroarch_appendconfig.ensure,
         retroarch_runner=retroarch_runner,
+        retroarch_config=retroarch_config,
         content_identity=content_identity,
         save_bank_dir=save_bank_dir,
         emulator_save_base=emulator_save_base,
