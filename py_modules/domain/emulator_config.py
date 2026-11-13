@@ -28,7 +28,6 @@ from __future__ import annotations
 import configparser
 import json
 import tomllib
-import xml.etree.ElementTree as ElementTree
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -182,7 +181,15 @@ def parse_xml(text: str) -> ConfigValues:
     Cemu's ``settings.xml`` nests sections as elements with one value element per
     setting, so the element *path* is the key and the leaf's text is the value. An
     element that holds children contributes no value of its own.
+
+    ``ElementTree`` is imported here rather than at module scope on purpose: Decky's
+    sandboxed Python ships without ``xml.etree``, so a module-level import made this
+    whole module — and every reader built on it — fail to import inside the plugin
+    (measured on the reference Deck, 0.44.0: ``ModuleNotFoundError: xml.etree`` at
+    plugin start). Only a Cemu settings read needs it, and only that read pays.
     """
+    import xml.etree.ElementTree as ElementTree
+
     try:
         root = ElementTree.fromstring(text)
     except ElementTree.ParseError:
