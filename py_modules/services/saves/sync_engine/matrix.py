@@ -68,7 +68,12 @@ def _novel_server_target(
     if server_target_filter is None:
         return None
     stem = server_save.get("file_name_no_tags") or ""
+    # RomM states the extension beside the name; a payload without it still carries the
+    # name, and the suffix of the file's own name is the same fact.
     extension = server_save.get("file_extension") or ""
+    if not extension:
+        name = server_save.get("file_name") or ""
+        extension = name.rpartition(".")[2] if "." in name else ""
     if not stem or not extension:
         return None
     target = f"{stem}.{extension}"
