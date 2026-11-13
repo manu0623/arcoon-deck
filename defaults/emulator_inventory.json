@@ -17,7 +17,8 @@
             ],
             "args": ["-b", "-e"],
             "flatpak": "org.DolphinEmu.dolphin-emu"
-          }
+          },
+          "install": {"flatpak": "org.DolphinEmu.dolphin-emu"}
         },
         {"label": "Dolphin (libretro)", "id": "dolphin", "kind": "libretro", "core": "dolphin_libretro"}
       ]
@@ -37,7 +38,8 @@
             ],
             "args": ["-b", "-e"],
             "flatpak": "org.DolphinEmu.dolphin-emu"
-          }
+          },
+          "install": {"flatpak": "org.DolphinEmu.dolphin-emu"}
         }
       ]
     },
@@ -56,6 +58,9 @@
             ],
             "args": ["-f", "-g"],
             "flatpak": "io.github.eden_emulator.Eden"
+          },
+          "install": {
+            "github": {"repo": "eden-emulator/Releases", "asset": "Eden-Linux-*-amd64-*.AppImage"}
           }
         },
         {
@@ -66,6 +71,9 @@
             "binaries": ["~/Applications/Citron.AppImage"],
             "args": ["-f", "-g"],
             "flatpak": "org.citron_emu.Citron"
+          },
+          "install": {
+            "github": {"repo": "citron-neo/emulator", "asset": "citron_*linux-x86_64.AppImage"}
           }
         }
       ]
@@ -86,7 +94,8 @@
             ],
             "args": ["--fullscreen", "--nogui", "--"],
             "flatpak": "net.pcsx2.PCSX2"
-          }
+          },
+          "install": {"flatpak": "net.pcsx2.PCSX2"}
         },
         {"label": "LRPS2", "id": "pcsx2", "kind": "libretro", "core": "pcsx2_libretro"}
       ]
@@ -110,6 +119,9 @@
             ],
             "args": ["-fullscreen", "-batch"],
             "flatpak": "org.duckstation.DuckStation"
+          },
+          "install": {
+            "github": {"repo": "stenzek/duckstation", "asset": "*x64*.AppImage"}
           }
         }
       ]
@@ -188,6 +200,10 @@
             ],
             "args": ["--fullscreen"],
             "flatpak": "org.ppsspp.PPSSPP"
+          },
+          "install": {
+            "flatpak": "org.ppsspp.PPSSPP",
+            "github": {"repo": "hrydgard/ppsspp", "asset": "PPSSPP-*-anylinux-x86_64.AppImage"}
           }
         }
       ]
@@ -198,6 +214,70 @@
       "emulators": [
         {"label": "melonDS", "id": "melonds", "kind": "libretro", "core": "melonds_libretro"},
         {"label": "DeSmuME", "id": "desmume", "kind": "libretro", "core": "desmume_libretro"}
+      ]
+    },
+
+    "ps3": {
+      "aliases": ["playstation3"],
+      "extensions": ["iso", "pkg", "bin", "self", "elf"],
+      "emulators": [
+        {
+          "label": "RPCS3 (Standalone)",
+          "id": "rpcs3",
+          "kind": "standalone",
+          "host": {
+            "binaries": [
+              "~/Applications/rpcs3.AppImage",
+              "~/Applications/RPCS3.AppImage",
+              "/usr/bin/rpcs3"
+            ],
+            "args": ["--no-gui"],
+            "flatpak": "net.rpcs3.RPCS3"
+          },
+          "install": {"flatpak": "net.rpcs3.RPCS3"}
+        }
+      ]
+    },
+    "n3ds": {
+      "aliases": ["3ds"],
+      "extensions": ["3ds", "cci", "cxi", "cia", "app", "axf"],
+      "emulators": [
+        {
+          "label": "Azahar (Standalone)",
+          "id": "azahar",
+          "kind": "standalone",
+          "host": {
+            "binaries": [
+              "~/Applications/azahar.AppImage",
+              "~/Applications/Azahar.AppImage",
+              "/usr/bin/azahar"
+            ],
+            "args": [],
+            "flatpak": "org.azahar_emu.Azahar"
+          },
+          "install": {"flatpak": "org.azahar_emu.Azahar"}
+        }
+      ]
+    },
+    "wiiu": {
+      "aliases": ["wiiu"],
+      "extensions": ["wud", "wux", "wua", "rpx", "wuhb", "squashfs"],
+      "emulators": [
+        {
+          "label": "Cemu (Standalone)",
+          "id": "cemu",
+          "kind": "standalone",
+          "host": {
+            "binaries": [
+              "~/Applications/Cemu.AppImage",
+              "~/Applications/cemu.AppImage",
+              "/usr/bin/Cemu"
+            ],
+            "args": ["-f", "-g"],
+            "flatpak": "info.cemu.Cemu"
+          },
+          "install": {"flatpak": "info.cemu.Cemu"}
+        }
       ]
     }
   }

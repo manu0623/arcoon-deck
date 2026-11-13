@@ -46,6 +46,39 @@ KINDS = ("libretro", "standalone")
 
 
 @dataclass(frozen=True)
+class InventoryGithubSource:
+    """A project's own GitHub release, as the one place its Linux build is published.
+
+    ``asset`` is a glob rather than a filename: the version is part of the name
+    (``PPSSPP-v1.20.4-anylinux-x86_64.AppImage``), and a pattern that names the arch and
+    the suffix survives a version bump without the document being edited.
+    """
+
+    repo: str
+    asset: str
+
+
+@dataclass(frozen=True)
+class InventoryInstall:
+    """Where an emulator can be obtained, when the document states a source at all.
+
+    Separate from :attr:`InventoryEmulator.flatpak`, which is a DETECTION hint: an
+    emulator can be installed as a flatpak this document never fetches (a third-party
+    build, or one a store no longer carries), and it can be fetchable from a release
+    while no store lists it. Stating the two as one field is what made three rows name
+    store ids that do not exist.
+    """
+
+    flatpak: str | None = None
+    github: InventoryGithubSource | None = None
+
+    @property
+    def available(self) -> bool:
+        """Whether anything can be fetched at all."""
+        return self.flatpak is not None or self.github is not None
+
+
+@dataclass(frozen=True)
 class InventoryEmulator:
     """One emulator an inventory platform offers, as the document states it."""
 
@@ -58,6 +91,9 @@ class InventoryEmulator:
     #: A Flatpak application id, tried after the binary paths: many emulators on a Deck
     #: are installed as a flatpak and never place a binary anywhere the plugin can see.
     flatpak: str | None = None
+    #: Where to get it, when the document names a source. ``None`` means "install this
+    #: one yourself": the row still launches an existing install, it just cannot fetch.
+    install: InventoryInstall | None = None
 
 
 @dataclass(frozen=True)
@@ -108,7 +144,33 @@ def _emulator(raw: Any) -> InventoryEmulator | None:
         host_binaries=_strings(host.get("binaries")),
         host_args=_strings(host.get("args")),
         flatpak=flatpak if isinstance(flatpak, str) and flatpak else None,
+        install=_install(raw.get("install")),
     )
+
+
+def _install(raw: Any) -> InventoryInstall | None:
+    """Parse an emulator's ``install`` block, or ``None`` when it states no usable source.
+
+    A block that names nothing fetchable (an empty object, a string, an id typo'd into a
+    list) parses to ``None`` rather than an :class:`InventoryInstall` with empty fields:
+    "install this by hand" is an answer, and a source that resolves to no command is not.
+    """
+    if not isinstance(raw, dict):
+        return None
+    flatpak = raw.get("flatpak")
+    github = raw.get("github") if isinstance(raw.get("github"), dict) else {}
+    repo = github.get("repo")
+    asset = github.get("asset")
+    source = (
+        InventoryGithubSource(repo=repo, asset=asset)
+        if isinstance(repo, str) and repo and isinstance(asset, str) and asset
+        else None
+    )
+    install = InventoryInstall(
+        flatpak=flatpak if isinstance(flatpak, str) and flatpak else None,
+        github=source,
+    )
+    return install if install.available else None
 
 
 def parse_inventory(document: Any) -> dict[str, InventoryPlatform]:
