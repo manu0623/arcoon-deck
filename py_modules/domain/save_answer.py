@@ -33,6 +33,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal
 
 from domain.owned_dolphin import gc_card_dir
+from domain.save_bank import restores_by_extraction
 from domain.save_layout import SAVE_SYNC_CONTENT_DIR_REASON
 
 if TYPE_CHECKING:
@@ -354,7 +355,11 @@ def unit_answer(unit: object, *, emulator: str | None, content_installed: bool) 
     base = getattr(unit, "base", None)
     needs = tuple(getattr(unit, "needs", ()))
     conflicts = tuple(getattr(unit, "conflicts", ()))
-    if not members or conflicts or not isinstance(base, str):
+    # A rule that needed nothing and matched nothing is a game that has not saved yet,
+    # not a hole: the place is known, so a server save has somewhere to land. PSP reaches
+    # this the first time a game is played on a device whose memory stick is empty.
+    empty_but_resolved = not needs and not conflicts and bool(getattr(unit, "identified", False))
+    if (not members and not empty_but_resolved) or conflicts or not isinstance(base, str):
         return SaveAnswer(
             state=SAVE_STATE_HOLE,
             unestablished=None,
@@ -367,7 +372,11 @@ def unit_answer(unit: object, *, emulator: str | None, content_installed: bool) 
             caveats=("file-names-unestablished",) if not members else (),
             content_installed=content_installed,
         )
-    folder = any(getattr(member, "is_directory", False) for member in members)
+    folder = (
+        restores_by_extraction(getattr(unit, "platform", ""))
+        if not members
+        else any(getattr(member, "is_directory", False) for member in members)
+    )
     return SaveAnswer(
         state=SAVE_STATE_PER_GAME_FILES,
         unestablished=None,

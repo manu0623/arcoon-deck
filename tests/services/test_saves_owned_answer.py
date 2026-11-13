@@ -21,7 +21,7 @@ from domain.content_identity import ContentIdentity, IdentityKind
 from domain.rom import Rom
 from domain.rom_install import RomInstall
 from domain.shortcut_data import EmulatorInvocation
-from services.saves.rom_info import RomInfoService, RomInfoServiceConfig
+from services.saves.rom_info import PACKED_ARCHIVE_DIR_NAME, RomInfoService, RomInfoServiceConfig
 
 _ROM_ID = 2171
 _GBA_FILE = "/home/deck/Emulation/roms/gba/Legend of Zelda, The - The Minish Cap (USA).gba"
@@ -326,3 +326,32 @@ class TestPspSaveAnswer:
         files = service.find_save_files(_ROM_ID)
 
         assert [entry["filename"] for entry in files] == ["ULUS10064DATA00", "ULUS10064SETTINGS"]
+
+
+class _EmptyPspStore(_PspStore):
+    """A memory stick the game has never written to."""
+
+    _TREE: ClassVar[dict[str, list[str]]] = {_PSP_BASE: []}
+
+    def is_dir(self, path: str) -> bool:
+        return path == _PSP_BASE
+
+    def exists(self, path: str) -> bool:
+        return path == _PSP_BASE
+
+
+def test_a_fresh_psp_game_still_has_a_download_target() -> None:
+    """Nothing local yet, so the unit synced is the archive the server's save extracts from."""
+    service, _catalogue = _psp_service(with_identity=True)
+    service._save_file_store = _EmptyPspStore()
+    info = service.get_rom_save_info(_ROM_ID)
+    assert info is not None
+
+    answer = service.save_answer(_ROM_ID)
+    assert answer.syncable is True
+
+    names, directory, extract_dir = service.save_unit(info, answer)
+
+    assert names == ("Burnout Legends.zip",)
+    assert directory == os.path.join(os.path.dirname(_PSP_BASE), PACKED_ARCHIVE_DIR_NAME)
+    assert extract_dir == _PSP_BASE

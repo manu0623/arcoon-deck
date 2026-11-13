@@ -650,18 +650,19 @@ class RomInfoService:
         title folder — it cannot live inside the folder it archives — where no emulator
         looks and the slot's own listing stays clean.
 
-        Nothing is packed unless the answer is a syncable ``title-dir`` with named members.
+        Nothing is packed unless the answer is a syncable ``title-dir``. An answer with no
+        members yet is still a target — the game has not saved, and the download of the
+        server's archive creates the folders — so the unit is named without an archive.
         """
         if answer.granularity != "title-dir" or not answer.syncable or not answer.directory:
             return None
         members = tuple(component.name for component in answer.synced_files)
-        if not members:
-            return None
         source_dir = answer.directory
         archive_dir = os.path.join(os.path.dirname(source_dir), PACKED_ARCHIVE_DIR_NAME)
         archive_name = f"{info['rom_name']}.zip"
-        self._save_file_store.create_archive(os.path.join(archive_dir, archive_name), source_dir, list(members))
-        self._logger.debug(f"SaveService: packed {len(members)} file(s) into {archive_name}")
+        if members:
+            self._save_file_store.create_archive(os.path.join(archive_dir, archive_name), source_dir, list(members))
+            self._logger.debug(f"SaveService: packed {len(members)} file(s) into {archive_name}")
         return PackedSaveUnit(archive_dir=archive_dir, archive_name=archive_name, source_dir=source_dir)
 
     def find_save_files(self, rom_id: int, *, save_answer: SaveAnswer | None = None) -> list[dict[str, str]]:
