@@ -40,10 +40,12 @@ import os
 import time
 from typing import TYPE_CHECKING, Any
 
+from domain.runtime import RuntimeMode, resolve_mode, resolve_roots
 from lib.retrodeck_health import RetroDeckConfigHealth
 
 if TYPE_CHECKING:
     import logging
+    from collections.abc import Callable, Mapping
 
 
 class RetroDeckPathsAdapter:
@@ -51,9 +53,19 @@ class RetroDeckPathsAdapter:
 
     _CACHE_TTL = 30  # seconds
 
-    def __init__(self, *, user_home: str, logger: logging.Logger) -> None:
+    def __init__(
+        self,
+        *,
+        user_home: str,
+        logger: logging.Logger,
+        settings: Callable[[], Mapping[str, object]] | None = None,
+    ) -> None:
         self._user_home = user_home
         self._logger = logger
+        # The live settings dict, when the caller has one. It carries the runtime choice
+        # and any per-root override, so this adapter can answer for a Deck that has no
+        # RetroDECK at all — see ``domain.runtime``.
+        self._settings = settings
         self._cached_config: dict[str, Any] | None = None
         self._cache_time = 0.0
         # Load outcome that distinguishes "no file" (ABSENT, quiet) from
@@ -110,17 +122,53 @@ class RetroDeckPathsAdapter:
                 return os.path.realpath(path)
         return os.path.realpath(os.path.join(self._user_home, "retrodeck", fallback_subdir))
 
+    def runtime_mode(self) -> RuntimeMode:
+        """Which runtime this device is driving, from the setting and what is installed.
+
+        ``ROOT_MISSING`` counts as present: the config exists and names a home that is not
+        on disk (an ejected card), which is a broken install of something installed — not
+        the absent case that hands the roots to the standalone tree.
+        """
+        present = self.config_health() in (RetroDeckConfigHealth.OK, RetroDeckConfigHealth.ROOT_MISSING)
+        setting = None if self._settings is None else self._settings().get("runtime_mode")
+        return resolve_mode(setting, retrodeck_present=present)
+
+    def _owned_root(self, name: str) -> str | None:
+        """The standalone tree's root *name*, or ``None`` while RetroDECK drives.
+
+        Resolved the same way the RetroDECK getters are (:func:`os.path.realpath`), so a
+        root spelled through ``/home`` does not become a second directory beside the same
+        one reached through ``/var/home`` (#1838).
+        """
+        if self.runtime_mode() is not RuntimeMode.STANDALONE:
+            return None
+        roots = resolve_roots(
+            mode=RuntimeMode.STANDALONE,
+            home=self._user_home,
+            retrodeck_roots={},
+            settings=None if self._settings is None else self._settings(),
+        )
+        return os.path.realpath(getattr(roots, name))
+
     def bios_path(self) -> str:
-        return self._get_path("bios_path", "bios")
+        return self._owned_root("bios") or self._get_path("bios_path", "bios")
 
     def roms_path(self) -> str:
-        return self._get_path("roms_path", "roms")
+        return self._owned_root("roms") or self._get_path("roms_path", "roms")
 
     def saves_path(self) -> str:
-        return self._get_path("saves_path", "saves")
+        return self._owned_root("saves") or self._get_path("saves_path", "saves")
 
     def states_path(self) -> str:
-        return self._get_path("states_path", "states")
+        return self._owned_root("states") or self._get_path("states_path", "states")
+
+    def cores_path(self) -> str:
+        """Where the owned runtime loads cores from, when it is the one driving.
+
+        Empty while RetroDECK drives: its cores live inside its own flatpak and are none
+        of this plugin's business.
+        """
+        return self._owned_root("cores") or ""
 
     def retrodeck_home(self) -> str:
         return self._get_path("rd_home_path", "")

@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from domain.owned_dolphin import user_dir_for
+from domain.runtime import resolve_launch_backend
 from domain.shortcut_data import RETRODECK_APP_ID
 from lib.late_binding import LateBinding
 from services.achievements import AchievementsService, AchievementsServiceConfig
@@ -144,7 +145,12 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             uow_factory=cfg.callbacks.uow_factory,
             core_info=cfg.adapters.core_info_provider,
             retroarch_appendconfig=cfg.adapters.retroarch_appendconfig,
-            launch_backend=lambda: cfg.stores.settings.get("launch_backend"),
+            # Read through ``domain.runtime`` so a Deck without RetroDECK bakes the owned
+            # RetroArch launch instead of a ``flatpak run net.retrodeck…`` that cannot start.
+            launch_backend=lambda: resolve_launch_backend(
+                cfg.stores.settings.get("launch_backend"),
+                mode=cfg.callbacks.retrodeck_paths.runtime_mode(),
+            ),
             retroarch_runner=cfg.adapters.retroarch_runner,
             standalone_user_dir=lambda platform: user_dir_for(platform, cfg.callbacks.retrodeck_paths.saves_path()),
             managed_layout=cfg.adapters.layout_manifest.entry_for,

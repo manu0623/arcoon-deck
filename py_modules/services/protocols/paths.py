@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from domain.firmware_wants import FirmwareCatalogue
     from domain.layout_manifest import ManagedPlatform
     from domain.retroarch_runner import RetroArchRunner
+    from domain.runtime import RuntimeMode
     from domain.save_answer import SaveAnswer
     from domain.save_layout import SaveLayout
     from domain.shortcut_data import EmulatorInvocation
@@ -98,6 +99,10 @@ class RetroDeckPaths(Protocol):
     def retrodeck_home(self) -> str: ...
 
     def config_path(self) -> str: ...
+
+    def runtime_mode(self) -> RuntimeMode: ...
+
+    def cores_path(self) -> str: ...
 
     def config_health(self) -> RetroDeckConfigHealth: ...
 

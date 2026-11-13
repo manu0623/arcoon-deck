@@ -69,6 +69,16 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # back per launch to the RetroDECK form when no direct install holds the core.
     # Only the literal value changes anything — see ``domain.retroarch_runner``.
     "launch_backend": "retrodeck",
+    # Which runtime the plugin drives: ``"auto"`` follows what is installed (RetroDECK
+    # when present, the plugin's own tree when not), and the other two force a side.
+    # See ``domain.runtime`` — the choice decides the roots AND the launcher.
+    "runtime_mode": "auto",
+    # Per-root overrides for the standalone tree; empty means "use the default"
+    # (``<home>/Emulation/<root>``). A cleared path must fall back, not point at nothing.
+    "roms_dir": "",
+    "saves_dir": "",
+    "bios_dir": "",
+    "cores_dir": "",
     # Whether libretro saves live in the plugin's own bank (``<data>/saves/<platform>``)
     # instead of the RetroArch directory. ONE switch for two halves that must agree: the
     # generated appendconfig that redirects the launch, and the directory the save lookup
