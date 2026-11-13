@@ -244,7 +244,8 @@ async def test_get_save_slots_happy_shape(harness):
 
 async def test_get_save_slots_sync_disabled_failure_shape(harness):
     """Sync disabled → failure shape WITH fallback fields the frontend renders."""
-    # save_sync_enabled defaults to False — do not enable it.
+    # save_sync_enabled ships on (ADR-0047), so this shape needs it turned off on purpose.
+    harness.plugin.settings["save_sync_enabled"] = False
     result = await harness.plugin.get_save_slots(42)
     assert result["success"] is False
     assert result["reason"] == "sync_disabled"
