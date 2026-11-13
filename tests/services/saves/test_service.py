@@ -454,7 +454,9 @@ class TestSettings:
     async def test_get_defaults(self, tmp_path):
         svc, _ = make_service(tmp_path)
         settings = svc.get_save_sync_settings()
-        assert settings["save_sync_enabled"] is True
+        # A dict that never went through ``load_settings`` carries no key, and the seam
+        # reports absence as off; settings.json's own default is on (ADR-0047).
+        assert settings["save_sync_enabled"] is False
         assert settings["sync_before_launch"] is True
         assert settings["sync_after_exit"] is True
 

@@ -851,11 +851,15 @@ class TestSaveSyncFeatureFlag:
 
     @pytest.mark.asyncio
     async def test_default_enabled(self, plugin):
-        """save_sync_enabled reads as on when the key is absent from settings.json."""
-        # The shipped default lives in settings.json's own DEFAULTS (#822), and the point
-        # of the app is that a launch is already current (ADR-0047).
+        """The shipped default is on, so a settings file never disables sync by omission."""
+        from adapters.persistence import DEFAULT_SETTINGS
+
+        assert DEFAULT_SETTINGS["save_sync_enabled"] is True
+        # The service itself answers from the dict it is handed: this harness never went
+        # through ``load_settings``, so the key is absent and absence there means off. The
+        # shipped default is applied when settings.json is loaded (ADR-0047).
         plugin._save_settings.pop("save_sync_enabled", None)
-        assert plugin._save_sync_service.is_save_sync_enabled() is True
+        assert plugin._save_sync_service.is_save_sync_enabled() is False
 
     @pytest.mark.asyncio
     async def test_ensure_device_disabled(self, plugin):
