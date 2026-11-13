@@ -527,6 +527,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             resolve_path=cfg.adapters.resolve_path,
             uow_factory=cfg.callbacks.uow_factory,
             relaunch_options=relaunch_options_resolver,
+            system_extensions=cfg.callbacks.system_extensions,
         ),
     )
 

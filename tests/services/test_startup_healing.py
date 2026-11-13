@@ -44,6 +44,8 @@ def _seed_install(
     file_path: str,
     rom_dir: str | None = None,
     rom: Rom | None = None,
+    launchable: bool = True,
+    system: str = "n64",
 ) -> None:
     """Seed the FK-parent Rom THEN its install record, in one commit.
 
@@ -54,8 +56,9 @@ def _seed_install(
         file_path=file_path,
         rom_dir=rom_dir,
         platform_slug="n64",
-        system="n64",
+        system=system,
         installed_at="2025-01-01T00:00:00",
+        launchable=launchable,
     )
     with uow:
         uow.roms.save(rom if rom is not None else _make_rom(rom_id))
@@ -71,6 +74,7 @@ def _make_service(
     uow: FakeUnitOfWork | None = None,
     clock: FakeClock | None = None,
     relaunch_options: FakeRelaunchOptionsResolver | None = None,
+    system_extensions=None,
 ) -> StartupHealingService:
     probe = path_probe if path_probe is not None else FakePathExistsReader(paths={retrodeck_home})
     return StartupHealingService(
@@ -82,6 +86,7 @@ def _make_service(
             resolve_path=resolve_path if resolve_path is not None else FakeResolvedPath(),
             uow_factory=FakeUnitOfWorkFactory(uow) if uow is not None else FakeUnitOfWorkFactory(),
             relaunch_options=relaunch_options if relaunch_options is not None else FakeRelaunchOptionsResolver(),
+            system_extensions=system_extensions if system_extensions is not None else (lambda system: frozenset()),
         ),
     )
 
@@ -308,6 +313,60 @@ class TestReconcileOrphanedSyncRuns:
         service.reconcile_orphaned_sync_runs()
 
         assert uow.sync_runs.save_count == 0
+
+
+class TestReconsiderLaunchability:
+    """A verdict recorded while the accept-list could not answer is re-derived.
+
+    Before ADR-0041 the owned inventory answered with bare ``gba`` where every reader
+    compares ``.gba``, so every download from an owned platform was written as
+    unlaunchable and its shortcut lost its launch command.
+    """
+
+    def test_promotes_an_install_the_corrected_list_accepts(self, logger):
+        uow = FakeUnitOfWork()
+        _seed_install(
+            uow, 1, file_path="/roms/gba/zelda.gba", system="gba", launchable=False
+        )
+        service = _make_service(
+            logger=logger, uow=uow, system_extensions=lambda system: frozenset({".gba"})
+        )
+
+        service.reconsider_launchability()
+
+        install = uow.rom_installs.get(1)
+        assert install is not None
+        assert install.launchable is True
+
+    def test_leaves_a_genuine_unlaunchable_verdict_alone(self, logger):
+        """A ``.pkg`` is absent from ps3's list, so the withhold stands."""
+        uow = FakeUnitOfWork()
+        _seed_install(
+            uow, 2, file_path="/roms/ps3/game.pkg", system="ps3", launchable=False
+        )
+        service = _make_service(
+            logger=logger, uow=uow, system_extensions=lambda system: frozenset({".iso"})
+        )
+
+        service.reconsider_launchability()
+
+        install = uow.rom_installs.get(2)
+        assert install is not None
+        assert install.launchable is False
+
+    def test_never_demotes_a_launchable_install(self, logger):
+        """Promotion only: a working install keeps its verdict whatever the list says."""
+        uow = FakeUnitOfWork()
+        _seed_install(uow, 3, file_path="/roms/n64/game.z64", launchable=True)
+        service = _make_service(
+            logger=logger, uow=uow, system_extensions=lambda system: frozenset({".gba"})
+        )
+
+        service.reconsider_launchability()
+
+        install = uow.rom_installs.get(3)
+        assert install is not None
+        assert install.launchable is True
 
 
 class TestGetInstalledRelaunchOptions:

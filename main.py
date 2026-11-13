@@ -224,6 +224,10 @@ class Plugin:
         # entries living under a pending migration's previous home.
         self._migration_service.detect_retrodeck_path_change()
         self._startup_healing_service.prune_stale_installed_roms()
+        # Before anything reads a shortcut's launch command: a verdict recorded while
+        # the accept-list could not answer withheld it, and the row carries the proof
+        # (ADR-0041).
+        self._startup_healing_service.reconsider_launchability()
         self._startup_healing_service.reconcile_orphaned_sync_runs()
         # No save-sync orphan prune: roms rows are permanent identity anchors
         # and saves/playtime survive a ROM leaving RomM (ADR-0007).

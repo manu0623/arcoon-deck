@@ -42,6 +42,12 @@ def _unavailable() -> dict[str, Any]:
     return {"available": False, "options": []}
 
 
+def _dotted(token: str) -> str:
+    """``gba`` → ``.gba``, ``.GBA`` → ``.gba``; the accept-list's one spelling."""
+    lowered = token.lower()
+    return lowered if lowered.startswith(".") else f".{lowered}"
+
+
 class OwnedCatalogueAdapter:
     """Answer emulator questions from the plugin's own inventory."""
 
@@ -122,12 +128,22 @@ class OwnedCatalogueAdapter:
         return self._core_installed(core_so)
 
     def get_supported_extensions(self, system_name: str) -> frozenset[str]:
-        """The accept-list the document declares, empty when it knows no such system."""
+        """The accept-list the document declares, empty when it knows no such system.
+
+        Tokens are dot-prefixed here, because the document stores them bare (``gba``)
+        and every reader compares them against ``os.path.splitext`` output (``.gba``)
+        — ES-DE's own list is dot-prefixed, so the two sources answer in one shape.
+        Normalising at this seam rather than in the document keeps the file readable
+        and keeps the inventory's one reader the only place that knows the spelling
+        (ADR-0041).
+        """
         inventory = self._parsed()
         if inventory is None:
             return frozenset()
         platform = inventory.get(system_name.lower())
-        return frozenset(platform.extensions) if platform is not None else frozenset()
+        if platform is None:
+            return frozenset()
+        return frozenset(_dotted(token) for token in platform.extensions)
 
     def is_known_system(self, system_name: str) -> bool | None:
         """``None`` when no document could be read; else whether it names the system."""

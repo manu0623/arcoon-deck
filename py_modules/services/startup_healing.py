@@ -11,15 +11,16 @@ wiped on the next reload.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from domain.installed_roms import is_pending_migration_path
 from domain.migration_paths import pending_homes_from_kv
+from domain.rom_files import is_launchable_target
 
 if TYPE_CHECKING:
     import logging
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from services.protocols import (
         Clock,
@@ -54,6 +55,9 @@ class StartupHealingServiceConfig:
     resolve_path: ResolvedPathFn
     uow_factory: UnitOfWorkFactory
     relaunch_options: RelaunchOptionsReader
+    # The live accept-list per system, so a verdict recorded when the list could not
+    # answer can be re-derived at startup (see ``reconsider_launchability``).
+    system_extensions: Callable[[str], frozenset[str]]
 
 
 class StartupHealingService:
@@ -67,6 +71,38 @@ class StartupHealingService:
         self._resolve_path = config.resolve_path
         self._uow_factory = config.uow_factory
         self._relaunch_options = config.relaunch_options
+        self._system_extensions = config.system_extensions
+
+    def reconsider_launchability(self) -> None:
+        """Promote installs wrongly recorded unlaunchable, now the accept-list answers.
+
+        ``launchable`` is written once, at download, by ``domain.rom_files.
+        is_launchable_target``. A verdict of ``False`` recorded against an accept-list
+        that could not answer for the system — every owned-platform install before
+        ADR-0041, where the inventory's bare ``gba`` never matched ``.gba`` — withholds
+        the shortcut's launch command and tells the reader the download has nothing the
+        emulator can launch, which is false.
+
+        The re-derivation runs the same predicate over the same recorded path, so it
+        is the download's verdict recomputed rather than a second opinion. Only
+        ``False → True`` is applied: a genuine unlaunchable install (a ``.pkg``
+        installer, a bare disc track) stays unlaunchable, and nothing proven working is
+        stripped.
+        """
+        promoted: list[int] = []
+        with self._uow_factory() as uow:
+            for install in list(uow.rom_installs.iter_all()):
+                if install.launchable:
+                    continue
+                extensions = self._system_extensions(install.system)
+                if not is_launchable_target(install.file_path, install.rom_dir, extensions):
+                    continue
+                uow.rom_installs.save(replace(install, launchable=True))
+                promoted.append(install.rom_id)
+        if promoted:
+            self._logger.info(
+                f"Reconsidered {len(promoted)} install(s) as launchable: {promoted[:10]}"
+            )
 
     def prune_stale_installed_roms(self) -> None:
         """Remove ``rom_installs`` rows whose files no longer exist on disk.
