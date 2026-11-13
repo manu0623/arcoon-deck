@@ -389,6 +389,14 @@ class Plugin:
     async def get_platform_core_info(self, rom_id):
         return await self._core_service.get_platform_core_info(rom_id)
 
+    async def ensure_libretro_runtime(self):
+        """Install the runtime the plugin drives, when there is none to start.
+
+        A Deck without RetroDECK has no RetroArch, and without one a core is a file
+        nothing loads. The install needs no password, so it can be done from Game Mode.
+        """
+        return await self._core_provisioning_service.ensure_runtime()
+
     async def ensure_platform_cores(self, system_name):
         """Install the libretro cores this system's inventory needs, verifying each.
 

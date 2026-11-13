@@ -30,13 +30,20 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class CoreProvisioningConfig:
-    """What the service needs: the inventory, the disk, the installer, and a loop."""
+    """What the service needs: the inventory, the disk, both installers, and a loop."""
 
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     inventory: Callable[[str], InventoryPlatform | None]
     installed: Callable[[str], bool]
     installer: Callable[[str], dict[str, Any]]
+    # The runtime itself: a core needs a program to load it, and on a Deck with neither
+    # RetroDECK nor RetroArch there is nothing to install cores *for*.
+    runtime_installed: Callable[[], bool]
+    runtime_installer: Callable[[], dict[str, Any]]
+    # Installing a flatpak on a device RetroDECK already drives would be a second runtime
+    # nobody launches; while it drives, this service has nothing to do.
+    runtime_is_standalone: Callable[[], bool]
 
 
 class CoreProvisioningService:
@@ -48,6 +55,24 @@ class CoreProvisioningService:
         self._inventory = config.inventory
         self._installed = config.installed
         self._installer = config.installer
+        self._runtime_installed = config.runtime_installed
+        self._runtime_installer = config.runtime_installer
+        self._runtime_is_standalone = config.runtime_is_standalone
+
+    async def ensure_runtime(self) -> dict[str, Any]:
+        """Make sure the plugin has a runtime it can start, installing it when it does not.
+
+        A ``RetroDECK`` runtime is ``skipped``: its RetroArch is inside its own flatpak and
+        installing a second one would be a program nothing launches. Otherwise the owned
+        runtime is the RetroArch Flatpak, installed per user so the install needs no
+        password — the one thing Game Mode cannot provide.
+        """
+        if not self._runtime_is_standalone():
+            return {"success": True, "skipped": "retrodeck"}
+        if self._runtime_installed():
+            return {"success": True, "already_present": True}
+        result = await self._loop.run_in_executor(None, self._runtime_installer)
+        return {"success": bool(result.get("ok")), **result}
 
     async def ensure_for_system(self, system_name: str) -> dict[str, Any]:
         """Install what *system_name* is missing and report every core's outcome.
@@ -62,16 +87,32 @@ class CoreProvisioningService:
         each and a batch is rarely more than one or two, so serialising them keeps the
         progress story simple and never blocks the event loop.
         """
+        # The runtime first: a core downloaded with no program to load it is a file, not a
+        # working platform. A failed runtime install does not stop the cores — they are still
+        # the right files for whenever a runtime appears — but it does make the answer fail.
+        runtime = await self.ensure_runtime()
         platform = self._inventory(system_name)
         if platform is None:
-            return {"success": False, "reason": "unknown_system", "system": system_name, "cores": []}
+            return {
+                "success": False,
+                "reason": "unknown_system",
+                "system": system_name,
+                "runtime": runtime,
+                "cores": [],
+            }
         wanted = [
             emulator.core_so
             for emulator in platform.emulators
             if emulator.kind == "libretro" and emulator.core_so
         ]
         if not wanted:
-            return {"success": False, "reason": "no_libretro", "system": system_name, "cores": []}
+            return {
+                "success": False,
+                "reason": "no_libretro",
+                "system": system_name,
+                "runtime": runtime,
+                "cores": [],
+            }
         missing = missing_cores(wanted, installed=self._installed)
         results: list[dict[str, Any]] = [
             await self._loop.run_in_executor(None, self._installer, core) for core in missing
@@ -83,8 +124,9 @@ class CoreProvisioningService:
         if failed:
             self._logger.warning(f"core_provisioning: {len(failed)} core(s) failed for {system_name}: {failed}")
         return {
-            "success": not failed,
+            "success": not failed and bool(runtime.get("success")),
             "system": system_name,
+            "runtime": runtime,
             "installed": installed,
             "failed": failed,
             "already_present": [core for core in wanted if core not in missing],

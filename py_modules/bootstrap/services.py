@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from domain.owned_dolphin import user_dir_for
-from domain.runtime import resolve_launch_backend
+from domain.runtime import RuntimeMode, resolve_launch_backend
 from domain.shortcut_data import RETRODECK_APP_ID
 from lib.late_binding import LateBinding
 from services.achievements import AchievementsService, AchievementsServiceConfig
@@ -486,6 +486,11 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             inventory=cfg.adapters.owned_catalogue.platform_for,
             installed=cfg.adapters.owned_catalogue.core_installed,
             installer=cfg.adapters.core_install.install,
+            runtime_installed=cfg.adapters.runtime_install.installed,
+            runtime_installer=cfg.adapters.runtime_install.install,
+            runtime_is_standalone=lambda: (
+                cfg.callbacks.retrodeck_paths.runtime_mode() is RuntimeMode.STANDALONE
+            ),
         ),
     )
 

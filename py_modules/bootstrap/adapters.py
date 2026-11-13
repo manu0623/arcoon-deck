@@ -63,6 +63,7 @@ from adapters.retrodeck_paths import RetroDeckPathsAdapter
 from adapters.rom_files import RomFileAdapter
 from adapters.romm.http import RommHttpAdapter
 from adapters.romm.romm_api import RommApiAdapter
+from adapters.runtime_install import RuntimeInstallAdapter
 from adapters.save_bank_dir import SaveBankDirAdapter
 from adapters.save_file import SaveFileAdapter
 from adapters.sgdb_artwork_cache import SgdbArtworkCacheAdapter
@@ -179,6 +180,8 @@ class AdapterBundle:
     owned_catalogue: OwnedCatalogueAdapter
     # Downloads a libretro core into the owned runtime's cores directory.
     core_install: CoreInstallAdapter
+    # Installs the owned runtime itself (the RetroArch Flatpak), so cores have a loader.
+    runtime_install: RuntimeInstallAdapter
     external_emulators: ExternalEmulatorProvider
     retroarch_appendconfig: RetroArchAppendConfigFn
     retroarch_runner: RetroArchRunnerFn
@@ -563,7 +566,12 @@ def bootstrap(
     # One switch, read live, so the redirect and the lookup it must agree with can never
     # be enabled by different means. Off by default: until the bank's directory is the one
     # a sync reads, redirecting into it would move saves somewhere nothing looks.
-    save_bank_enabled = lambda: bool(settings.get("save_bank"))  # noqa: E731 - one live read, not a name
+    # The bank is what redirects an owned RetroArch launch's saves into a directory the save
+    # layer reads. A STANDALONE runtime is launched by the plugin itself (domain.runtime), so
+    # the bank cannot be optional there: without the redirect the owned launch writes where
+    # no sync looks, which is a save that silently never reaches the server.
+    def save_bank_enabled() -> bool:
+        return bool(settings.get("save_bank")) or retrodeck_paths.runtime_mode() is RuntimeMode.STANDALONE
     retroarch_appendconfig = RetroArchAppendConfigAdapter(
         data_dir=locations.data_dir, logger=logger, enabled=save_bank_enabled
     )
@@ -601,6 +609,7 @@ def bootstrap(
         core_info_provider=emulator_catalogue,
         owned_catalogue=owned_catalogue,
         core_install=CoreInstallAdapter(cores_dir=retrodeck_paths.cores_path, logger=logger),
+        runtime_install=RuntimeInstallAdapter(user_home=user_home, logger=logger),
         external_emulators=external_emulators,
         retroarch_appendconfig=retroarch_appendconfig.ensure,
         retroarch_runner=retroarch_runner,
