@@ -673,7 +673,12 @@ class RomInfoService:
         members yet is still a target — the game has not saved, and the download of the
         server's archive creates the folders — so the unit is named without an archive.
         """
-        if answer.granularity != "title-dir" or not answer.syncable or not answer.directory:
+        # A PS2 card's unit is the game's folder inside the card, which RomM carries as
+        # one archive: the same shape as a Switch title directory, reached from a family
+        # whose answer does not say ``title-dir`` because the card is a folder set.
+        ps2_card = save_layout_for(info.get("system") or "").family is SaveFamily.PS2_CARD
+        packed = ps2_card or answer.granularity == "title-dir"
+        if not packed or not answer.syncable or not answer.directory:
             return None
         members = tuple(component.name for component in answer.synced_files)
         source_dir = answer.directory

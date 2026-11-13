@@ -83,3 +83,10 @@ that gets rewritten.
 - It does not redirect a second slot (`Mcd002.ps2`). Slot 1 is the measured case; a user
   with saves in slot 2 reaches the bank through the same linked folder but only slot 1's
   card name is created.
+- It does not keep the two halves of a round trip symmetric on its own. A ps2 save is
+  carried as ONE archive (`<rom>.zip`, staged in `.arcoon-archive` beside the card), so
+  `restores_by_extraction("ps2")` is true and a download unpacks that archive back into
+  the card folder. Measured: with the restore half missing, the upload succeeded
+  (`uploaded=1`) and the download then reported the server's row as "not a file this
+  emulator's answer carries" — an empty local unit names nothing, so nothing was ever
+  fetched.

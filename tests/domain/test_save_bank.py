@@ -24,6 +24,7 @@ from domain.save_bank import (
     ps2_card_superblock,
     ps2_name_matches,
     ps2_stem,
+    restores_by_extraction,
     save_bank_base,
     save_bank_root,
 )
@@ -490,3 +491,15 @@ class TestArchiveRootMatching:
         assert match_archive_root(layout_for("psp"), "ULJS00001DATA00", "ULUS10064") is None
         assert match_archive_root(layout_for("psp"), "", "ULUS10064") is None
         assert match_archive_root(layout_for("psp"), "ULUS10064", None) is None
+
+
+class TestRestoresByExtraction:
+    """Which families put a downloaded archive back by unpacking it."""
+
+    def test_a_ps2_card_restores_by_extraction(self) -> None:
+        # The unit is the game's folder inside the card; dropping the zip beside the
+        # card leaves PCSX2 reading a card without that save.
+        assert restores_by_extraction("ps2") is True
+
+    def test_a_plain_rom_file_platform_does_not(self) -> None:
+        assert restores_by_extraction("snes") is False

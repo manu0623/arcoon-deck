@@ -333,6 +333,13 @@ def restores_by_extraction(platform: str) -> bool:
         SaveFamily.SWITCH_TITLE,
         SaveFamily.PREFIX_BUNDLE,
         SaveFamily.N3DS_TITLE,
+        # A PS2 folder card's unit is the game's own folder INSIDE the card, and RomM
+        # carries it as one archive; writing that zip into the card directory leaves
+        # PCSX2 reading a card with no such save (measured: the upload packed
+        # ``<rom>.zip``, and a restore that dropped the zip beside ``Mcd001.ps2`` left
+        # the game offering to create a memory card). Extracting puts the folder back
+        # where PCSX2 reads it.
+        SaveFamily.PS2_CARD,
     }
 
 
