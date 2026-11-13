@@ -51,9 +51,13 @@ one unavailable core does not abort the batch, and the response separates `insta
 
 ## Consequences
 
-- `ensure_platform_cores(system_name)` is the trigger. It is explicit rather than automatic
-  on launch: a launch path that waits on a network transfer is a launch that hangs when the
-  network is down, and a core is a one-time install per platform.
+- The trigger is explicit rather than automatic on launch: a launch path that waits on a
+  network transfer is a launch that hangs when the network is down, and a core is a
+  one-time install per platform. `ensure_platform_cores(system_name)` answers for one
+  system and `ensure_all_platform_cores()` sweeps every enabled platform; **Settings →
+  Emulators & Cores → Install Missing Cores** is the button that calls the sweep. Until
+  that button existed the machinery had no caller in the UI, which is indistinguishable
+  from not having it.
 - A successful install is visible to everything else without a cache flush:
   `OwnedCatalogueAdapter` probes the cores directory on every answer by design, so the rows
   become bakeable as soon as the file is there.

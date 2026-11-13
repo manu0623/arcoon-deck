@@ -46,7 +46,8 @@ save the sync layer can find and a save written somewhere nothing reads.
 ## Consequences
 
 - A Deck with no RetroDECK and no emulators can install its runtime and its cores from the
-  plugin, needing no terminal.
+  plugin, needing no terminal — the trigger is Settings → Emulators & Cores → Install
+  Missing Cores, which calls `ensure_all_platform_cores()` (see ADR-0037).
 - Standalone saves live in the plugin's own bank (`<data>/saves/<platform>`), because that
   is what the owned launch redirects to. The `<home>/Emulation/saves` root remains the
   default for emulators that write their own tree (Dolphin's cards, Eden's title folders).
