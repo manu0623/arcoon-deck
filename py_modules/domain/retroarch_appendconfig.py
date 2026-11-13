@@ -149,7 +149,9 @@ def with_appendconfig(
     return replace(invocation, appendconfig=appendconfig)
 
 
-def appendconfig_dirs(*, data_dir: str, layout_subdir: tuple[str, ...]) -> tuple[str, str]:
+def appendconfig_dirs(
+    *, data_dir: str, layout_subdir: tuple[str, ...], core_subdir: tuple[str, ...] = ()
+) -> tuple[str, str]:
     """The ``(save_dir, state_dir)`` pair the generated file states.
 
     Split out from :func:`render_appendconfig` so the adapter cannot compose a save
@@ -157,7 +159,15 @@ def appendconfig_dirs(*, data_dir: str, layout_subdir: tuple[str, ...]) -> tuple
     :func:`domain.save_bank.layout_for`'s subdir, passed in rather than re-derived,
     and the state directory mirrors it under ``states/``. The platform is not a
     parameter because the subdir already is it — a second spelling could disagree.
+
+    *core_subdir* is the tail of *layout_subdir* the emulator builds for itself
+    (PPSSPP's ``PSP/SAVEDATA``). It is stripped from both directories, because a core
+    handed a folder creates that tree inside it: stating the whole subdir made the saves
+    land one level below the layout the lookup reads.
     """
-    save_dir = posixpath.join(data_dir, "saves", *layout_subdir)
-    state_dir = posixpath.join(data_dir, STATE_DIR_NAME, *layout_subdir)
+    stripped = layout_subdir
+    if core_subdir and layout_subdir[-len(core_subdir) :] == core_subdir:
+        stripped = layout_subdir[: -len(core_subdir)]
+    save_dir = posixpath.join(data_dir, "saves", *stripped)
+    state_dir = posixpath.join(data_dir, STATE_DIR_NAME, *stripped)
     return save_dir, state_dir

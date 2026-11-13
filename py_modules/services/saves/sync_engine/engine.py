@@ -325,9 +325,24 @@ class SyncEngine:
         device_id: str | None,
         system: str,
         default_slot: str | None = None,
+        restore_dir: str | None = None,
     ) -> None:
-        """Download a save file from server (delegate to :class:`MatrixExecutor`)."""
-        self._matrix.do_download_save(server_save, saves_dir, filename, save_state, device_id, system, default_slot)
+        """Download a save file from server (delegate to :class:`MatrixExecutor`).
+
+        *restore_dir* is where an extracting restore unpacks its members when that is
+        not the directory the download landed in — a unit RomM carries as one archive is
+        staged outside the folder it was packed from, so the folder has to be named.
+        """
+        self._matrix.do_download_save(
+            server_save,
+            saves_dir,
+            filename,
+            save_state,
+            device_id,
+            system,
+            default_slot,
+            restore_dir=restore_dir,
+        )
 
     def quarantine_local_file(self, saves_dir: str, filename: str) -> bool:
         """Back up a local save into ``.romm-backup`` (delegate to :class:`MatrixExecutor`)."""

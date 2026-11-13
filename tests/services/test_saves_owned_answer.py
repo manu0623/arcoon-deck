@@ -205,3 +205,122 @@ class TestStandalonePlatformSaveAnswer:
         service.save_answer(4242)
 
         assert catalogue.calls == []
+
+
+_PSP_FILE = "/home/deck/Emulation/roms/psp/Burnout Legends.iso"
+_PSP_BASE = "/home/deck/.local/share/romm-tender/saves/psp/PSP/SAVEDATA"
+
+
+class _PspStore:
+    """A PPSSPP memory stick holding one game's save folders.
+
+    The tree is the one the core writes once the appendconfig names ``saves/psp``:
+    it builds ``PSP/SAVEDATA`` itself, so the folders sit under the layout's base.
+    """
+
+    _TREE: ClassVar[dict[str, list[str]]] = {
+        _PSP_BASE: ["ULUS10064DATA00", "ULUS10064SETTINGS", "ULUS10567SYSDATA"],
+    }
+
+    def listdir(self, path: str) -> list[str]:
+        return self._TREE.get(path, [])
+
+    def is_file(self, path: str) -> bool:
+        return False
+
+    def is_dir(self, path: str) -> bool:
+        return path in self._TREE
+
+    def exists(self, path: str) -> bool:
+        return path in self._TREE
+
+
+def _psp_service(*, with_identity: bool) -> tuple[RomInfoService, FakeSaveLocationReader]:
+    uow = FakeUnitOfWork()
+    with uow:
+        uow.roms.save(
+            Rom(
+                rom_id=_ROM_ID,
+                platform_slug="psp",
+                name="Burnout Legends",
+                fs_name="Burnout Legends.iso",
+                shortcut_app_id=2222,
+                last_synced_at="2025-01-01T00:00:00",
+            )
+        )
+        uow.rom_installs.save(
+            RomInstall.mark_installed(
+                rom_id=_ROM_ID,
+                file_path=_PSP_FILE,
+                rom_dir=None,
+                platform_slug="psp",
+                system="psp",
+                installed_at="2025-01-01T00:00:00",
+            )
+        )
+    catalogue = FakeSaveLocationReader()
+    service = RomInfoService(
+        config=RomInfoServiceConfig(
+            uow_factory=lambda: uow,
+            save_file_store=_PspStore(),
+            retrodeck_paths=FakeRetroDeckPaths(),
+            active_core=FakeActiveCoreResolver(
+                default_emulator=EmulatorInvocation.libretro("ppsspp_libretro", "PPSSPP (libretro)")
+            ),
+            save_locations=catalogue,
+            resolve_system=lambda slug: slug,
+            get_core_name=lambda core: None,
+            logger=logging.getLogger("test_saves_owned_answer"),
+            save_bank_dir=lambda platform: _PSP_BASE,
+            content_identity=(
+                (lambda path, platform: ContentIdentity(save_id="ULUS10064", kind=IdentityKind.DISC_ID, source="test"))
+                if with_identity
+                else None
+            ),
+        )
+    )
+    return service, catalogue
+
+
+class TestPspSaveAnswer:
+    """A PSP save is the set of folders the disc id prefixes, not one file (ADR-0048)."""
+
+    def test_the_members_are_the_folders_carrying_the_disc_id(self) -> None:
+        service, _catalogue = _psp_service(with_identity=True)
+
+        answer = service.save_answer(_ROM_ID)
+
+        assert answer.syncable is True
+        assert answer.directory == _PSP_BASE
+        assert answer.granularity == "title-dir"
+        assert answer.synced_names == ("ULUS10064DATA00", "ULUS10064SETTINGS")
+
+    def test_another_games_folders_are_not_part_of_it(self) -> None:
+        service, _catalogue = _psp_service(with_identity=True)
+
+        answer = service.save_answer(_ROM_ID)
+
+        assert "ULUS10567SYSDATA" not in answer.synced_names
+
+    def test_without_an_identity_the_answer_is_a_hole(self) -> None:
+        service, _catalogue = _psp_service(with_identity=False)
+
+        answer = service.save_answer(_ROM_ID)
+
+        assert answer.syncable is False
+        assert "save_id" in answer.needs
+
+    def test_the_catalogue_is_never_asked(self) -> None:
+        service, catalogue = _psp_service(with_identity=True)
+
+        service.save_answer(_ROM_ID)
+
+        assert catalogue.calls == []
+
+    def test_a_save_folder_counts_as_a_local_save(self) -> None:
+        """The wizard has to see it, or it offers to adopt a save the machine already has."""
+        service, _catalogue = _psp_service(with_identity=True)
+
+        files = service.find_save_files(_ROM_ID)
+
+        assert [entry["filename"] for entry in files] == ["ULUS10064DATA00", "ULUS10064SETTINGS"]

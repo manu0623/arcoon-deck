@@ -20,10 +20,13 @@ front) the two steps are separate functions so the caller can read exactly what 
 needed.
 
 **Which formats are here, and why.** PS1/PS2 (serial on the boot line), Dreamcast
-(IP.BIN product number), GameCube (disc game code) and 3DS (NCCH program id). PSP is
-*not* here: its ``DISC_ID`` lives in ``PSP_GAME/PARAM.SFO``, reachable only by walking
-the ISO's directory tree, and inventing an offset for it would be a guess that reads
-zeroes on some images and a title id on others.
+(IP.BIN product number), GameCube (disc game code), 3DS (NCCH program id) and PSP
+(``DISC_ID`` in ``PSP_GAME/PARAM.SFO``). The PSP id has no fixed offset — it is a key in
+a table that lives in a file that lives in a directory the image itself describes — so
+this module also parses the two ISO 9660 structures needed to reach it (the volume
+descriptor's root record and one directory record). Walking them here rather than in the
+adapter keeps the format knowledge in one place; the adapter only chooses offsets to
+read.
 """
 
 from __future__ import annotations
@@ -83,6 +86,10 @@ class IdentityKind(StrEnum):
     """
 
     DISC_SERIAL = "disc_serial"
+    # A PSP ``DISC_ID`` is a serial too, but a differently shaped one (``ULUS10064``,
+    # no hyphen), and the bank's folder prefixes are matched verbatim rather than
+    # normalised, so the two vocabularies stay apart.
+    DISC_ID = "disc_id"
     TITLE_ID = "title_id"
     # A Switch title id is the same 16 hex digits as a 3DS one and is NOT filed the same
     # way: a 3DS save lives under ``title/<high 8>/<low 8>``, while Eden keeps one folder
@@ -247,6 +254,121 @@ def n3ds_title_id(ncch_head: bytes) -> ContentIdentity | None:
     if not _is_3ds_app(text):
         return None
     return ContentIdentity(save_id=text, kind=IdentityKind.TITLE_ID, source="3DS NCCH program id")
+
+
+# ISO 9660, for the PSP disc id. The volume descriptor sits at sector 16 and holds the
+# root directory's record at offset 156; every directory record then states its own
+# extent and length, little-endian, and names itself after a 32-byte prefix. A record
+# never straddles a sector: a zero length byte means "the rest of this sector is
+# padding", which is why the walk jumps a sector rather than stopping.
+_ISO_SECTOR = 2048
+_ISO_PVD_SECTOR = 16
+_ISO_DESCRIPTOR_TYPE_PRIMARY = 1
+_ISO_DESCRIPTOR_MAGIC = b"CD001"
+_ISO_ROOT_RECORD_OFFSET = 156
+_ISO_RECORD_MIN = 34
+_ISO_NAME_OFFSET = 32
+
+# PARAM.SFO: a ``\x00PSF`` header states where the key table, the value table and the
+# entries start; each entry names a key and points at its value. DISC_ID is the entry
+# this reads, and the magic is checked because a plausible-looking run of bytes at a
+# plausible offset is not an id.
+_SFO_MAGIC = b"\x00PSF"
+_SFO_HEADER_SIZE = 20
+_SFO_ENTRY_SIZE = 16
+_SFO_MAX_ENTRIES = 64
+_PSP_DISC_ID = re.compile(r"[A-Z]{4}[0-9]{5}")
+
+
+def iso9660_root_directory(pvd: bytes) -> tuple[int, int] | None:
+    """The ``(extent, size)`` of an image's root directory, from its volume descriptor.
+
+    *pvd* is the 2048-byte primary volume descriptor (sector 16). A disc that does not
+    start one there answers ``None``: a UDF-only or compressed image is not something
+    this reader can walk, and reading the record from a sector that is not a descriptor
+    would hand back an extent that points anywhere.
+    """
+    if len(pvd) < _ISO_PVD_SECTOR or pvd[0] != _ISO_DESCRIPTOR_TYPE_PRIMARY:
+        return None
+    if pvd[1:6] != _ISO_DESCRIPTOR_MAGIC:
+        return None
+    record = pvd[_ISO_ROOT_RECORD_OFFSET : _ISO_ROOT_RECORD_OFFSET + _ISO_RECORD_MIN]
+    if len(record) < _ISO_RECORD_MIN or record[0] < _ISO_RECORD_MIN:
+        return None
+    return int.from_bytes(record[2:6], "little"), int.from_bytes(record[10:14], "little")
+
+
+def iso9660_entry(directory: bytes, name: str) -> tuple[int, int] | None:
+    """The ``(extent, size)`` of *name* inside one directory's bytes, or ``None``.
+
+    The name is compared case-insensitively and without the ``;1`` version suffix an
+    ISO 9660 writer appends, because both spellings name the same entry and the images
+    in the wild use each.
+    """
+    wanted = name.strip().upper()
+    offset = 0
+    while offset + _ISO_RECORD_MIN <= len(directory):
+        length = directory[offset]
+        if length == 0:
+            offset = (offset // _ISO_SECTOR + 1) * _ISO_SECTOR
+            continue
+        if length < _ISO_RECORD_MIN or offset + length > len(directory):
+            return None
+        record = directory[offset : offset + length]
+        name_length = record[_ISO_NAME_OFFSET]
+        raw = record[_ISO_NAME_OFFSET + 1 : _ISO_NAME_OFFSET + 1 + name_length]
+        entry = raw.decode("ascii", errors="replace").split(";")[0].strip().upper()
+        if entry == wanted:
+            return int.from_bytes(record[2:6], "little"), int.from_bytes(record[10:14], "little")
+        offset += length
+    return None
+
+
+def psp_disc_id(sfo: bytes) -> ContentIdentity | None:
+    """The ``DISC_ID`` (``ULUS10064``, ``ULES00502``) from a PSP ``PARAM.SFO``, or ``None``.
+
+    This is the id PPSSPP names a save folder with (``ULUS10064DATA00`` beside
+    ``ULUS10064SETTINGS``), so it is the id the bank's prefix rule matches on. The shape
+    is validated rather than trusted: four letters and five digits is what a disc id
+    looks like, and an entry whose bytes are not that is a mis-read table, not an id.
+    """
+    entries = _sfo_entries(sfo)
+    if entries is None:
+        return None
+    for key, value in entries:
+        if key != "DISC_ID":
+            continue
+        text = value.decode("ascii", errors="replace").replace("\x00", "").strip().upper()
+        if _PSP_DISC_ID.fullmatch(text):
+            return ContentIdentity(save_id=text, kind=IdentityKind.DISC_ID, source="PSP PARAM.SFO DISC_ID")
+        return None
+    return None
+
+
+def _sfo_entries(sfo: bytes) -> list[tuple[str, bytes]] | None:
+    """Every ``(key, value)`` pair a PARAM.SFO states, or ``None`` when it is not one."""
+    if len(sfo) < _SFO_HEADER_SIZE or sfo[:4] != _SFO_MAGIC:
+        return None
+    key_table = int.from_bytes(sfo[8:12], "little")
+    data_table = int.from_bytes(sfo[12:16], "little")
+    count = int.from_bytes(sfo[16:20], "little")
+    entries: list[tuple[str, bytes]] = []
+    for index in range(min(count, _SFO_MAX_ENTRIES)):
+        base = _SFO_HEADER_SIZE + index * _SFO_ENTRY_SIZE
+        if base + _SFO_ENTRY_SIZE > len(sfo):
+            return None
+        key_offset = int.from_bytes(sfo[base : base + 2], "little")
+        length = int.from_bytes(sfo[base + 4 : base + 8], "little")
+        data_offset = int.from_bytes(sfo[base + 12 : base + 16], "little")
+        start = key_table + key_offset
+        end = sfo.find(b"\x00", start)
+        if start >= len(sfo) or end < 0:
+            return None
+        value_start = data_table + data_offset
+        entries.append(
+            (sfo[start:end].decode("ascii", errors="replace"), sfo[value_start : value_start + length])
+        )
+    return entries
 
 
 def save_id_text(identity: ContentIdentity) -> str:

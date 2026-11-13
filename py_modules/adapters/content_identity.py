@@ -23,8 +23,11 @@ from domain.content_identity import (
     disc_serial,
     dreamcast_product_number,
     gamecube_game_code,
+    iso9660_entry,
+    iso9660_root_directory,
     n3ds_partition_offset,
     n3ds_title_id,
+    psp_disc_id,
     rvz_gamecube_game_code,
 )
 from domain.switch_title_id import title_id_from_nsp
@@ -47,10 +50,19 @@ _DISC_SERIAL_PLATFORMS = frozenset({"psx", "ps1", "ps2", "playstation", "playsta
 _GAMECUBE_PLATFORMS = frozenset({"gc", "ngc", "gamecube", "gcn"})
 _DREAMCAST_PLATFORMS = frozenset({"dreamcast", "dc"})
 _N3DS_PLATFORMS = frozenset({"n3ds", "3ds"})
+_PSP_PLATFORMS = frozenset({"psp"})
 _SWITCH_PLATFORMS = frozenset({"switch", "nsw"})
 # An ``.nsp`` keeps its ticket list in the PFS0 header's string table, which sits in the
 # first few kilobytes; 64 KiB is margin, not a scan.
 _NSP_HEAD_BYTES = 0x10000
+# ISO 9660, for the PSP disc id: one sector for the volume descriptor, whole directories
+# for the two records the walk reads, and one file for the SFO. Every bound is a real
+# limit rather than a scan — a PSP_GAME directory listing is a few sectors, and a
+# PARAM.SFO is a few hundred bytes.
+_ISO_SECTOR = 2048
+_ISO_PVD_OFFSET = 16 * _ISO_SECTOR
+_ISO_DIRECTORY_MAX = 1 << 16
+_SFO_MAX_BYTES = 1 << 16
 
 
 class ContentIdentityAdapter:
@@ -78,6 +90,8 @@ class ContentIdentityAdapter:
                 return self._switch(path)
             if slug in _DISC_SERIAL_PLATFORMS:
                 return disc_serial(self._read(path, 0, _DISC_HEAD_BYTES).decode("latin-1", errors="replace"))
+            if slug in _PSP_PLATFORMS:
+                return self._psp(path)
             if slug in _DREAMCAST_PLATFORMS:
                 return dreamcast_product_number(self._read(path, 0, _SECTOR_HEAD_BYTES))
             if slug in _GAMECUBE_PLATFORMS:
@@ -89,6 +103,39 @@ class ContentIdentityAdapter:
             self._logger.warning(f"content_identity: cannot read {os.path.basename(path)}: {exc}")
             return None
         return None
+
+    def _psp(self, path: str) -> ContentIdentity | None:
+        """Three reads: the volume descriptor, two directory records, then the SFO.
+
+        A PSP image is a plain ISO 9660 disc and the id lives in ``PSP_GAME/PARAM.SFO``,
+        so the reader walks the directory tree the image itself describes. Every step
+        refuses rather than guessing — a compressed image (``.cso``/``.zso``) is not
+        addressable this way, and reading a "sector" out of a compressed stream would
+        hand back bytes that mean nothing.
+        """
+        root = iso9660_root_directory(self._read(path, _ISO_PVD_OFFSET, _ISO_SECTOR))
+        if root is None:
+            self._logger.warning(f"content_identity: no ISO 9660 volume descriptor in {os.path.basename(path)}")
+            return None
+        game_dir = self._iso_entry(path, root, "PSP_GAME")
+        if game_dir is None:
+            self._logger.warning(f"content_identity: no PSP_GAME directory in {os.path.basename(path)}")
+            return None
+        sfo = self._iso_entry(path, game_dir, "PARAM.SFO")
+        if sfo is None:
+            self._logger.warning(f"content_identity: no PSP_GAME/PARAM.SFO in {os.path.basename(path)}")
+            return None
+        identity = psp_disc_id(self._read(path, sfo[0] * _ISO_SECTOR, min(sfo[1], _SFO_MAX_BYTES)))
+        if identity is None:
+            self._logger.warning(f"content_identity: no DISC_ID in {os.path.basename(path)}")
+        return identity
+
+    def _iso_entry(self, path: str, extent: tuple[int, int], name: str) -> tuple[int, int] | None:
+        """One directory record inside *extent*, read from the image it describes."""
+        lba, size = extent
+        if size <= 0 or size > _ISO_DIRECTORY_MAX:
+            return None
+        return iso9660_entry(self._read(path, lba * _ISO_SECTOR, size), name)
 
     def _switch(self, path: str) -> ContentIdentity | None:
         """One bounded read: a PFS0 head, whose ticket names carry the title id.

@@ -27,6 +27,14 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 
+#: The families a libretro launch can redirect into the bank. A plain per-ROM file and
+#: PSP's folder set are both written where the appendconfig says, so both have a bank
+#: directory to read. A standalone emulator's families (a PS2 card, a Dolphin card
+#: folder, a 3DS title tree) stay out: the bank describes a shape nothing has pointed
+#: that emulator at yet, and naming the directory would promise a redirect nobody makes.
+_REDIRECTED_FAMILIES = frozenset({SaveFamily.LIBRETRO_FILE, SaveFamily.PREFIX_BUNDLE})
+
+
 class SaveBankDirAdapter:
     """The bank directory for one platform, or ``None`` when the bank is not in use."""
 
@@ -51,6 +59,6 @@ class SaveBankDirAdapter:
         if self._enabled is not None and not self._enabled():
             return None
         layout = layout_for(platform)
-        if layout.family is not SaveFamily.LIBRETRO_FILE:
+        if layout.family not in _REDIRECTED_FAMILIES:
             return None
         return save_bank_base(save_bank_root(self._data_dir), platform)

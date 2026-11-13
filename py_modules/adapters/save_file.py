@@ -136,7 +136,17 @@ class SaveFileAdapter:
         tmp_path = archive_path + ".tmp"
         with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as archive:
             for name in names:
-                archive.write(os.path.join(directory, name), arcname=name)
+                source = os.path.join(directory, name)
+                if os.path.isdir(source):
+                    # A member that is a folder (a PSP save is ``<DISC_ID>DATA00`` beside
+                    # ``<DISC_ID>SETTINGS``) ships its tree: writing the directory entry
+                    # alone would archive two empty names and restore nothing.
+                    for parent, _dirs, files in os.walk(source):
+                        for file_name in files:
+                            path = os.path.join(parent, file_name)
+                            archive.write(path, arcname=os.path.relpath(path, directory))
+                    continue
+                archive.write(source, arcname=name)
         os.replace(tmp_path, archive_path)
 
     def extract_archive(self, archive_path: str, dest_dir: str) -> tuple[str, ...]:

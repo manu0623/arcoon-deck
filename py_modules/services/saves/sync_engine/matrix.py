@@ -388,12 +388,15 @@ class MatrixExecutor:
             self._log_debug(f"Restored no card entries from an empty archive into {target_dir}")
             return
         for member in restored:
-            name = os.path.basename(member)
+            # The member's own name, which is flat for a card entry and nested for a PSP
+            # save folder (``ULUS10064DATA00/<file>``): the baseline has to name the path
+            # the file actually landed at, or the next sync compares a hash to nothing.
+            name = member
             self.update_file_sync_state(
                 save_state,
                 name,
                 server_save,
-                os.path.join(target_dir, name),
+                os.path.join(target_dir, *member.split("/")),
                 system,
                 default_slot=default_slot,
             )

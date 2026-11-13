@@ -193,6 +193,12 @@ class SaveLayout:
     container: str | None = None
     unidentified_roots: frozenset[str] = frozenset()
     category_pattern: str | None = None
+    # The tail of ``subdir`` that the *emulator* builds beneath whatever folder it is
+    # handed, for platforms whose own tree already ends in the layout's last components.
+    # PPSSPP is the case this exists for: handed a folder, it creates ``PSP/SAVEDATA``
+    # inside it, so handing it ``saves/psp/PSP/SAVEDATA`` produced a doubled
+    # ``SAVEDATA/PSP/SAVEDATA`` that no lookup reads.
+    core_subdir: tuple[str, ...] = ()
 
 
 # The platforms whose saves are not a plain per-ROM file. Everything absent from
@@ -201,7 +207,13 @@ class SaveLayout:
 # write one file per game.
 _PLATFORM_LAYOUTS: dict[str, SaveLayout] = {
     "vita": SaveLayout("vita", SaveFamily.EXACT_FOLDER, SaveUsage.FOLDER_EXACT, ("vita",)),
-    "psp": SaveLayout("psp", SaveFamily.PREFIX_BUNDLE, SaveUsage.FOLDER_PREFIX, ("psp", "PSP", "SAVEDATA")),
+    "psp": SaveLayout(
+        "psp",
+        SaveFamily.PREFIX_BUNDLE,
+        SaveUsage.FOLDER_PREFIX,
+        ("psp", "PSP", "SAVEDATA"),
+        core_subdir=("PSP", "SAVEDATA"),
+    ),
     "ps3": SaveLayout("ps3", SaveFamily.PREFIX_BUNDLE, SaveUsage.FOLDER_PREFIX, ("ps3", "savedata")),
     "ps2": SaveLayout("ps2", SaveFamily.PS2_CARD, SaveUsage.FOLDER_PREFIX, ("ps2",), container="ps2_folder_card"),
     "n3ds": SaveLayout(
@@ -278,11 +290,12 @@ def restores_by_extraction(platform: str) -> bool:
     one while the save sits beside it unread. Restoring therefore means
     extracting the archive's members into the directory the answer names.
 
-    Only a family whose members are files in ONE flat directory answers True:
-    the restore places each member by its own name, and a nested family would
-    need its tree rebuilt rather than its names restored.
+    Only a family RomM carries as ONE archive answers True: the restore unpacks that
+    archive into the directory the answer names. GameCube's set and a Switch title
+    folder are flat member sets; a PSP save is the set of ``<DISC_ID>*`` folders, which
+    extracts back into the ``SAVEDATA`` tree exactly as it was packed.
     """
-    return layout_for(platform).family in {SaveFamily.GCI_SET, SaveFamily.SWITCH_TITLE}
+    return layout_for(platform).family in {SaveFamily.GCI_SET, SaveFamily.SWITCH_TITLE, SaveFamily.PREFIX_BUNDLE}
 
 
 def save_bank_root(data_dir: str) -> str:

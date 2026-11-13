@@ -369,6 +369,14 @@ class RomInfoService:
         # owned launch report an unestablished save: on a device with no ES-DE there is no
         # entry labelled with the core's name, and sync was skipped for a path we wrote.
         if bank_dir and (emulator is None or emulator.kind == "libretro"):
+            layout = save_layout_for(platform)
+            if layout.family is not SaveFamily.LIBRETRO_FILE:
+                # A redirected launch whose save is a folder set (PSP): the appendconfig
+                # states the directory, and the layout rule names the members from the
+                # content's own identity — see ``_bank_member_answer``.
+                return self._bank_member_answer(
+                    layout, bank_dir, content_path, platform, installed=installed, emulator=emulator
+                )
             answer = owned_libretro_answer(
                 bank_dir,
                 rom_name=os.path.basename(content_path),
@@ -392,6 +400,50 @@ class RomInfoService:
                 content_installed=installed,
             )
         return self._fill_save_id(answer, content_path=content_path, platform=platform, installed=installed)
+
+    def _bank_member_answer(
+        self,
+        layout: Any,
+        bank_dir: str,
+        content_path: str,
+        platform: str,
+        *,
+        installed: bool,
+        emulator: Any,
+    ) -> SaveAnswer:
+        """The answer for a folder-shaped save the plugin's own launch redirects into the bank.
+
+        PSP is the platform this exists for. Its save is a set of directories named after
+        the disc's id (``ULUS10064DATA00`` beside ``ULUS10064SETTINGS``), and the id is
+        read from the image's ``PSP_GAME/PARAM.SFO`` — nothing about the file's path
+        carries it.
+
+        Without an identity there is no answer, only the hole that says so: a guessed
+        disc id points at another game's save, and a sync that writes it there is worse
+        than one that refuses. The bank is listed rather than assumed, so the members are
+        the folders that exist now.
+
+        The answer is taken here rather than left to ``_fill_save_id`` because filling a
+        hole can only rewrite the id, not re-resolve the member set the id decides.
+        """
+        identity = (
+            self._content_identity(content_path, platform)
+            if self._content_identity is not None and installed
+            else None
+        )
+        unit = describe_unit(
+            layout,
+            bank_root="",
+            base=bank_dir,
+            save_id=save_id_text(identity) if identity is not None else None,
+            rom_stem=os.path.splitext(os.path.basename(content_path))[0],
+            tree=self._shallow_tree(bank_dir, depth=2),
+        )
+        return unit_answer(
+            unit,
+            emulator=emulator.label if emulator is not None else None,
+            content_installed=installed,
+        )
 
     def _stated_platform_unit(
         self, platform: str | None, content_path: str, installed: bool
@@ -636,7 +688,10 @@ class RomInfoService:
         results = []
         for name in names:
             save_path = os.path.join(saves_dir, name)
-            if self._save_file_store.is_file(save_path):
+            # A member may be a directory: a PSP save is a folder per game. Reporting
+            # it is what lets the wizard and the Saves tab see a save that exists, and
+            # the packed unit packs those folders rather than the names inside them.
+            if self._save_file_store.is_file(save_path) or self._save_file_store.is_dir(save_path):
                 results.append({"path": save_path, "filename": name})
         return results
 

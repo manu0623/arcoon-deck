@@ -73,7 +73,9 @@ class RetroArchAppendConfigAdapter:
     def render_for(self, platform: str, *, system_dir: str | None = None) -> str:
         """The text *platform*'s config should hold, without writing anything."""
         layout = layout_for(platform)
-        save_dir, state_dir = appendconfig_dirs(data_dir=self._data_dir, layout_subdir=layout.subdir)
+        save_dir, state_dir = appendconfig_dirs(
+            data_dir=self._data_dir, layout_subdir=layout.subdir, core_subdir=layout.core_subdir
+        )
         return render_appendconfig(save_dir=save_dir, state_dir=state_dir, system_dir=system_dir)
 
     def ensure(self, platform: str, *, system_dir: str | None = None) -> str | None:
@@ -115,7 +117,9 @@ class RetroArchAppendConfigAdapter:
         like the redirect is in place while RetroArch quietly writes elsewhere.
         """
         layout = layout_for(platform)
-        save_dir, state_dir = appendconfig_dirs(data_dir=self._data_dir, layout_subdir=layout.subdir)
+        save_dir, state_dir = appendconfig_dirs(
+            data_dir=self._data_dir, layout_subdir=layout.subdir, core_subdir=layout.core_subdir
+        )
         os.makedirs(save_dir, exist_ok=True)
         os.makedirs(state_dir, exist_ok=True)
 
