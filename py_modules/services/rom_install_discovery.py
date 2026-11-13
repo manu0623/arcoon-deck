@@ -164,7 +164,19 @@ class RomInstallDiscoveryService:
     def _install(self, rom: Rom, file_path: str) -> dict[str, Any] | None:
         """Record the row, in its own short write UoW."""
         system = self._resolve_system(rom.platform_slug)
-        launchable = is_launchable_target(file_path, None, self._system_extensions(system))
+        extensions = self._system_extensions(system)
+        suffix = os.path.splitext(file_path)[1].lower()
+        if extensions and suffix not in extensions:
+            # The row's own name matched a document sitting in the platform folder:
+            # measured on the reference Deck, ``rpcs3_guide.txt`` and EmuDeck's
+            # "Disc Games Can Be Put Here…" note were adopted as two PS3 games.
+            # Recording a format no emulator for this system reads invents an install;
+            # the download path may still record a file it placed itself.
+            self._logger.info(
+                f"ROM adoption: rom_id={rom.rom_id} skipped: {system} does not read '{suffix or file_path}'"
+            )
+            return None
+        launchable = is_launchable_target(file_path, None, extensions)
         if not launchable:
             self._logger.warning(
                 f"ROM adoption: no launch target for rom_id={rom.rom_id}: {system} cannot launch '{file_path}'"

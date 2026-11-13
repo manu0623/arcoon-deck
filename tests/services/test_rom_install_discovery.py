@@ -76,6 +76,7 @@ def _service(
     roms: list[Rom],
     store: type[_Tree],
     roots: tuple[str, ...] = (APP_ROOT, EMUDECK_ROOT),
+    extensions: frozenset[str] = ALL_EXTENSIONS,
 ) -> tuple[RomInstallDiscoveryService, FakeUnitOfWork]:
     uow = FakeUnitOfWork()
     with uow:
@@ -88,7 +89,7 @@ def _service(
             file_store=store(),
             roms_roots=lambda: roots,
             resolve_system=lambda slug: slug,
-            system_extensions=lambda system: ALL_EXTENSIONS,
+            system_extensions=lambda system: extensions,
             now=lambda: NOW,
         ),
     )
@@ -249,29 +250,20 @@ class TestWhatItRefusesToAdopt:
         assert answer["roots"] == [EMUDECK_ROOT]
 
 
-class TestTheLaunchVerdict:
+class TestWhatIsNotAGame:
     @pytest.mark.asyncio
-    async def test_an_adopted_file_the_system_cannot_launch_is_still_recorded(self) -> None:
-        """A real install with no launch target, exactly as the download path records it
-        (#1582): refusing the install would delete a file the user has nowhere else."""
-        uow = FakeUnitOfWork()
-        with uow:
-            uow.roms.save(_rom(6, fs_name="Kirby.3ds"))
-        service = RomInstallDiscoveryService(
-            config=RomInstallDiscoveryConfig(
-                logger=logging.getLogger("test_rom_install_discovery"),
-                uow_factory=lambda: uow,
-                file_store=_tree({os.path.join(EMUDECK_ROOT, "3ds"): ("Kirby.3ds",)})(),
-                roms_roots=lambda: (EMUDECK_ROOT,),
-                resolve_system=lambda slug: slug,
-                # A real accept-list that does not name this extension: empty means
-                # "the source could not answer", which is deliberately permissive.
-                system_extensions=lambda system: frozenset({".iso"}),
-                now=lambda: NOW,
-            ),
+    async def test_a_document_in_the_folder_is_not_adopted_as_a_game(self) -> None:
+        """Measured on the reference Deck: ``rpcs3_guide.txt`` and EmuDeck's "Disc Games
+        Can Be Put Here For Automatic Detection.txt" were adopted as two PS3 games,
+        because their library rows carry those names and the files are right there.
+        A format no emulator for the system reads is not an install."""
+        service, uow = _service(
+            roms=[_rom(6, fs_name="rpcs3_guide.txt", platform_slug="ps3")],
+            store=_tree({os.path.join(EMUDECK_ROOT, "ps3"): ("rpcs3_guide.txt",)}),
+            extensions=frozenset({".iso", ".pkg"}),
         )
 
         answer = await service.adopt_found_content()
 
-        assert answer["adopted"][0]["launchable"] is False
-        assert uow.rom_installs.get(6) is not None
+        assert answer["adopted"] == []
+        assert uow.rom_installs.get(6) is None

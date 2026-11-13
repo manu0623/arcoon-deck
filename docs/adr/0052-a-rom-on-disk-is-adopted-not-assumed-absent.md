@@ -68,6 +68,21 @@ console's `id0`/`id1`, the title IS named — an empty folder is a game that has
 which is exactly the directory a server save unpacks into. The unit says so now, and a fresh
 title has a download target.
 
+## Two PS3 games that were two text files
+
+The first pass over the reference Deck adopted five installs: three 3DS games, and
+``rpcs3_guide.txt`` and EmuDeck's "Disc Games Can Be Put Here For Automatic Detection.txt"
+— the placeholder notes that sit in every EmuDeck ROM folder, whose library rows carry
+those very names. Their ``.txt`` suffix is in no emulator's accept-list, and the pass
+recorded them anyway because it treated "the file is there and the row names it" as
+enough, with ``launchable=False`` as the only trace.
+
+An adoption claims a *game*. A row was only ever matched to a file, and a format this
+system cannot read is the one thing on disk that is certainly not the game. Adoption now
+requires the platform's own format list to name the suffix; a file the pass cannot vouch
+for is left alone and logged. The download path keeps its older, looser rule, because it
+recorded a file it placed itself and knows what it is.
+
 ## Consequences
 
 - A library that arrived another way becomes syncable without a re-download, which is what
