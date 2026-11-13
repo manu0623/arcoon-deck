@@ -27,6 +27,7 @@ from adapters.atlas_firmware import AtlasFirmwareAdapter, AtlasPlatformFirmwareA
 from adapters.atlas_host import grant_core_probe_interpreter
 from adapters.atlas_saves import AtlasSaveLocationAdapter
 from adapters.content_identity import ContentIdentityAdapter
+from adapters.core_install import CoreInstallAdapter
 from adapters.cover_art_file_store import CoverArtFileStoreAdapter
 from adapters.debug_logger import SettingsAwareDebugLogger
 from adapters.download_file import DownloadFileAdapter
@@ -173,6 +174,11 @@ class AdapterBundle:
     path_probe: PathExistsReader
     resolve_path: ResolvedPathFn
     core_info_provider: CoreInfoProvider
+    # The plugin's own inventory (ADR-0036), held beside the catalogue so core
+    # provisioning can ask it which cores a platform needs.
+    owned_catalogue: OwnedCatalogueAdapter
+    # Downloads a libretro core into the owned runtime's cores directory.
+    core_install: CoreInstallAdapter
     external_emulators: ExternalEmulatorProvider
     retroarch_appendconfig: RetroArchAppendConfigFn
     retroarch_runner: RetroArchRunnerFn
@@ -593,6 +599,8 @@ def bootstrap(
         path_probe=path_probe,
         resolve_path=resolve_path,
         core_info_provider=emulator_catalogue,
+        owned_catalogue=owned_catalogue,
+        core_install=CoreInstallAdapter(cores_dir=retrodeck_paths.cores_path, logger=logger),
         external_emulators=external_emulators,
         retroarch_appendconfig=retroarch_appendconfig.ensure,
         retroarch_runner=retroarch_runner,

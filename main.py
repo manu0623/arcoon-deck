@@ -199,6 +199,7 @@ class Plugin:
         self._shortcut_removal_service = services["shortcut_removal_service"]
         self._settings_service = services["settings_service"]
         self._core_service = services["core_service"]
+        self._core_provisioning_service = services["core_provisioning_service"]
         self._disc_service = services["disc_service"]
         self._version_switch_service = services["version_switch_service"]
         self._prune_service = services["prune_service"]
@@ -387,6 +388,15 @@ class Plugin:
 
     async def get_platform_core_info(self, rom_id):
         return await self._core_service.get_platform_core_info(rom_id)
+
+    async def ensure_platform_cores(self, system_name):
+        """Install the libretro cores this system's inventory needs, verifying each.
+
+        The owned runtime can only load cores that are on disk, and a Deck without
+        RetroDECK has none. Answers one outcome per core; a failure is reported rather
+        than raised, so a single unavailable core does not hide the ones that landed.
+        """
+        return await self._core_provisioning_service.ensure_for_system(system_name)
 
     async def get_system_core_info(self, platform_slug):
         return await self._core_service.get_system_core_info(platform_slug)

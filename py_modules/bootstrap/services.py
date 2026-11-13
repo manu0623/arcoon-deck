@@ -22,6 +22,7 @@ from services.achievements import AchievementsService, AchievementsServiceConfig
 from services.active_core_resolver import ActiveCoreResolver, ActiveCoreResolverConfig
 from services.artwork import ArtworkService, ArtworkServiceConfig
 from services.connection import ConnectionService, ConnectionServiceConfig
+from services.core_provisioning import CoreProvisioningConfig, CoreProvisioningService
 from services.cores import CoreService, CoreServiceConfig
 from services.data_location import DataLocationService, DataLocationServiceConfig
 from services.disc import DiscService, DiscServiceConfig
@@ -476,6 +477,18 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         ),
     )
 
+    # Downloads the libretro cores the owned runtime needs into its own cores directory,
+    # so a device without RetroDECK has something to load (ADR-0037).
+    core_provisioning_service = CoreProvisioningService(
+        config=CoreProvisioningConfig(
+            loop=cfg.runtime.loop,
+            logger=cfg.runtime.logger,
+            inventory=cfg.adapters.owned_catalogue.platform_for,
+            installed=cfg.adapters.owned_catalogue.core_installed,
+            installer=cfg.adapters.core_install.install,
+        ),
+    )
+
     disc_service = DiscService(
         config=DiscServiceConfig(
             loop=cfg.runtime.loop,
@@ -647,6 +660,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         "shortcut_removal_service": shortcut_removal_service,
         "settings_service": settings_service,
         "core_service": core_service,
+        "core_provisioning_service": core_provisioning_service,
         "disc_service": disc_service,
         "version_switch_service": version_switch_service,
         "connection_service": connection_service,

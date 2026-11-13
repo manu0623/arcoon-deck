@@ -105,6 +105,19 @@ class OwnedCatalogueAdapter:
                 return (option.core_so, option.label)
         return (None, None)
 
+    def platform_for(self, system_name: str) -> InventoryPlatform | None:
+        """The inventory entry for *system_name*, or ``None`` when no document names it.
+
+        Exposed because core provisioning needs the platform's own statements (which cores
+        back its rows) rather than a projection of them into picker options.
+        """
+        inventory = self._parsed()
+        return None if inventory is None else inventory.get(system_name.lower())
+
+    def core_installed(self, core_so: str) -> bool:
+        """Whether the owned runtime can load *core_so* right now."""
+        return self._core_installed(core_so)
+
     def get_supported_extensions(self, system_name: str) -> frozenset[str]:
         """The accept-list the document declares, empty when it knows no such system."""
         inventory = self._parsed()
