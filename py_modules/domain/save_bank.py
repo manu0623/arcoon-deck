@@ -303,6 +303,7 @@ def describe_unit(
     rom_stem: str | None = None,
     tree: Mapping[str, Sequence[str]] | None = None,
     header_matched: Sequence[str] = (),
+    base: str | None = None,
 ) -> SaveUnit:
     """Resolve one game's save unit from what the bank already holds.
 
@@ -317,8 +318,14 @@ def describe_unit(
     each ``.gci`` header, which is the only reliable membership test there: a
     hack and its base disc share a filename but not necessarily a game code, and
     a bundle is every ``.gci`` whose header carries the disc's code.
+
+    *base* names the directory the emulator itself keeps this platform's saves under,
+    for a caller answering for an emulator that does not write into the bank at all.
+    It is the same level of the tree the bank's own ``<root>/<platform subdir>`` names,
+    so every family rule below applies unchanged — the platform prefix in
+    ``layout.subdir`` is a property of the bank's tree, not of a save layout.
     """
-    base = save_bank_base(bank_root, layout.platform)
+    base = base if base is not None else save_bank_base(bank_root, layout.platform)
     listing: Mapping[str, Sequence[str]] = tree or {}
 
     match layout.family:

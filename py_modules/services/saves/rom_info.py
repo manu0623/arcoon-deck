@@ -30,8 +30,10 @@ from domain.save_answer import (
     owned_dolphin_answer,
     owned_libretro_answer,
     unestablished_answer,
+    unit_answer,
 )
-from domain.save_bank import canonical_platform, restores_by_extraction
+from domain.save_bank import SaveFamily, canonical_platform, describe_unit, restores_by_extraction
+from domain.save_bank import layout_for as save_layout_for
 from domain.save_layout import InSaveDir
 from domain.save_path import resolve_save_dir
 
@@ -44,6 +46,7 @@ _KV_SAVE_SORT_PREVIOUS = "save_sort_settings_previous"
 
 if TYPE_CHECKING:
     import logging
+    from collections.abc import Callable
 
     from models.state import SaveSortSettings
 
@@ -113,6 +116,10 @@ class RomInfoServiceConfig:
     # It answers the SAME directory the generated appendconfig redirects a launch into, so
     # the two cannot disagree. ``None`` keeps the RetroArch-shaped path math unchanged.
     save_bank_dir: SaveBankDirFn | None = None
+    # The base a platform's standalone emulator states for its saves (its own settings
+    # file, read by ``adapters.emulator_save_base``). ``None`` leaves the catalogue in
+    # charge for every platform.
+    standalone_save_base: Callable[[str], str | None] | None = None
 
 
 class RomInfoService:
@@ -130,6 +137,7 @@ class RomInfoService:
         self._logger = config.logger
         self._content_identity = config.content_identity
         self._save_bank_dir = config.save_bank_dir
+        self._standalone_save_base = config.standalone_save_base
 
     def get_rom_save_info(self, rom_id: int) -> dict[str, Any] | None:
         """Get save-related info for an installed ROM.
@@ -369,6 +377,13 @@ class RomInfoService:
             )
         elif emulator is not None and emulator.user_dir is not None:
             answer = owned_dolphin_answer(emulator.user_dir, content_installed=installed)
+        elif (unit := self._stated_platform_unit(platform, content_path, installed)) is not None:
+            # A standalone emulator that states its own save tree: the same principle as the
+            # owned libretro answer, one layer out — the plugin read the location from the
+            # emulator's settings instead of from a catalogue that is not installed.
+            answer = unit_answer(
+                unit, emulator=emulator.label if emulator is not None else None, content_installed=installed
+            )
         else:
             answer = self._save_locations.resolve_save_answer(
                 system=system,
@@ -377,6 +392,61 @@ class RomInfoService:
                 content_installed=installed,
             )
         return self._fill_save_id(answer, content_path=content_path, platform=platform, installed=installed)
+
+    def _stated_platform_unit(
+        self, platform: str | None, content_path: str, installed: bool
+    ) -> Any | None:
+        """The save unit a standalone emulator states for this ROM, or ``None``.
+
+        Only the families whose rules are measured are described here: the yuzu lineage's
+        switch tree (``nand/user/save/<profile>/<title id>``), whose location the emulator
+        states in its own settings. Every other family keeps the catalogue's answer, because
+        naming a card folder or a title directory this plugin has not verified is how a
+        sync writes a save where the emulator never looks.
+        """
+        if not platform or self._standalone_save_base is None:
+            return None
+        layout = save_layout_for(platform)
+        if layout.family is not SaveFamily.SWITCH_TITLE:
+            return None
+        base = self._standalone_save_base(platform)
+        if not base:
+            return None
+        identity = self._content_identity(content_path, platform) if self._content_identity and installed else None
+        return describe_unit(
+            layout,
+            bank_root="",
+            base=base,
+            save_id=save_id_text(identity) if identity is not None else None,
+            rom_stem=os.path.splitext(os.path.basename(content_path))[0],
+            tree=self._shallow_tree(base, depth=2),
+        )
+
+    def _shallow_tree(self, base: str, *, depth: int) -> dict[str, list[str]]:
+        """``{directory: [names]}`` for *depth* levels, as a unit discovery rule expects.
+
+        The rules enumerate the levels they cannot invent (a signed-in profile, a card), so
+        they are handed what the directory itself reports and nothing else.
+        """
+        tree: dict[str, list[str]] = {}
+        frontier = [base]
+        for _level in range(depth):
+            next_frontier: list[str] = []
+            for directory in frontier:
+                try:
+                    names = list(self._save_file_store.listdir(directory))
+                except OSError:
+                    continue
+                tree[directory] = names
+                # Joined the way the layout rules join: the keys must be the ones a rule
+                # will look up, and matching its separator is what keeps them that.
+                next_frontier.extend(
+                    os.path.join(directory, name)
+                    for name in names
+                    if not self._save_file_store.is_file(os.path.join(directory, name))
+                )
+            frontier = next_frontier
+        return tree
 
     def _fill_save_id(
         self, answer: SaveAnswer, *, content_path: str, platform: str | None, installed: bool

@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     import asyncio
     import logging
+    from collections.abc import Callable
 
     from services.protocols import (
         ActiveCoreReader,
@@ -185,3 +186,7 @@ class SaveServiceConfig:
     # Optional: the plugin's own save directory per platform, when ``save_bank`` is on.
     # The save lookup reads the same directory the launch redirects into.
     save_bank_dir: SaveBankDirFn | None = None
+    # The base a platform's *standalone* emulator states for its saves, read from the
+    # emulator's own settings. ``None`` (or answering ``None``) leaves the catalogue in
+    # charge, which is the pre-existing behaviour.
+    standalone_save_base: Callable[[str], str | None] | None = None

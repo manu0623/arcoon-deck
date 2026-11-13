@@ -337,6 +337,61 @@ def owned_libretro_answer(
     )
 
 
+def unit_answer(unit: object, *, emulator: str | None, content_installed: bool) -> SaveAnswer:
+    """Restate a ``domain.save_bank`` unit as the answer the sync layer acts on.
+
+    The unit is the bank's own description of a save — a folder whose members the emulator
+    names, a card, or one file per game — resolved from a layout rule rather than read off
+    a catalogue entry. That is the answer a standalone emulator needs on a device with no
+    ES-DE, and it is stated in the same vocabulary as any other.
+
+    A unit that could not be resolved (an ambiguity between two cards, a hole only the
+    content file could fill) becomes the refusal that says so, with the unit's ``needs``
+    as the hole. It is never upgraded to a guess: a synced save that lands in a folder the
+    emulator does not read is worse than no sync at all.
+    """
+    members = tuple(getattr(unit, "members", ()))
+    base = getattr(unit, "base", None)
+    needs = tuple(getattr(unit, "needs", ()))
+    conflicts = tuple(getattr(unit, "conflicts", ()))
+    if not members or conflicts or not isinstance(base, str):
+        return SaveAnswer(
+            state=SAVE_STATE_HOLE,
+            unestablished=None,
+            emulator=emulator,
+            directory=base if isinstance(base, str) else None,
+            backing_directory=None,
+            granularity=None,
+            needs=needs or ("save_id",) if conflicts else needs,
+            components=(),
+            caveats=("file-names-unestablished",) if not members else (),
+            content_installed=content_installed,
+        )
+    folder = any(getattr(member, "is_directory", False) for member in members)
+    return SaveAnswer(
+        state=SAVE_STATE_PER_GAME_FILES,
+        unestablished=None,
+        emulator=emulator,
+        directory=base,
+        backing_directory=None,
+        # A unit carried as ONE archive is a member set, which is what ``title-dir`` means
+        # to the sync layer: the folder is packed on upload and extracted on download.
+        granularity="title-dir" if folder else "per-game files",
+        needs=needs,
+        components=tuple(
+            SaveComponent(
+                name=member.archive_root or os.path.basename(member.path),
+                directory=os.path.dirname(member.path) or base,
+                role="battery",
+                granularity=None,
+            )
+            for member in members
+        ),
+        caveats=(),
+        content_installed=content_installed,
+    )
+
+
 def manifest_answer(entry: object, *, content_installed: bool) -> SaveAnswer | None:
     """The answer a managed entry states, or ``None`` when it states none this plugin carries.
 

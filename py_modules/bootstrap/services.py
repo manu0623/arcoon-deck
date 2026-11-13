@@ -227,6 +227,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         save_locations=cfg.adapters.save_locations,
         content_identity=cfg.adapters.content_identity,
         save_bank_dir=cfg.adapters.save_bank_dir,
+        standalone_save_base=cfg.adapters.emulator_save_base,
         resolve_system=cfg.adapters.http_adapter.resolve_system,
         hostname_provider=cfg.runtime.hostname_provider,
         machine_id_provider=cfg.runtime.machine_id_provider,

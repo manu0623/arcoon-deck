@@ -31,6 +31,7 @@ from adapters.core_install import CoreInstallAdapter
 from adapters.cover_art_file_store import CoverArtFileStoreAdapter
 from adapters.debug_logger import SettingsAwareDebugLogger
 from adapters.download_file import DownloadFileAdapter
+from adapters.emulator_save_base import EmulatorSaveBaseAdapter
 from adapters.es_find_rules import EsFindRulesAdapter
 from adapters.external_emulators import ExternalEmulatorsAdapter
 from adapters.firmware_file import FirmwareFileAdapter
@@ -81,6 +82,7 @@ from domain.user_data_location import SOURCE_FOLDER_NAMES, config_root, data_roo
 if TYPE_CHECKING:
     import asyncio
     import logging
+    from collections.abc import Callable
     from typing import Any
 
     from models.data_location import UserDataLocations
@@ -187,6 +189,9 @@ class AdapterBundle:
     retroarch_runner: RetroArchRunnerFn
     content_identity: ContentIdentityFn
     save_bank_dir: SaveBankDirFn
+    # Reads a standalone emulator's own settings for the directory it keeps this
+    # platform's saves under (ADR-0044).
+    emulator_save_base: Callable[[str], str | None]
     save_locations: SaveLocationReader
     layout_manifest: LayoutManifestReader
     renderer_rss: RendererRssFn
@@ -576,6 +581,9 @@ def bootstrap(
         data_dir=locations.data_dir, logger=logger, enabled=save_bank_enabled
     )
     save_bank_dir = SaveBankDirAdapter(data_dir=locations.data_dir, logger=logger, enabled=save_bank_enabled)
+    # The one location a catalogue cannot answer on a device with no ES-DE: where the
+    # emulator itself says it keeps this platform's saves.
+    emulator_save_base = EmulatorSaveBaseAdapter(user_home=user_home, logger=logger)
     # The RetroArch to start directly when the user opts out of RetroDECK's launcher.
     # Only a runner that actually holds the requested core is returned, so an unusual
     # install falls back to the RetroDECK launch instead of starting nothing.
@@ -615,6 +623,7 @@ def bootstrap(
         retroarch_runner=retroarch_runner,
         content_identity=content_identity,
         save_bank_dir=save_bank_dir,
+        emulator_save_base=emulator_save_base,
         save_locations=save_locations,
         # ADR-0034: the provisioner's own statement of each managed platform's launch
         # and save path. Absent file → every platform unmanaged, behaviour unchanged.
