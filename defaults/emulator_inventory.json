@@ -1,0 +1,197 @@
+{
+  "version": 1,
+  "platforms": {
+    "gc": {
+      "aliases": ["ngc", "gamecube"],
+      "extensions": ["iso", "gcm", "rvz", "wbfs", "dol", "elf", "ciso", "gcz"],
+      "emulators": [
+        {
+          "label": "Dolphin (Standalone)",
+          "id": "dolphin",
+          "kind": "standalone",
+          "host": {
+            "binaries": [
+              "~/Applications/Dolphin.AppImage",
+              "~/Applications/dolphin-emu.AppImage",
+              "/usr/bin/dolphin-emu"
+            ],
+            "args": ["-b", "-e"]
+          }
+        },
+        {"label": "Dolphin (libretro)", "id": "dolphin", "kind": "libretro", "core": "dolphin_libretro"}
+      ]
+    },
+    "wii": {
+      "extensions": ["iso", "rvz", "wbfs", "wad", "ciso", "gcz"],
+      "emulators": [
+        {
+          "label": "Dolphin (Standalone)",
+          "id": "dolphin",
+          "kind": "standalone",
+          "host": {
+            "binaries": [
+              "~/Applications/Dolphin.AppImage",
+              "~/Applications/dolphin-emu.AppImage",
+              "/usr/bin/dolphin-emu"
+            ],
+            "args": ["-b", "-e"]
+          }
+        }
+      ]
+    },
+    "switch": {
+      "aliases": ["nx"],
+      "extensions": ["nsp", "xci", "nca", "nro"],
+      "emulators": [
+        {
+          "label": "Eden (Standalone)",
+          "id": "eden",
+          "kind": "standalone",
+          "host": {
+            "binaries": [
+              "~/Applications/Eden.AppImage",
+              "~/Applications/eden.AppImage"
+            ],
+            "args": ["-f", "-g"]
+          }
+        },
+        {
+          "label": "Citron (Standalone)",
+          "id": "citron",
+          "kind": "standalone",
+          "host": {
+            "binaries": ["~/Applications/Citron.AppImage"],
+            "args": ["-f", "-g"]
+          }
+        }
+      ]
+    },
+    "ps2": {
+      "aliases": ["playstation2"],
+      "extensions": ["iso", "chd", "cso", "gz", "elf"],
+      "emulators": [
+        {
+          "label": "PCSX2 (Standalone)",
+          "id": "pcsx2",
+          "kind": "standalone",
+          "host": {
+            "binaries": [
+              "~/Applications/PCSX2.AppImage",
+              "~/Applications/pcsx2-Qt.AppImage",
+              "/usr/bin/pcsx2-qt"
+            ],
+            "args": ["--fullscreen", "--nogui", "--"]
+          }
+        },
+        {"label": "LRPS2", "id": "pcsx2", "kind": "libretro", "core": "pcsx2_libretro"}
+      ]
+    },
+    "psx": {
+      "aliases": ["ps1", "playstation"],
+      "extensions": ["cue", "chd", "iso", "pbp", "m3u", "bin"],
+      "emulators": [
+        {"label": "Beetle PSX HW", "id": "beetle_psx_hw", "kind": "libretro", "core": "mednafen_psx_hw_libretro"},
+        {"label": "Beetle PSX", "id": "beetle_psx", "kind": "libretro", "core": "mednafen_psx_libretro"},
+        {"label": "PCSX ReARMed", "id": "pcsx_rearmed", "kind": "libretro", "core": "pcsx_rearmed_libretro"},
+        {
+          "label": "DuckStation (Standalone)",
+          "id": "duckstation",
+          "kind": "standalone",
+          "host": {
+            "binaries": [
+              "~/Applications/DuckStation.AppImage",
+              "~/Applications/duckstation.AppImage",
+              "/usr/bin/duckstation-qt"
+            ],
+            "args": ["-fullscreen", "-batch"]
+          }
+        }
+      ]
+    },
+    "n64": {
+      "aliases": ["nintendo64", "mupen64plus"],
+      "extensions": ["z64", "n64", "v64", "rom", "ndd"],
+      "emulators": [
+        {"label": "Mupen64Plus-Next", "id": "mupen64plus_next", "kind": "libretro", "core": "mupen64plus_next_libretro"},
+        {"label": "ParaLLEl N64", "id": "parallel_n64", "kind": "libretro", "core": "parallel_n64_libretro"}
+      ]
+    },
+    "snes": {
+      "aliases": ["snes9x", "supernintendo"],
+      "extensions": ["sfc", "smc", "fig", "swc", "bs", "st"],
+      "emulators": [
+        {"label": "Snes9x", "id": "snes9x", "kind": "libretro", "core": "snes9x_libretro"},
+        {"label": "Snes9x 2010", "id": "snes9x2010", "kind": "libretro", "core": "snes9x2010_libretro"},
+        {"label": "bsnes", "id": "bsnes", "kind": "libretro", "core": "bsnes_libretro"}
+      ]
+    },
+    "nes": {
+      "aliases": ["famicom"],
+      "extensions": ["nes", "fds", "unf", "unif"],
+      "emulators": [
+        {"label": "Mesen", "id": "mesen", "kind": "libretro", "core": "mesen_libretro"},
+        {"label": "Nestopia UE", "id": "nestopia", "kind": "libretro", "core": "nestopia_libretro"},
+        {"label": "FCEUmm", "id": "fceumm", "kind": "libretro", "core": "fceumm_libretro"}
+      ]
+    },
+    "gba": {
+      "aliases": ["gameboyadvance"],
+      "extensions": ["gba", "agb", "bin"],
+      "emulators": [
+        {"label": "mGBA", "id": "mgba", "kind": "libretro", "core": "mgba_libretro"},
+        {"label": "VBA-M", "id": "vbam", "kind": "libretro", "core": "vbam_libretro"}
+      ]
+    },
+    "gbc": {
+      "aliases": ["gb", "gbc", "gameboy", "gameboycolor"],
+      "extensions": ["gb", "gbc", "dmg", "sgb"],
+      "emulators": [
+        {"label": "Gambatte", "id": "gambatte", "kind": "libretro", "core": "gambatte_libretro"},
+        {"label": "mGBA", "id": "mgba", "kind": "libretro", "core": "mgba_libretro"}
+      ]
+    },
+    "megadrive": {
+      "aliases": ["genesis", "md", "megadrivegenesis"],
+      "extensions": ["md", "gen", "smd", "bin", "sgd", "68k"],
+      "emulators": [
+        {"label": "Genesis Plus GX", "id": "genesis_plus_gx", "kind": "libretro", "core": "genesis_plus_gx_libretro"},
+        {"label": "BlastEm", "id": "blastem", "kind": "libretro", "core": "blastem_libretro"}
+      ]
+    },
+    "dreamcast": {
+      "aliases": ["dc"],
+      "extensions": ["cdi", "gdi", "chd", "cue", "bin", "m3u", "dat"],
+      "emulators": [
+        {"label": "Flycast", "id": "flycast", "kind": "libretro", "core": "flycast_libretro"}
+      ]
+    },
+    "psp": {
+      "aliases": ["playstationportable"],
+      "extensions": ["iso", "cso", "chd", "pbp", "elf"],
+      "emulators": [
+        {"label": "PPSSPP (libretro)", "id": "ppsspp", "kind": "libretro", "core": "ppsspp_libretro"},
+        {
+          "label": "PPSSPP (Standalone)",
+          "id": "ppsspp",
+          "kind": "standalone",
+          "host": {
+            "binaries": [
+              "~/Applications/PPSSPP.AppImage",
+              "~/Applications/ppsspp.AppImage",
+              "/usr/bin/PPSSPPSDL"
+            ],
+            "args": ["--fullscreen"]
+          }
+        }
+      ]
+    },
+    "nds": {
+      "aliases": ["nintendods"],
+      "extensions": ["nds", "dsi", "zip"],
+      "emulators": [
+        {"label": "melonDS", "id": "melonds", "kind": "libretro", "core": "melonds_libretro"},
+        {"label": "DeSmuME", "id": "desmume", "kind": "libretro", "core": "desmume_libretro"}
+      ]
+    }
+  }
+}

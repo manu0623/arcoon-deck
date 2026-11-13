@@ -40,6 +40,7 @@ from adapters.launcher_install import LauncherInstallAdapter
 from adapters.layout_manifest import LayoutManifestAdapter
 from adapters.machine_id import MachineIdAdapter
 from adapters.migration_file import MigrationFileAdapter
+from adapters.owned_catalogue import FallbackCatalogueAdapter, OwnedCatalogueAdapter
 from adapters.path_probe import PathProbeAdapter, ResolvedPathAdapter
 from adapters.persistence import (
     SETTINGS_FILENAME,
@@ -71,6 +72,7 @@ from adapters.steamgriddb import SteamGridDbAdapter
 from adapters.system_clock import SystemClock
 from adapters.system_uuid_gen import SystemUuidGen
 from adapters.user_data_migration import SourceLocation, UserDataMigrationAdapter
+from domain.runtime import RuntimeMode
 from domain.state_migrations import fold_legacy_save_sync_settings, migrate_settings
 from domain.user_data_location import SOURCE_FOLDER_NAMES, config_root, data_root, launcher_path
 
@@ -529,11 +531,22 @@ def bootstrap(
     # the adapter: the highest-priority arrangement, which is RetroDECK wherever
     # one is installed. Offering the others is #918; nothing in services/ learns
     # which one answered.
-    emulator_catalogue = AtlasCatalogueAdapter(
+    es_de_catalogue = AtlasCatalogueAdapter(
         choose_installation=functools.partial(first_detected_installation, user_home),
         emulator_installed=es_find_rules.command_emulator_installed,
         log_debug=debug_logger,
     )
+    # The plugin's own inventory, read only where ES-DE's catalogue cannot answer — a
+    # device without RetroDECK has no es_systems.xml, and without this the picker is empty
+    # and every platform resolves to no emulator (ADR-0036).
+    owned_catalogue = OwnedCatalogueAdapter(
+        plugin_dir=plugin_dir,
+        user_home=user_home,
+        logger=logger,
+        cores_dir=retrodeck_paths.cores_path,
+        runtime_is_standalone=lambda: retrodeck_paths.runtime_mode() is RuntimeMode.STANDALONE,
+    )
+    emulator_catalogue = FallbackCatalogueAdapter(primary=es_de_catalogue, fallback=owned_catalogue)
     # The installs RetroDECK does not ship: AppImages in ~/Applications, EmuDeck's
     # launchers, bare flatpaks. Cached for a minute because the picker asks on every
     # menu open, while the probe behind it spawns ``flatpak list``.
