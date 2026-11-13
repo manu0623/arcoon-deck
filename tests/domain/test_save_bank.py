@@ -496,6 +496,10 @@ class TestArchiveRootMatching:
 class TestRestoresByExtraction:
     """Which families put a downloaded archive back by unpacking it."""
 
+    def test_a_wii_title_restores_by_extraction(self) -> None:
+        """Measured: the zip landed in the staging folder beside the title, unextracted."""
+        assert restores_by_extraction("wii") is True
+
     def test_a_ps2_card_restores_by_extraction(self) -> None:
         # The unit is the game's folder inside the card; dropping the zip beside the
         # card leaves PCSX2 reading a card without that save.

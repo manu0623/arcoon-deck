@@ -340,6 +340,11 @@ def restores_by_extraction(platform: str) -> bool:
         # the game offering to create a memory card). Extracting puts the folder back
         # where PCSX2 reads it.
         SaveFamily.PS2_CARD,
+        # A Wii title's save is the files inside its ``data/`` folder, and RomM carries them
+        # as one ``<rom>.zip`` packed from that folder. Measured on the reference Deck: the
+        # download landed the zip in the staging directory beside the title and nothing was
+        # extracted, so the save that had just been uploaded never came back.
+        SaveFamily.CATEGORY_SPLIT,
     }
 
 
