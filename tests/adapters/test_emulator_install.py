@@ -165,6 +165,53 @@ class TestAStoreBuild:
 
         def fake_run(argv, **kwargs):
             calls.append(list(argv))
+            if "install" in argv:
+                (tmp_path / ".local" / "share" / "flatpak" / "app" / "org.ppsspp.PPSSPP").mkdir(parents=True)
+            return subprocess.CompletedProcess(argv, 0, "", "")
+
+        monkeypatch.setattr("adapters.emulator_install.subprocess.run", fake_run)
+
+        result = adapter.install(_emulator(flatpak="org.ppsspp.PPSSPP"))
+
+        # The install, then the access grant the emulator needs to read the ROM it was
+        # installed to play (measured: PCSX2's flatpak ships with no filesystem access).
+        assert calls == [
+            ["flatpak", "install", "--user", "-y", "flathub", "org.ppsspp.PPSSPP"],
+            ["flatpak", "override", "--user", "--filesystem=host", "org.ppsspp.PPSSPP"],
+        ]
+        assert result["ok"] is True
+        assert result["already_present"] is False
+        assert result["sandbox_host_access"] is True
+
+    def test_an_installed_app_is_not_reinstalled_but_gets_its_access(self, adapter, tmp_path, monkeypatch) -> None:
+        (tmp_path / ".local" / "share" / "flatpak" / "app" / "org.ppsspp.PPSSPP").mkdir(parents=True)
+        calls: list[list[str]] = []
+
+        def fake_run(argv, **kwargs):
+            calls.append(list(argv))
+            return subprocess.CompletedProcess(argv, 0, "", "")
+
+        monkeypatch.setattr("adapters.emulator_install.subprocess.run", fake_run)
+
+        result = adapter.install(_emulator(flatpak="org.ppsspp.PPSSPP"))
+
+        # No install — but the grant still runs, because a build that predates the
+        # access rule is exactly the one that cannot see the ROM tree.
+        assert calls == [["flatpak", "override", "--user", "--filesystem=host", "org.ppsspp.PPSSPP"]]
+        assert result == {
+            "label": "PPSSPP (Standalone)",
+            "ok": True,
+            "already_present": True,
+            "app_id": "org.ppsspp.PPSSPP",
+            "sandbox_host_access": True,
+        }
+
+    def test_a_refused_access_grant_is_reported_without_failing_the_install(
+        self, adapter, tmp_path, monkeypatch
+    ) -> None:
+        def fake_run(argv, **kwargs):
+            if "override" in argv:
+                return subprocess.CompletedProcess(argv, 1, "", "error: app not installed\n")
             (tmp_path / ".local" / "share" / "flatpak" / "app" / "org.ppsspp.PPSSPP").mkdir(parents=True)
             return subprocess.CompletedProcess(argv, 0, "", "")
 
@@ -172,25 +219,8 @@ class TestAStoreBuild:
 
         result = adapter.install(_emulator(flatpak="org.ppsspp.PPSSPP"))
 
-        assert calls == [["flatpak", "install", "--user", "-y", "flathub", "org.ppsspp.PPSSPP"]]
         assert result["ok"] is True
-        assert result["already_present"] is False
-
-    def test_an_installed_app_is_not_reinstalled(self, adapter, tmp_path, monkeypatch) -> None:
-        (tmp_path / ".local" / "share" / "flatpak" / "app" / "org.ppsspp.PPSSPP").mkdir(parents=True)
-        monkeypatch.setattr(
-            "adapters.emulator_install.subprocess.run",
-            lambda *a, **k: pytest.fail("flatpak must not run for an installed app"),
-        )
-
-        result = adapter.install(_emulator(flatpak="org.ppsspp.PPSSPP"))
-
-        assert result == {
-            "label": "PPSSPP (Standalone)",
-            "ok": True,
-            "already_present": True,
-            "app_id": "org.ppsspp.PPSSPP",
-        }
+        assert result["sandbox_host_access"] is False
 
     def test_a_command_that_installs_nothing_reports_why(self, adapter, monkeypatch) -> None:
         monkeypatch.setattr(

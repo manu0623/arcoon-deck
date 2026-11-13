@@ -4,7 +4,14 @@ Two paths, and both end with the file the picker already probes:
 
 - **A store build** is ``flatpak install --user -y`` — the same unattended, per-user
   command the runtime's own installer runs. Nothing is written by this plugin, and the
-  store's signatures are the verification.
+  store's signatures are the verification. It is followed by
+  ``flatpak override --user --filesystem=host`` because an emulator that cannot read the
+  ROM it was installed to play is not installed: measured on the reference Deck, the
+  PCSX2 flatpak this plugin provisioned carried ``filesystems=xdg-config/kdeglobals:ro;
+  xdg-run/gamescope-0:ro;`` and nothing else, so ``flatpak run net.pcsx2.PCSX2
+  -fullscreen -- "<rom>"`` opened the emulator and answered "no rom on the location"
+  while the ISO sat readable on disk. EmuDeck grants the same ``host`` access at install
+  time (``installEmuFP.sh:33``); this plugin now grants it too.
 - **A release build** is the project's own AppImage, and it is *verified before it is
   written*: the hash comes from the release metadata (``digest: "sha256:…"``), the
   download is streamed into ``<target>.part`` while being hashed, and a mismatch removes
@@ -59,6 +66,9 @@ _RELEASE_TIMEOUT_SECONDS = 30
 #: A flatpak install fetches the app plus its runtime; the runtime's own installer allows
 #: fifteen minutes for the same work, and an emulator pulls the same freedesktop runtime.
 _FLATPAK_TIMEOUT_SECONDS = 900
+#: The sandbox access a provisioned emulator needs to launch what the plugin hands it: it
+#: reads the ROM tree and writes its cards and saves below the user's home.
+_SANDBOX_ACCESS: tuple[str, ...] = ("--filesystem=host",)
 _CHUNK = 1024 * 1024
 
 
@@ -86,7 +96,16 @@ class EmulatorInstallAdapter:
 
     def _install_flatpak(self, emulator: InventoryEmulator, plan: FlatpakInstall) -> dict[str, object]:
         if self._flatpak_app_installed(plan.app_id):
-            return {"label": emulator.label, "ok": True, "already_present": True, "app_id": plan.app_id}
+            # Already there — but possibly blind. A build installed before the access rule
+            # existed carries a sandbox that cannot see the ROM tree, so the grant is
+            # (re)applied on every pass rather than only on a fresh install.
+            return {
+                "label": emulator.label,
+                "ok": True,
+                "already_present": True,
+                "app_id": plan.app_id,
+                "sandbox_host_access": self._grant_sandbox_access(plan.app_id),
+            }
         argv = plan.argv
         self._logger.info(f"emulator_install: installing {plan.app_id}: {' '.join(argv)}")
         try:
@@ -104,12 +123,48 @@ class EmulatorInstallAdapter:
         # transaction it refused because the app is already there, and what the caller
         # cares about is the resulting state.
         if self._flatpak_app_installed(plan.app_id):
+            access = self._grant_sandbox_access(plan.app_id)
             self._logger.info(f"emulator_install: installed {plan.app_id}")
-            return {"label": emulator.label, "ok": True, "already_present": False, "app_id": plan.app_id}
+            return {
+                "label": emulator.label,
+                "ok": True,
+                "already_present": False,
+                "app_id": plan.app_id,
+                "sandbox_host_access": access,
+            }
         detail = (completed.stderr or completed.stdout or "").strip().splitlines()
         reason = detail[-1] if detail else f"flatpak exited {completed.returncode}"
         self._logger.warning(f"emulator_install: {plan.app_id} not installed after the command: {reason}")
         return self._failure(emulator, reason, app_id=plan.app_id)
+
+    def _grant_sandbox_access(self, app_id: str) -> bool:
+        """Give installed *app_id* sight of the files it must read, and say whether it worked.
+
+        ``flatpak override --user`` writes the app's own override file, so a second call
+        is a no-op rather than a growing stack of grants, and no password is needed. The
+        result is reported rather than folded into the install: the app is installed either
+        way, and a launch that cannot see its ROM is a different failure to report than an
+        install that did not happen.
+        """
+        argv = ["flatpak", "override", "--user", *_SANDBOX_ACCESS, app_id]
+        try:
+            completed = subprocess.run(
+                argv,
+                capture_output=True,
+                text=True,
+                timeout=_RELEASE_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            self._logger.warning(f"emulator_install: {app_id} filesystem access could not be granted: {exc}")
+            return False
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout or "").strip().splitlines()
+            reason = detail[-1] if detail else f"flatpak exited {completed.returncode}"
+            self._logger.warning(f"emulator_install: {app_id} filesystem access not granted: {reason}")
+            return False
+        self._logger.info(f"emulator_install: granted {app_id} access to {' '.join(_SANDBOX_ACCESS)}")
+        return True
 
     def _flatpak_app_installed(self, app_id: str) -> bool:
         """Whether *app_id* is installed in either tree ``flatpak`` searches."""
