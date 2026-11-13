@@ -47,6 +47,7 @@ MANIFEST_VERSION = 1
 SUBDIRECTORIES = ("library", "cores", "saves", "bios", "art", "mods", "cache")
 GC_PLATFORMS = ("gc", "ngc")
 SWITCH_PLATFORMS = ("switch", "nsw")
+WII_PLATFORMS = ("wii",)
 
 # Switch launches Eden as a HOST binary: the `--host` form is baked as the binary itself, so
 # Steam's own environment (and therefore its display) reaches it. Measured: going through
@@ -64,6 +65,19 @@ def build_manifest(root: Path, adopted: dict[str, str]) -> dict:
     """The manifest document this run would write, given what was adopted."""
     platforms = {}
     for platform, directory in adopted.items():
+        if platform in WII_PLATFORMS:
+            # Dolphin files a Wii save as `Wii/title/<category>/<title id>/data`, and the title id
+            # is the disc's four-character code in hex — read off the ROM, so it is a hole here.
+            # Measured on the reference Deck: Mario Galaxy 2 (`SB4E01`) writes into
+            # `Wii/title/00010000/53423445/data` with its `GameData.bin` beside `banner.bin`.
+            platforms[platform] = {
+                "emulator": "Dolphin (Standalone)",
+                "launch": list(GC_LAUNCH),
+                "save_dir": f"{directory.rstrip('/')}/<save_id>/data",
+                "save_unit": "title-dir",
+                "needs": ["save_id"],
+            }
+            continue
         if platform in SWITCH_PLATFORMS:
             # Eden files a title's save under its own title id, so the adopted directory is
             # the SLOT (…/user/save/<user>/<slot>) and the id is the last segment. The id is
@@ -113,10 +127,10 @@ def main(argv: list[str] | None = None) -> int:
         platform, _, directory = item.partition("=")
         if not platform or not directory:
             parser.error(f"--adopt wants PLATFORM=SAVE_DIR, got {item!r}")
-        if platform in GC_PLATFORMS or platform in SWITCH_PLATFORMS:
+        if platform in GC_PLATFORMS or platform in SWITCH_PLATFORMS or platform in WII_PLATFORMS:
             adopted[platform] = directory
         else:
-            parser.error(f"this cut provisions GameCube and Switch only; {platform!r} has no entry to write")
+            parser.error(f"this cut provisions GameCube, Wii and Switch only; {platform!r} has no entry to write")
 
     if args.check:
         absent = missing_subdirectories(root)

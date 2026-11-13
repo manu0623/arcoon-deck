@@ -102,7 +102,7 @@ release.
 | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Dreamcast      | Flycast ships with **Per-Game VMUs off**, so every game shares `vmu_save_A1.bin` and its siblings in RetroDECK's system folder. The core _can_ write per-game VMUs; the names it uses then aren't pinned down yet.      |
 | PlayStation 2  | The LRPS2 core ships with **shared memory cards on** (`Mcd001.ps2` / `Mcd002.ps2`). With that option off it writes one `<game>.ps2` card per game — which would fit per-game sync.                                      |
-| Wii            | Dolphin keeps a Wii save as a title directory inside the user tree the plugin pins, but no session has written one on-device yet, so its shape is still unconfirmed.                                                     |
+| Wii            | Dolphin files a Wii save as `Wii/title/00010000/<game code in hex>/data`, and the code comes from the ROM's own header — measured on Mario Galaxy 2 (`SB4E` → `53423445`). The plugin manages that directory per game. |
 | Neo Geo CD     | Ships writing one shared save. The core has a per-content mode; which one wins when loading isn't confirmed.                                                                                                            |
 | Nintendo 3DS   | The Azahar core appears to use its own save subtree. Not confirmed on-device yet.                                                                                                                                       |
 | PSP            | Where the PPSSPP core keeps its saves, and whether they are per game, hasn't been established.                                                                                                                          |
@@ -164,7 +164,7 @@ states still work locally). See the full table for specifics.
     | `scv` | ❌ | Saves are stored separately by the emulator (MAME) |
     | `supracan` | ❌ | Saves are stored separately by the emulator (MAME) |
     | `vsmile` | ❌ | Saves are stored separately by the emulator (MAME) |
-    | `wii` | ❌ | Dolphin core's own save subtree — not confirmed on-device |
+    | `wii` | ✅ | `Wii/title/00010000/<code in hex>/data` inside Dolphin's own data tree |
     | `x68000` | ❌ | Not synced |
     | `3do` | 🔜 | Per-game NVRAM, but in the Opera core's own `opera/per_game/` subfolder with a versioned name |
     | `amiga1200` | 🔜 | Planned |

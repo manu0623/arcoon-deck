@@ -30,6 +30,8 @@ from domain.content_identity import (
     ps3_title_id,
     psp_disc_id,
     rvz_gamecube_game_code,
+    rvz_wii_game_code,
+    wii_game_code,
 )
 from domain.switch_title_id import title_id_from_nsp
 
@@ -49,6 +51,9 @@ _NCCH_HEAD_BYTES = 0x200
 # Platforms each reader answers for, in the spellings RomM, ES-DE and this plugin use.
 _DISC_SERIAL_PLATFORMS = frozenset({"psx", "ps1", "ps2", "playstation", "playstation2"})
 _GAMECUBE_PLATFORMS = frozenset({"gc", "ngc", "gamecube", "gcn"})
+# Wii is its own reader: a Wii disc opens with `S<game><region>` where a GameCube boot file
+# opens with `G`, so the same six bytes mean two different things.
+_WII_PLATFORMS = frozenset({"wii"})
 _DREAMCAST_PLATFORMS = frozenset({"dreamcast", "dc"})
 _N3DS_PLATFORMS = frozenset({"n3ds", "3ds"})
 _PSP_PLATFORMS = frozenset({"psp"})
@@ -98,6 +103,11 @@ class ContentIdentityAdapter:
                 return self._ps3(path)
             if slug in _DREAMCAST_PLATFORMS:
                 return dreamcast_product_number(self._read(path, 0, _SECTOR_HEAD_BYTES))
+            if slug in _WII_PLATFORMS:
+                head = self._read(path, 0, _SECTOR_HEAD_BYTES)
+                # The container first, the bare disc second: a `.rvz` is not the disc, and
+                # its header carries the id at the offset measured on the reference set.
+                return rvz_wii_game_code(head) or wii_game_code(head)
             if slug in _GAMECUBE_PLATFORMS:
                 head = self._read(path, 0, _SECTOR_HEAD_BYTES)
                 # A `.rvz` is a container, not the disc: its own header carries the

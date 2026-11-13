@@ -19,6 +19,10 @@ from domain.content_identity import (
     n3ds_partition_offset,
     n3ds_title_id,
     ps3_title_id,
+    rvz_wii_game_code,
+    save_id_text,
+    wii_game_code,
+    wii_title_dirname,
 )
 
 
@@ -171,3 +175,42 @@ class TestPs3TitleId:
     def test_something_that_is_not_an_sfo_refuses(self) -> None:
         assert ps3_title_id(b'not an sfo, just bytes') is None
         assert ps3_title_id(b'') is None
+
+
+class TestTheWiiGameCode:
+    """Measured on the reference Deck: a Wii `.rvz` carries `SB4E01` at 0x58, and Dolphin
+    then keeps that save in `Wii/title/00010000/53423445/data`."""
+
+    def test_a_bare_wii_disc_header_names_the_code(self) -> None:
+        identity = wii_game_code(b"SB4E01" + bytes(0x20))
+        assert identity is not None
+        assert identity.save_id == "SB4E"
+        assert identity.kind is IdentityKind.WII_GAME_CODE
+        assert identity.region == "USA"
+
+    def test_the_rvz_container_is_read_at_the_measured_offset(self) -> None:
+        head = bytearray(0x120)
+        head[0:4] = b"RVZ" + bytes([1])
+        head[0x58:0x5E] = b"SB4E01"
+        identity = rvz_wii_game_code(bytes(head))
+        assert identity is not None
+        assert identity.save_id == "SB4E"
+        assert identity.source == "Wii .rvz header"
+
+    def test_a_gamecube_code_reads_as_its_own_four_characters(self) -> None:
+        """The six bytes are shaped the same; only the console byte and the filing differ."""
+        identity = wii_game_code(b"GZ2E01" + bytes(0x20))
+        assert identity is not None
+        assert identity.save_id == "GZ2E"
+
+    @pytest.mark.parametrize("code", [b"SB4X01", bytes(6), b"SB4E"])
+    def test_anything_that_is_not_a_code_refuses(self, code: bytes) -> None:
+        assert wii_game_code(code + bytes(0x20)) is None
+
+    def test_the_title_directory_is_the_codes_ascii_bytes_in_hex(self) -> None:
+        assert wii_title_dirname("SB4E") == "53423445"
+
+    def test_the_save_id_spelling_is_that_directory_name(self) -> None:
+        identity = wii_game_code(b"SMNE01" + bytes(0x20))
+        assert identity is not None
+        assert save_id_text(identity) == "534d4e45"

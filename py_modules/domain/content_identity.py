@@ -98,6 +98,10 @@ class IdentityKind(StrEnum):
     # and the sync then found nothing to carry. Two kinds, so no caller has to sniff.
     SWITCH_TITLE_ID = "switch_title_id"
     GAME_CODE = "game_code"
+    # A Wii disc's code is the same four characters a GameCube disc's is, and it is NOT
+    # filed the same way: Dolphin names a Wii save folder with the code's ASCII bytes in
+    # hex, so ``save_id_text`` has to spell it as ``<4 chars>.hex()`` rather than verbatim.
+    WII_GAME_CODE = "wii_game_code"
     PRODUCT_NUMBER = "product_number"
 
 
@@ -206,6 +210,61 @@ def rvz_gamecube_game_code(head: bytes) -> ContentIdentity | None:
         return None
     # The reading is the disc's id, but it was not taken from a bare ``boot.bin``.
     return replace(identity, source="GameCube .rvz header")
+
+
+def _wii_game_code(code: bytes, source: str) -> ContentIdentity | None:
+    """The four-character Wii game code from six disc bytes, or ``None``.
+
+    A Wii disc header opens with the same six-character code a GameCube one does
+    (``SMNE01``), but the first byte is the console (``S`` for a Wii disc) rather than the
+    ``G`` a GameCube boot file starts with, so neither reader can serve the other. The region
+    character is the only byte that tells a real header from six printable bytes at the front
+    of something else, exactly as on GameCube.
+    """
+    if len(code) < _RVZ_DISC_ID_BYTES:
+        return None
+    text = code[:6].decode("ascii", errors="replace")
+    if not all(char.isalnum() for char in text):
+        return None
+    if text[3] not in _GAMECUBE_REGIONS:
+        return None
+    return ContentIdentity(
+        save_id=text[:4],
+        kind=IdentityKind.WII_GAME_CODE,
+        source=source,
+        region=_GAMECUBE_CARD_REGIONS.get(text[3], "EUR"),
+    )
+
+
+def wii_game_code(head: bytes) -> ContentIdentity | None:
+    """The Wii game code from a bare disc image's header, or ``None``.
+
+    Measured on the reference Deck's own ROM set: a Wii ``.rvz`` carries ``SB4E01`` at
+    :data:`_RVZ_DISC_ID_OFFSET`, and Dolphin then keeps the save in
+    ``Wii/title/00010000/53423445/data`` — the folder named by those four characters in hex.
+    """
+    return _wii_game_code(head[:6], "Wii disc header")
+
+
+def rvz_wii_game_code(head: bytes) -> ContentIdentity | None:
+    """The Wii game code from a Dolphin ``.rvz`` container's header, or ``None``.
+
+    The same container offset the GameCube reader uses, checked rather than trusted: the
+    magic has to be there and the six bytes have to pass the Wii test, so a container with a
+    different layout answers nothing rather than a plausible string from a hash table.
+    """
+    if not head.startswith(_RVZ_MAGIC) or len(head) < _RVZ_DISC_ID_OFFSET + _RVZ_DISC_ID_BYTES:
+        return None
+    return _wii_game_code(head[_RVZ_DISC_ID_OFFSET : _RVZ_DISC_ID_OFFSET + _RVZ_DISC_ID_BYTES], "Wii .rvz header")
+
+
+def wii_title_dirname(save_id: str) -> str:
+    """The Dolphin title-directory name a four-character Wii game code implies.
+
+    Measured: ``SB4E`` becomes ``53423445`` under ``Wii/title/00010000`` — the code's ASCII
+    bytes in lowercase hex, which is how the emulator names a title it has a save for.
+    """
+    return save_id.encode("ascii").hex()
 
 
 def n3ds_partition_offset(head: bytes) -> int | None:
@@ -412,6 +471,8 @@ def save_id_text(identity: ContentIdentity) -> str:
     """
     if identity.kind is IdentityKind.TITLE_ID:
         return f"{identity.save_id[:8]}/{identity.save_id[8:]}"
+    if identity.kind is IdentityKind.WII_GAME_CODE:
+        return wii_title_dirname(identity.save_id)
     # A Switch id rides whole: one 16-character directory name, no split.
     return identity.save_id
 
