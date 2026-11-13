@@ -1346,9 +1346,21 @@ interface SessionFinalizeMigration {
   save_sort: SaveSortMigrationStatus;
 }
 
+export interface SessionCrashResult {
+  exe: string;
+  pid: number;
+  signal: number;
+  signal_name: string;
+  detected_at_us: number;
+}
+
 export interface SessionFinalizeResult {
   total_seconds: number | null;
   sync: SessionFinalizeSyncResult;
+  // Present only where the emulator left a core dump matching this ROM's own baked
+  // launch command. Absent or null means "not established", which is also what a
+  // clean exit looks like from here — the plugin cannot read Steam's exit status.
+  crash?: SessionCrashResult | null;
   // ``null`` when the backend's migration-state refresh raised — the
   // frontend then leaves the migration stores untouched (any stale
   // ``pending`` badge keeps showing), matching the pre-PR behavior

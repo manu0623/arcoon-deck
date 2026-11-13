@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 
     from services.protocols.cross_service import (
         SessionAchievementSync,
+        SessionCrashProbe,
         SessionMigrationReader,
         SessionPlaytimeRecorder,
         SessionPostExitSync,
@@ -115,6 +116,10 @@ class SessionFinalizeResult:
     total_seconds: int | None
     sync: SessionFinalizeSyncResult
     migration: SessionFinalizeMigration | None
+    #: ``None`` when the emulator left no matching core dump **or** the question could
+    #: not be asked (no session marker, no baked command, no readable journal). The two
+    #: are the same answer here and neither claims a clean exit.
+    crash: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -133,6 +138,9 @@ class SessionLifecycleServiceConfig:
     achievement_sync: SessionAchievementSync
     migration_reader: SessionMigrationReader
     logger: logging.Logger
+    #: Optional so a caller that has no coredump source still finalizes a session; the
+    #: crash line is then simply never written.
+    crash_probe: SessionCrashProbe | None = None
 
 
 def _render_failure_toast(
@@ -183,6 +191,7 @@ class SessionLifecycleService:
     def __init__(self, *, config: SessionLifecycleServiceConfig) -> None:
         self._playtime_recorder = config.playtime_recorder
         self._post_exit_sync = config.post_exit_sync
+        self._crash_probe = config.crash_probe
         self._achievement_sync = config.achievement_sync
         self._migration_reader = config.migration_reader
         self._logger = config.logger
@@ -224,6 +233,9 @@ class SessionLifecycleService:
             ``romm_data_changed`` event dispatch. ``migration`` carries
             the two migration-status payloads.
         """
+        # Before the playtime recorder: it clears the session marker the crash window
+        # is dated from, so asking afterwards would always find an empty window.
+        crash = await self._detect_crash(rom_id)
         total_seconds = await self._record_playtime(rom_id)
         self._schedule_achievement_sync(rom_id)
         sync_result = await self._build_sync_result(rom_id)
@@ -233,7 +245,23 @@ class SessionLifecycleService:
             total_seconds=total_seconds,
             sync=sync_result,
             migration=migration,
+            crash=crash,
         )
+
+    async def _detect_crash(self, rom_id: int) -> dict[str, Any] | None:
+        """Ask the crash probe how the session's emulator exited; never block the finalize.
+
+        A probe failure is logged and treated as "not established": a session that ended
+        cleanly and one whose crash could not be proven are the same shape here, and the
+        playtime/save/sync steps must still run.
+        """
+        if self._crash_probe is None:
+            return None
+        try:
+            return await self._crash_probe.detect_session_crash(rom_id)
+        except Exception as e:
+            self._logger.warning(f"SessionLifecycle crash probe failed for rom_id={rom_id}: {e}")
+            return None
 
     async def _record_playtime(self, rom_id: int) -> int | None:
         """Record session end and return the updated ``total_seconds``.

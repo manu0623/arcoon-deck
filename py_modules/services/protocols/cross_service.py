@@ -29,6 +29,18 @@ if TYPE_CHECKING:
     from domain.shortcut_data import EmulatorInvocation
 
 
+class SessionCrashProbe(Protocol):
+    """Say how the session's emulator exited, when it did not exit cleanly.
+
+    Answers ``None`` where the question could not be put (no session marker, no baked
+    command, no readable journal) and a payload naming the executable and the signal
+    where a core dump matches this ROM's launch command. Asynchronous because the
+    implementation does its row reads and its journal query in an executor.
+    """
+
+    async def detect_session_crash(self, rom_id: int) -> dict[str, Any] | None: ...
+
+
 class RomInstallRecorder(Protocol):
     """The one writer of a ``rom_installs`` row and of the shortcut bake behind it.
 

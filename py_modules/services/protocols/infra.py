@@ -12,8 +12,20 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 if TYPE_CHECKING:
+    from domain.emulator_crash import Coredump
     from domain.game_instance import GameInstance
     from domain.sync_action import SyncAction
+
+
+class CoredumpReader(Protocol):
+    """List the core dumps recorded since an instant.
+
+    Three-valued on purpose: a tuple (possibly empty) means the journal was read,
+    ``None`` means it could not be. A caller must never turn "could not ask" into
+    "nothing crashed".
+    """
+
+    def read_since(self, since_us: int) -> tuple[Coredump, ...] | None: ...
 
 
 class EventEmitter(Protocol):

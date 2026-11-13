@@ -14,6 +14,7 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from adapters.coredumps import CoredumpAdapter
 from adapters.emulator_save_link import EmulatorSaveLinkAdapter
 from domain.owned_dolphin import user_dir_for
 from domain.runtime import RuntimeMode, resolve_launch_backend
@@ -25,6 +26,7 @@ from services.artwork import ArtworkService, ArtworkServiceConfig
 from services.connection import ConnectionService, ConnectionServiceConfig
 from services.core_provisioning import CoreProvisioningConfig, CoreProvisioningService
 from services.cores import CoreService, CoreServiceConfig
+from services.crash_detection import CrashDetectionService, CrashDetectionServiceConfig
 from services.data_location import DataLocationService, DataLocationServiceConfig
 from services.disc import DiscService, DiscServiceConfig
 from services.disc_launch_resolver import DiscLaunchResolver, DiscLaunchResolverConfig
@@ -672,6 +674,19 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         ),
     )
 
+    # A session ends when Steam stops listing the game, which carries no exit status:
+    # a crashed emulator and a quit one look identical. The one trace a signal death
+    # leaves is a core dump, so the finalize round-trip asks coredumpctl for dumps since
+    # the session began and names the emulator from the ROM's own baked launch command.
+    crash_detection_service = CrashDetectionService(
+        config=CrashDetectionServiceConfig(
+            uow_factory=cfg.callbacks.uow_factory,
+            coredumps=CoredumpAdapter(logger=cfg.runtime.logger),
+            loop=cfg.runtime.loop,
+            logger=cfg.runtime.logger,
+        ),
+    )
+
     session_lifecycle_service = SessionLifecycleService(
         config=SessionLifecycleServiceConfig(
             playtime_recorder=playtime_service,
@@ -679,6 +694,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             achievement_sync=achievements_service,
             migration_reader=migration_service,
             logger=cfg.runtime.logger,
+            crash_probe=crash_detection_service,
         ),
     )
 
