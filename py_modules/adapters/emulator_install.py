@@ -124,24 +124,20 @@ class EmulatorInstallAdapter:
         target = appimage_path(emulator, user_home=self._user_home)
         if target is None:
             return self._failure(emulator, "no_install_path", repo=plan.repo)
-        release = self._release(plan)
-        if release is None:
+        releases = self._releases(plan)
+        if not releases:
             return self._failure(emulator, "release_unreachable", repo=plan.repo)
-        tag = release.get("tag_name")
-        assets = release.get("assets") if isinstance(release.get("assets"), list) else []
-        names = [
-            asset.get("name") for asset in assets if isinstance(asset, dict) and isinstance(asset.get("name"), str)
-        ]
-        asset_name = matching_asset(names, plan.asset_pattern)
-        if asset_name is None:
+        chosen, undigested = self._choose(plan, releases)
+        if chosen is None:
             # Zero matches and two matches are the same refusal: this plugin will not pick
-            # a CPU architecture or guess a filename.
-            return self._failure(emulator, "asset_unresolved", repo=plan.repo, assets=names[:8])
-        asset = next(item for item in assets if isinstance(item, dict) and item.get("name") == asset_name)
-        expected = digest_from_asset(asset)
-        if expected is None:
-            self._logger.warning(f"emulator_install: {asset_name} has no digest; refusing to install it")
-            return self._failure(emulator, "no_digest", asset=asset_name)
+            # a CPU architecture or guess a filename. An asset that matched but published
+            # no hash is the other refusal, and a different thing to say.
+            if undigested is not None:
+                self._logger.warning(f"emulator_install: {undigested} has no digest; refusing to install it")
+                return self._failure(emulator, "no_digest", asset=undigested, repo=plan.repo)
+            return self._failure(emulator, "asset_unresolved", repo=plan.repo, releases=len(releases))
+        release, asset_name, expected = chosen
+        tag = release.get("tag_name")
         version = tag if isinstance(tag, str) else None
         if os.path.isfile(target) and self._sha256_file(target) == expected:
             return {
@@ -156,19 +152,61 @@ class EmulatorInstallAdapter:
             return self._failure(emulator, "release_unreachable", repo=plan.repo)
         return self._download(emulator, plan, target, download_url(plan.repo, tag, asset_name), expected, version)
 
-    def _release(self, plan: ReleaseInstall) -> dict[str, object] | None:
-        """The newest release's JSON, or ``None`` when it cannot be read."""
+    def _choose(self, plan: ReleaseInstall, releases: list[dict]) -> tuple[tuple[dict, str, str] | None, str | None]:
+        """The first release that states both a matching asset and its hash.
+
+        Newest first, and a release whose asset carries no digest is skipped rather than
+        installed unverified — if an older one still has one, that is the build this can
+        honestly vouch for. The second half of the answer names the asset that matched but
+        could not be vouched for, so the caller can say *that* rather than "no asset".
+        """
+        undigested: str | None = None
+        for release in releases:
+            assets = release.get("assets") if isinstance(release.get("assets"), list) else []
+            names = [
+                asset.get("name")
+                for asset in assets
+                if isinstance(asset, dict) and isinstance(asset.get("name"), str)
+            ]
+            asset_name = matching_asset(names, plan.asset_pattern)
+            if asset_name is None:
+                continue
+            asset = next(item for item in assets if isinstance(item, dict) and item.get("name") == asset_name)
+            expected = digest_from_asset(asset)
+            if expected is None:
+                undigested = undigested or asset_name
+                continue
+            return (release, asset_name, expected), None
+        return None, undigested
+
+    def _releases(self, plan: ReleaseInstall) -> list[dict]:
+        """The newest release, or the recent listing when ``latest`` answers nothing.
+
+        ``/releases/latest`` is 404 for a project whose newest builds are all marked
+        pre-release (Citron's nightlies), so a listing is asked for before the source is
+        written off. Drafts are dropped; pre-releases are kept, because for a nightly-only
+        project they are the builds.
+        """
+        payload = self._get(plan.release_api)
+        if isinstance(payload, dict):
+            return [payload]
+        listing = self._get(plan.releases_api)
+        if not isinstance(listing, list):
+            return []
+        return [entry for entry in listing if isinstance(entry, dict) and not entry.get("draft")]
+
+    def _get(self, url: str) -> object:
+        """JSON from *url*, or ``None`` when it cannot be read."""
         request = urllib.request.Request(
-            plan.release_api,
+            url,
             headers={"User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"},
         )
         try:
             with urllib.request.urlopen(request, timeout=_RELEASE_TIMEOUT_SECONDS) as response:
-                payload = json.loads(response.read(4 * 1024 * 1024))
+                return json.loads(response.read(4 * 1024 * 1024))
         except (urllib.error.URLError, OSError, ValueError) as exc:
-            self._logger.warning(f"emulator_install: {plan.repo} release could not be read: {exc}")
+            self._logger.warning(f"emulator_install: {url} could not be read: {exc}")
             return None
-        return payload if isinstance(payload, dict) else None
 
     def _download(
         self,

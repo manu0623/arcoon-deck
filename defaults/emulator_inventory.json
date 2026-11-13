@@ -121,7 +121,7 @@
             "flatpak": "org.duckstation.DuckStation"
           },
           "install": {
-            "github": {"repo": "stenzek/duckstation", "asset": "*x64*.AppImage"}
+            "github": {"repo": "stenzek/duckstation", "asset": "DuckStation-x64.AppImage"}
           }
         }
       ]

@@ -69,6 +69,17 @@ class ReleaseInstall:
         """The endpoint that answers the newest tag and its asset names."""
         return f"https://api.github.com/repos/{self.repo}/releases/latest"
 
+    @property
+    def releases_api(self) -> str:
+        """The endpoint to fall back on when ``latest`` has nothing to offer.
+
+        GitHub answers 404 from ``/releases/latest`` for a project whose newest releases
+        are all marked pre-release — which is exactly how Citron ships nightlies — and
+        451 for a repository taken down. A listing is how those projects' builds are found
+        at all.
+        """
+        return f"https://api.github.com/repos/{self.repo}/releases?per_page=10"
+
 
 InstallPlan = FlatpakInstall | ReleaseInstall
 
