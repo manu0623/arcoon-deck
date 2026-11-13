@@ -66,10 +66,13 @@ _SAVE_POINTS: dict[str, SavePoint] = {
     # RPCS3 creates, and the only one in both trees that hold its data here.
     "rpcs3": SavePoint(in_data_dir=False, subdir=("dev_hdd0", "home", "00000001", "savedata")),
     # Measured on the reference Deck: PCSX2 keeps ``MemoryCards = memcards`` under its
-    # config root, so ``config/PCSX2/memcards`` is the folder its cards live in —
-    # ``Mcd001.ps2`` for slot 1. The folder is the link: pointing it at the bank makes
-    # the standalone read and write the same card the launch redirects the core to.
-    "pcsx2": SavePoint(in_data_dir=False, subdir=("PCSX2", "memcards")),
+    # config root — ``config/PCSX2`` — so ``memcards`` is the folder its cards live in,
+    # ``Mcd001.ps2`` for slot 1. The config root already ends at the app directory the
+    # layout names, so this subdir is measured from there and must not repeat it: naming
+    # ``PCSX2`` again produced ``config/PCSX2/PCSX2/memcards``, a folder nothing reads.
+    # Pointing the real folder at the bank is what makes the standalone read and write
+    # the same card the launch redirects the core to.
+    "pcsx2": SavePoint(in_data_dir=False, subdir=("memcards",)),
 }
 
 # The providers whose config root we know belongs to that install. ``emudeck`` is out

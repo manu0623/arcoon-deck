@@ -36,8 +36,11 @@ pointed at `saves/ps2`.**
 
 Three pieces, each measured:
 
-1. `SavePoint("pcsx2", in_data_dir=False, subdir=("PCSX2", "memcards"))` — the existing
-   save-link machinery puts `config/PCSX2/memcards` at `saves/ps2`. PCSX2's ini keeps
+1. `SavePoint("pcsx2", in_data_dir=False, subdir=("memcards",))` — the existing
+   save-link machinery puts `config/PCSX2/memcards` at `saves/ps2`. The subdir is
+   measured from the app's config root, which already ends at `config/PCSX2`; repeating
+   the app directory there produced `config/PCSX2/PCSX2/memcards`, a folder nothing reads
+   (measured, and why the first wired build linked nothing). PCSX2's ini keeps
    `MemoryCards = memcards`, a relative folder, so the link is what resolves it.
 2. `adapters/ps2_memcard.Ps2MemcardAdapter` — when the link pass links PCSX2, the bank
    directory gets a folder card (`Mcd001.ps2/` + a formatted superblock) and
