@@ -526,3 +526,23 @@ class Test3dsSaveAnswer:
         service.save_answer(_ROM_ID)
 
         assert catalogue.calls != []
+
+
+def test_a_fresh_3ds_title_still_has_a_download_target() -> None:
+    """Nothing local yet, so the answer is the place a server save unpacks into — the
+    restore would otherwise refuse for a game the plugin can identify perfectly well."""
+    service, _catalogue = _n3ds_service(
+        emulator=EmulatorInvocation.standalone("azahar %ROM%", emulator="azahar")
+    )
+    empty = {
+        key: value
+        for key, value in _N3dsStore._TREE.items()
+        if "000ec300" not in key or key.endswith("/00040000")
+    }
+    service._save_file_store = type("_EmptyStore", (_N3dsStore,), {"_TREE": empty})()
+
+    answer = service.save_answer(_ROM_ID)
+
+    assert answer.syncable is True
+    assert answer.components == ()
+    assert answer.directory == _BANK_3DS

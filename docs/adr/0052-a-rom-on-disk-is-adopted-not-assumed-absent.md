@@ -55,6 +55,19 @@ tree's member is not. The rule is now stated where the unit is built: an archive
 member's path inside the answer's directory, so packing, the on-disk probe and the restore all
 walk the same distance and a download lands where Azahar reads.
 
+## The empty title that could not come back
+
+Uploading worked; restoring did not, for a game that had not saved locally yet. A 3DS unit
+with no members reported itself unidentified (the layout carries `identified=False`, because
+neither save root names the title), so a download refused with `save_shape_unsupported` for a
+game whose id had just been read perfectly well. Measured on the reference Deck by removing
+the local title folder after an upload: the save sat on the server and nothing could fetch it.
+
+By the time the rule has split the save id into a category and a low id and discovered the
+console's `id0`/`id1`, the title IS named — an empty folder is a game that has not saved yet,
+which is exactly the directory a server save unpacks into. The unit says so now, and a fresh
+title has a download target.
+
 ## Consequences
 
 - A library that arrived another way becomes syncable without a re-download, which is what

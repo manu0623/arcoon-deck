@@ -201,7 +201,29 @@ class TestN3dsTitle:
             f"{id0}/{id1}/title/00040000/00113200/data",
             f"{id0}/{id1}/extdata/00000000/00001132",
         )
-        assert result.identified is False, "neither root names the title"
+        assert result.identified is True, "the save id and the console's ids name the title"
+        assert result.place_path == data
+
+    def test_an_empty_title_folder_is_where_a_server_save_lands(self) -> None:
+        """A 3DS game that has not saved yet is not unidentified: the id was read and the
+        console's id0/id1 were discovered, so the download has a directory to unpack into.
+
+        Measured on the reference Deck: with the local folder removed, the sync refused
+        with ``save_shape_unsupported`` and the uploaded save could never come back.
+        """
+        base, id0, id1, data, _extdata, _tree = n3ds_tree()
+        empty = {
+            base: (id0,),
+            os.path.join(base, id0): (id1,),
+            os.path.join(base, id0, id1, "title"): ("00040000",),
+            os.path.join(base, id0, id1, "title", "00040000"): ("00113200",),
+            os.path.dirname(data): (),
+        }
+
+        result = unit("n3ds", save_id="00040000/00113200", tree=empty)
+
+        assert result.members == ()
+        assert result.identified is True
         assert result.place_path == data
 
     def test_extdata_id_is_the_low_half_shifted_right_eight_bits(self) -> None:

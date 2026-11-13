@@ -661,7 +661,12 @@ def _n3ds_title(layout: SaveLayout, base: str, save_id: str | None, listing: Map
     # rows written before extdata joined the unit keep their paths; a title with
     # extdata only resolves to the extdata directory.
     place_path = title_data if title_data in listing or extdata is None or not members else extdata
-    return _unit(layout, base, place_path, tuple(members))
+    # The title IS named at this point: the save id split into a category and a low id,
+    # and the console's id0/id1 were discovered rather than invented. So an empty title
+    # folder is a game that has not saved yet — the place a server save lands in — not an
+    # unidentified one. Measured on the reference Deck: with the local folder removed, a
+    # download refused with ``save_shape_unsupported`` and the save could never come back.
+    return _unit(layout, base, place_path, tuple(members), identified=True)
 
 
 def _category_split(layout: SaveLayout, base: str, save_id: str | None) -> SaveUnit:
