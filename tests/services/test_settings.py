@@ -742,3 +742,32 @@ class TestSaveRuntimeMode:
 
     def test_get_settings_reports_the_shipped_default(self, service):
         assert service.get_settings()["runtime_mode"] == "builtin"
+
+
+class TestSaveStructure:
+    """`save_structure` — the tree choice is validated, not coerced (ADR-0046)."""
+
+    @pytest.mark.parametrize("structure", ["app", "emudeck", "retroarch", "custom"])
+    def test_accepts_every_known_shape(self, service, settings, settings_persister, structure):
+        result = service.save_structure(structure)
+
+        assert result == {"success": True, "structure": structure}
+        assert settings["structure"] == structure
+        settings_persister.save_settings.assert_called_once_with()
+
+    def test_refuses_an_unknown_shape_without_persisting(self, service, settings, settings_persister):
+        result = service.save_structure("/mnt/sdcard")
+
+        assert result["success"] is False
+        assert "structure" not in settings
+        settings_persister.save_settings.assert_not_called()
+
+    def test_refuses_a_non_string_from_the_wire(self, service, settings, settings_persister):
+        result = service.save_structure(None)
+
+        assert result["success"] is False
+        assert "structure" not in settings
+        settings_persister.save_settings.assert_not_called()
+
+    def test_get_settings_reports_the_shipped_default(self, service):
+        assert service.get_settings()["structure"] == "app"

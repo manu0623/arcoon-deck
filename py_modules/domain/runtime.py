@@ -58,16 +58,56 @@ BUILTIN_ROOT_DIR = "Emulation"
 #: The one older spelling of :attr:`RuntimeMode.BUILTIN` a settings file may still hold.
 _LEGACY_BUILTIN = "standalone"
 
-#: Where RetroArch's Flatpak keeps the cores it loads, relative to the user's home. The
-#: owned launch path starts that RetroArch, so its cores directory is the one to provision.
-RETROARCH_FLATPAK_CORES = (
+#: Where the RetroArch Flatpak the plugin installs keeps its own folders, relative to the
+#: user's home: ``saves``, ``states``, ``cores`` and ``system`` live directly beneath it.
+RETROARCH_FLATPAK_ROOT = (
     ".var",
     "app",
     "org.libretro.RetroArch",
     "config",
     "retroarch",
-    "cores",
 )
+
+#: Where that RetroArch keeps the cores it loads. The owned launch path starts it, so this
+#: is the directory the provisioner writes into.
+RETROARCH_FLATPAK_CORES = (*RETROARCH_FLATPAK_ROOT, "cores")
+
+
+class Structure(StrEnum):
+    """Where the app's built-in tree puts the data it manages (ADR-0046).
+
+    A structure is a *shape*, not a path: the four per-root overrides still win on top of
+    whichever one is chosen, so a user can keep the app's own tree and put BIOS on a card.
+
+    - ``APP`` — the shipped default. Everything the app downloads or writes (ROMs, BIOS,
+      states, cores, and the save tree the appendconfig points at) lives under its own data
+      directory, the one place it is guaranteed to be able to read back.
+    - ``EMUDECK`` — ``<home>/Emulation``, the tree an EmuDeck/ES-DE device already has. Cores
+      stay in the installed RetroArch, since that is the program that loads them.
+    - ``RETROARCH`` — the installed RetroArch's own ``saves``/``states``/``cores``/``system``
+      folders, for the user who wants other RetroArch tooling to see the same saves. ROMs
+      stay in the app's data directory: RetroArch has no ROM root to adopt.
+    - ``CUSTOM`` — the per-root paths in settings are the answer; anything left blank falls
+      back to the ``EMUDECK`` shape rather than to an empty path.
+    """
+
+    APP = "app"
+    EMUDECK = "emudeck"
+    RETROARCH = "retroarch"
+    CUSTOM = "custom"
+
+
+def resolve_structure(setting: object) -> Structure:
+    """The chosen structure, with anything unrecognised reading as the shipped default.
+
+    Same rule as the runtime: a settings file holding a word this code does not know must
+    not silently reroute where a user's data lives, so it reads as ``APP`` — the one shape
+    whose paths the app itself creates and can always write.
+    """
+    for structure in Structure:
+        if setting == structure:
+            return structure
+    return Structure.APP
 
 #: Settings keys that override a standalone root, per root name.
 OVERRIDE_KEYS = {
@@ -115,6 +155,7 @@ def resolve_roots(
     home: str,
     retrodeck_roots: Mapping[str, str],
     settings: Mapping[str, object] | None = None,
+    data_dir: str = "",
 ) -> RuntimeRoots:
     """The roots for *mode*, with per-root settings overrides on top.
 
@@ -122,9 +163,14 @@ def resolve_roots(
     resolved them (symlinks included, #1838), and re-deriving them here would be a second
     spelling of one directory.
 
-    A ``BUILTIN`` runtime answers from its own tree, with ``<root>_dir`` settings keys
-    overriding any of them. An empty override is unset, not a root of ``""`` — a settings
-    file that once held a path and had it cleared must fall back, not point at nothing.
+    A ``BUILTIN`` runtime answers from the structure the settings name (ADR-0046), with
+    ``<root>_dir`` settings keys overriding any of them. An empty override is unset, not a
+    root of ``""`` — a settings file that once held a path and had it cleared must fall
+    back, not point at nothing.
+
+    *data_dir* is what makes the ``APP`` structure possible; without it (a caller with no
+    data directory, which is only true of a test or a probe) the built-in tree falls back to
+    the EmuDeck shape rather than inventing a root under the plugin's install folder.
     """
     if mode is RuntimeMode.RETRODECK:
         return RuntimeRoots(
@@ -135,14 +181,39 @@ def resolve_roots(
             states=retrodeck_roots["states"],
             cores=retrodeck_roots.get("cores", ""),
         )
-    base = f"{home}/{BUILTIN_ROOT_DIR}"
-    defaults = {
-        "roms": f"{base}/roms",
-        "saves": f"{base}/saves",
-        "bios": f"{base}/bios",
-        "states": f"{base}/states",
-        "cores": "/".join((home, *RETROARCH_FLATPAK_CORES)),
-    }
+    retroarch_root = "/".join((home, *RETROARCH_FLATPAK_ROOT))
+    emudeck_base = f"{home}/{BUILTIN_ROOT_DIR}"
+    structure = resolve_structure((settings or {}).get("structure"))
+    if structure is Structure.APP and not data_dir:
+        # No data directory was supplied, so there is no app tree to answer from.
+        structure = Structure.EMUDECK
+    if structure is Structure.APP:
+        base = data_dir
+        defaults = {
+            "roms": f"{base}/roms",
+            "saves": f"{base}/saves",
+            "bios": f"{base}/bios",
+            "states": f"{base}/states",
+            "cores": f"{base}/cores",
+        }
+    elif structure is Structure.RETROARCH:
+        defaults = {
+            # RetroArch has no ROM root to adopt, so the app keeps the files it downloaded
+            # where it can always find them.
+            "roms": f"{data_dir or emudeck_base}/roms",
+            "saves": f"{retroarch_root}/saves",
+            "states": f"{retroarch_root}/states",
+            "bios": f"{retroarch_root}/system",
+            "cores": f"{retroarch_root}/cores",
+        }
+    else:  # EMUDECK and CUSTOM share the tree; CUSTOM differs only in what overrides it
+        defaults = {
+            "roms": f"{emudeck_base}/roms",
+            "saves": f"{emudeck_base}/saves",
+            "bios": f"{emudeck_base}/bios",
+            "states": f"{emudeck_base}/states",
+            "cores": f"{retroarch_root}/cores",
+        }
     values: dict[str, str] = {}
     for name, default in defaults.items():
         # ``states`` has no override key of its own: it follows the tree, and looking up a

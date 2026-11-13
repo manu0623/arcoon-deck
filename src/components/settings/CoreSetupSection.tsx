@@ -25,6 +25,10 @@ export interface CoreSetupSectionProps {
    *  RetroArch), "retrodeck" or "auto" (ADR-0045). */
   runtimeMode: string;
   onRuntimeChange: (mode: string) => void;
+  /** Where the built-in tree keeps what it manages: "app" (default), "emudeck",
+   *  "retroarch" or "custom" (ADR-0046). */
+  structure: string;
+  onStructureChange: (structure: string) => void;
 }
 
 /** The three runtimes, in the order the choice reads: the app's own first. */
@@ -34,12 +38,22 @@ const RUNTIME_CHOICES: ReadonlyArray<{ id: string; label: string }> = [
   { id: "auto", label: "Follow what's installed" },
 ];
 
+/** The four tree shapes, in the order a new device should consider them. */
+const STRUCTURE_CHOICES: ReadonlyArray<{ id: string; label: string }> = [
+  { id: "app", label: "App folder" },
+  { id: "emudeck", label: "EmuDeck tree" },
+  { id: "retroarch", label: "RetroArch folders" },
+  { id: "custom", label: "Custom paths" },
+];
+
 export const CoreSetupSection: FC<CoreSetupSectionProps> = ({
   busy,
   status,
   onInstall,
   runtimeMode,
   onRuntimeChange,
+  structure,
+  onStructureChange,
 }) => (
   <PanelSection title="Emulators & Cores">
     <PanelSectionRow>
@@ -56,6 +70,23 @@ export const CoreSetupSection: FC<CoreSetupSectionProps> = ({
           disabled={runtimeMode === id}
         >
           {runtimeMode === id ? `${label} — in use` : label}
+        </ButtonItem>
+      </PanelSectionRow>
+    ))}
+    <PanelSectionRow>
+      <div style={{ fontSize: "11px", color: "#8f98a0", padding: "0 0 6px" }}>
+        Storage — where the built-in runtime keeps the ROMs, saves, states and BIOS it manages. Changing it affects
+        what is downloaded or launched next; nothing already on disk is moved.
+      </div>
+    </PanelSectionRow>
+    {STRUCTURE_CHOICES.map(({ id, label }) => (
+      <PanelSectionRow key={id}>
+        <ButtonItem
+          layout="below"
+          onClick={() => onStructureChange(id)}
+          disabled={structure === id}
+        >
+          {structure === id ? `${label} — in use` : label}
         </ButtonItem>
       </PanelSectionRow>
     ))}

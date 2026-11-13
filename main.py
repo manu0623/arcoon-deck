@@ -317,6 +317,9 @@ class Plugin:
     async def save_runtime_mode(self, mode):
         return self._settings_service.save_runtime_mode(mode)
 
+    async def save_structure(self, structure):
+        return self._settings_service.save_structure(structure)
+
     async def get_known_regions(self):
         return self._settings_service.get_known_regions()
 

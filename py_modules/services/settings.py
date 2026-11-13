@@ -38,6 +38,9 @@ _VALID_LOG_LEVELS = ("debug", "info", "warn", "error")
 #: The runtime vocabulary ``domain.runtime`` understands. Validated here so a typo from
 #: the panel is refused instead of silently rerouting the library (ADR-0045).
 _VALID_RUNTIME_MODES = ("builtin", "retrodeck", "auto")
+
+#: The tree shapes ``domain.runtime`` understands (ADR-0046).
+_VALID_STRUCTURES = ("app", "emudeck", "retroarch", "custom")
 _VALID_STEAM_INPUT_MODES = ("default", "force_on", "force_off")
 
 # What the user is told about a refused custom-header list. Each template may name
@@ -174,6 +177,7 @@ class SettingsService:
             "retroarch_input_check": self._steam_config.check_retroarch_input_driver(),
             "log_level": self._settings.get("log_level", "warn"),
             "runtime_mode": self._settings.get("runtime_mode", "builtin"),
+            "structure": self._settings.get("structure", "app"),
             "romm_allow_insecure_ssl": self._settings.get("romm_allow_insecure_ssl", False),
             "collection_create_platform_groups": self._settings.get("collection_create_platform_groups", False),
             "collection_owner_scope": self._settings.get("collection_owner_scope", "all"),
@@ -200,6 +204,21 @@ class SettingsService:
         self._settings["runtime_mode"] = mode
         self._settings_persister.save_settings()
         return {"success": True, "runtime_mode": mode}
+
+    def save_structure(self, structure: object) -> dict[str, Any]:
+        """Validate and persist which tree the built-in runtime uses (ADR-0046).
+
+        Read through ``domain.runtime.resolve_roots`` on every path question, so the change
+        applies to the next download or launch without a restart. It does not move files: a
+        tree that already holds data keeps it, and the new shape answers for what comes
+        after. A non-string or unknown value is refused rather than coerced — a typo must
+        not leave the app reading a tree nobody chose.
+        """
+        if not isinstance(structure, str) or structure not in _VALID_STRUCTURES:
+            return {"success": False, "reason": "invalid_structure", "message": "Invalid structure"}
+        self._settings["structure"] = structure
+        self._settings_persister.save_settings()
+        return {"success": True, "structure": structure}
 
     # ── Log level ────────────────────────────────────────────────────────
 

@@ -73,6 +73,10 @@ export interface PluginSettings {
   // classic shape and "auto" follows whatever is installed. Optional so an older
   // payload or a test fixture without it reads as the default, not as undefined.
   runtime_mode?: "builtin" | "retrodeck" | "auto";
+  // Where the built-in tree puts the data it manages (ADR-0046). "app" is the shipped
+  // default (the plugin's own data directory); "emudeck", "retroarch" and "custom" are
+  // the other shapes. Optional so an older payload or a fixture reads as the default.
+  structure?: "app" | "emudeck" | "retroarch" | "custom";
   romm_allow_insecure_ssl: boolean;
   retroarch_input_check?: RetroArchInputCheck;
   collection_create_platform_groups?: boolean;

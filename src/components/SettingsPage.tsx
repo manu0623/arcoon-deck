@@ -16,6 +16,7 @@ import { showToast } from "../utils/toast";
 import {
   getSettings,
   saveRuntimeMode,
+  saveStructure,
   saveServerUrl,
   saveCustomHeaders,
   connectWithCredentials,
@@ -156,6 +157,8 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack, section }) => {
   // Runtime (ADR-0045) — which tree and launcher the app runs on. Read from the settings
   // payload so the tick is the backend's answer, not this panel's last click.
   const [runtimeMode, setRuntimeMode] = useState("builtin");
+  // Structure (ADR-0046) — which tree the built-in runtime writes into.
+  const [structure, setStructure] = useState("app");
 
   // Library state (preferred sibling-group region, ADR-0021)
   const [preferredRegion, setPreferredRegion] = useState(AUTO_REGION);
@@ -177,6 +180,7 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack, section }) => {
         setSteamInputMode(s.steam_input_mode);
         setLogLevel(s.log_level);
         setRuntimeMode(s.runtime_mode ?? "builtin");
+        setStructure(s.structure ?? "app");
         setPreferredRegion(s.preferred_region ?? AUTO_REGION);
         setPlatformGroups(!!s.collection_create_platform_groups);
         setNamingMode(s.collection_naming_mode ?? "merge");
@@ -534,6 +538,13 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack, section }) => {
     detach(saveRuntimeMode(mode));
   };
 
+  // --- Structure handler (ADR-0046) ---
+  const handleStructureChange = (next: string) => {
+    if (next === structure) return;
+    setStructure(next);
+    detach(saveStructure(next));
+  };
+
   // --- Advanced handlers ---
   const handleLogLevelChange = (level: string) => {
     setLogLevel(level);
@@ -719,6 +730,8 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack, section }) => {
             status={coresStatus}
             runtimeMode={runtimeMode}
             onRuntimeChange={handleRuntimeChange}
+            structure={structure}
+            onStructureChange={handleStructureChange}
             onInstall={() => {
               detach(handleInstallCores());
             }}

@@ -962,6 +962,12 @@ export const saveSkipPreview = callable<[boolean], { success: boolean }>("save_s
 export const saveRuntimeMode = callable<[string], { success: boolean; runtime_mode?: string }>(
   "save_runtime_mode",
 );
+
+// Where the built-in tree puts its data (ADR-0046). Read back through getSettings().structure;
+// a change applies to the next download or launch and never moves files that already exist.
+export const saveStructure = callable<[string], { success: boolean; structure?: string }>(
+  "save_structure",
+);
 // Distinct region values present in the locally synced library — the non-anchor
 // options for the Preferred-region dropdown. Pure local DB read, no server call.
 export const getKnownRegions = callable<[], string[]>("get_known_regions");

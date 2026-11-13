@@ -469,7 +469,10 @@ def bootstrap(
     # (and any per-root override) decides whether the roots come from RetroDECK's config
     # or from the plugin's own tree, so it has to be able to read the live dict.
     retrodeck_paths = RetroDeckPathsAdapter(
-        user_home=user_home, logger=logger, settings=lambda: settings
+        user_home=user_home,
+        logger=logger,
+        settings=lambda: settings,
+        data_dir=locations.data_dir,
     )
     settings_persister = SettingsPersisterAdapter(persistence, settings)
     # Binds the same live settings dict so the per-platform-core fan-out resolves

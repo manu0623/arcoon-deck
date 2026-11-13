@@ -74,8 +74,13 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # and cores this app installs itself), ``"retrodeck"`` (the classic shape, opt-in) or
     # ``"auto"`` (follow whichever is installed). See ``domain.runtime`` and ADR-0045.
     "runtime_mode": "builtin",
-    # Per-root overrides for the standalone tree; empty means "use the default"
-    # (``<home>/Emulation/<root>``). A cleared path must fall back, not point at nothing.
+    # Where the built-in tree puts everything it manages (ADR-0046): ``"app"`` (shipped
+    # default — the plugin's own data directory), ``"emudeck"`` (``<home>/Emulation``),
+    # ``"retroarch"`` (the installed RetroArch's saves/states/cores/system) or ``"custom"``
+    # (the four paths below are the answer).
+    "structure": "app",
+    # Per-root overrides for the built-in tree; empty means "use the structure's default".
+    # A cleared path must fall back, not point at nothing.
     "roms_dir": "",
     "saves_dir": "",
     "bios_dir": "",

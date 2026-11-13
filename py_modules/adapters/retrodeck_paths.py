@@ -60,9 +60,13 @@ class RetroDeckPathsAdapter:
         user_home: str,
         logger: logging.Logger,
         settings: Callable[[], Mapping[str, object]] | None = None,
+        data_dir: str = "",
     ) -> None:
         self._user_home = user_home
         self._logger = logger
+        # Where the app keeps its own data. The ``APP`` structure answers from it, so a
+        # caller that omits it gets the EmuDeck shape rather than a root under the plugin.
+        self._data_dir = data_dir
         # The live settings dict, when the caller has one. It carries the runtime choice
         # and any per-root override, so this adapter can answer for a Deck that has no
         # RetroDECK at all — see ``domain.runtime``.
@@ -162,6 +166,7 @@ class RetroDeckPathsAdapter:
             home=self._user_home,
             retrodeck_roots={},
             settings=None if self._settings is None else self._settings(),
+            data_dir=self._data_dir,
         )
         return os.path.realpath(getattr(roots, name))
 
