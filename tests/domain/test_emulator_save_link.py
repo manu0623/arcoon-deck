@@ -210,4 +210,6 @@ class TestWhoIsPointed:
     def test_the_covered_bank_families_come_from_the_table(self) -> None:
         """The bank's own vocabulary: the shape a platform's save has, which is what a
         caller holding only a platform slug can ask about."""
-        assert linked_save_families() == frozenset({SaveFamily.PREFIX_BUNDLE, SaveFamily.N3DS_TITLE})
+        assert linked_save_families() == frozenset(
+            {SaveFamily.PREFIX_BUNDLE, SaveFamily.N3DS_TITLE, SaveFamily.PS2_CARD}
+        )
