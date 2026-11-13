@@ -224,6 +224,56 @@ def resolve_roots(
     return RuntimeRoots(mode=mode, **values)
 
 
+def roms_roots_for_installs(
+    *,
+    mode: RuntimeMode,
+    home: str,
+    retrodeck_roots: Mapping[str, str],
+    settings: Mapping[str, object] | None = None,
+    data_dir: str = "",
+) -> tuple[str, ...]:
+    """Every roms root an installed ROM may sit under, today's first (ADR-0046).
+
+    A structure is a setting, and changing it moves nothing, so a device that
+    downloaded games under a previous structure still holds installs outside
+    today's root. Deletion has to accept those: refusing them would leave a game
+    impossible to uninstall without first moving its files — the one thing the
+    setting promises not to do.
+
+    The candidates are the roots this plugin itself owns under each structure it
+    can have shipped or been pointed at, not "wherever the recorded path happens
+    to be": a path still has to lie inside one of our trees, so a corrupted
+    install row cannot aim a deletion at the user's home. Per-root overrides are
+    deliberately not applied to the historical candidates — an override is
+    today's choice, and the point here is the trees an older choice wrote to. The
+    current root, overrides included, is always first.
+    """
+    roots = [
+        resolve_roots(
+            mode=mode,
+            home=home,
+            retrodeck_roots=retrodeck_roots,
+            settings=settings,
+            data_dir=data_dir,
+        ).roms
+    ]
+    roots.extend(
+        resolve_roots(
+            mode=RuntimeMode.BUILTIN,
+            home=home,
+            retrodeck_roots={},
+            settings={"structure": structure.value},
+            data_dir=data_dir,
+        ).roms
+        for structure in (Structure.APP, Structure.EMUDECK, Structure.RETROARCH)
+    )
+    ordered: list[str] = []
+    for root in roots:
+        if root and root not in ordered:
+            ordered.append(root)
+    return tuple(ordered)
+
+
 def resolve_launch_backend(setting: object, *, mode: RuntimeMode) -> str:
     """The backend a libretro launch goes through, given the runtime.
 

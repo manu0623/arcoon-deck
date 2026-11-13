@@ -24,6 +24,7 @@ class FakeRetroDeckPaths:
         home: str = "",
         config_path: str = "/fake/retrodeck.json",
         health: RetroDeckConfigHealth = RetroDeckConfigHealth.OK,
+        previous_roms_roots: tuple[str, ...] = (),
     ) -> None:
         self.saves = saves
         self.states = states
@@ -32,6 +33,9 @@ class FakeRetroDeckPaths:
         self.home = home
         self.config = config_path
         self.health = health
+        # Roots a previous structure left installs under (ADR-0046): deletion has to
+        # accept them, so a test can stage a game in the old tree.
+        self.previous_roms_roots = previous_roms_roots
 
     def saves_path(self) -> str:
         return self.saves
@@ -41,6 +45,10 @@ class FakeRetroDeckPaths:
 
     def roms_path(self) -> str:
         return self.roms
+
+    def roms_roots(self) -> tuple[str, ...]:
+        roots = [self.roms, *self.previous_roms_roots]
+        return tuple(root for root in roots if root)
 
     def bios_path(self) -> str:
         return self.bios

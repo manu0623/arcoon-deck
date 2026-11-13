@@ -103,20 +103,30 @@ class RomRemovalService:
         rom_dir = install.rom_dir
         file_path = install.file_path
 
-        roms_base = self._retrodeck_paths.roms_path()
         if rom_dir:
-            if not is_safe_rom_path(rom_dir, roms_base):
-                raise ValueError(f"Refusing to delete path outside roms directory: {rom_dir}")
+            roms_base = self._roms_base_for(rom_dir)
             if self._rom_file_store.exists(rom_dir) and not self._rom_file_store.is_dir(rom_dir):
                 raise ValueError(f"Expected installed ROM directory, found another file type: {rom_dir}")
             return self._remove_under_claim(rom_dir, roms_base, claims, on_progress)
         if file_path:
-            if not is_safe_rom_path(file_path, roms_base):
-                raise ValueError(f"Refusing to delete path outside roms directory: {file_path}")
+            roms_base = self._roms_base_for(file_path)
             if self._rom_file_store.is_dir(file_path):
                 raise ValueError(f"Expected installed ROM file, found a directory: {file_path}")
             return self._remove_under_claim(file_path, roms_base, claims, on_progress)
         return {"success": True, "changed": False, "ambiguous": False, "message": "No installed path recorded"}
+
+    def _roms_base_for(self, path: str) -> str:
+        """The roms root *path* lives under, today's root first.
+
+        A structure change moves no files (ADR-0046), so a game downloaded under
+        a previous structure is recorded outside today's root and must still be
+        removable. Every candidate is a root this plugin owns, so the containment
+        guard keeps its meaning: a path outside all of them is still refused.
+        """
+        for root in self._retrodeck_paths.roms_roots():
+            if root and is_safe_rom_path(path, root):
+                return root
+        raise ValueError(f"Refusing to delete path outside roms directory: {path}")
 
     def _remove_under_claim(
         self,

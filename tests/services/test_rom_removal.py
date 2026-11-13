@@ -26,6 +26,8 @@ from services.rom_removal import RomRemovalService, RomRemovalServiceConfig
 
 # Synthetic roms-base path used by the fake fs throughout this module.
 _ROMS_BASE = "/retrodeck/roms"
+# The EmuDeck tree a device keeps its games in after the structure moved to the app folder.
+_OLD_ROMS_BASE = "/home/deck/Emulation/roms"
 
 
 @pytest.fixture
@@ -80,6 +82,25 @@ def service(logger, queue_cleanup, rom_files, uow, emitter):
             uow_factory=FakeUnitOfWorkFactory(uow),
         ),
     )
+
+
+@pytest.fixture
+async def moved_service(logger, queue_cleanup, rom_files, uow, emitter):
+    """A device whose current root is one tree while installs remain in the old one."""
+    service = RomRemovalService(
+        config=RomRemovalServiceConfig(
+            logger=logger,
+            loop=asyncio.get_running_loop(),
+            clock=FakeClock(),
+            emit=emitter,
+            rom_file_store=rom_files,
+            retrodeck_paths=FakeRetroDeckPaths(roms=_ROMS_BASE, previous_roms_roots=(_OLD_ROMS_BASE,)),
+            download_queue_cleanup=queue_cleanup,
+            uow_factory=FakeUnitOfWorkFactory(uow),
+        ),
+    )
+    service._loop = asyncio.get_running_loop()
+    return service
 
 
 @pytest.fixture(autouse=True)
@@ -218,6 +239,46 @@ class TestDeleteRomFiles:
 
         assert f"{evil_dir}/file.txt" in rom_files.files
         assert rom_files.remove_tree_calls == []
+
+    def test_a_file_recorded_under_a_previous_structure_is_deleted(self, moved_service, rom_files):
+        """The game downloaded under EmuDeck before the app tree became the setting (ADR-0046)."""
+        old_path = f"{_OLD_ROMS_BASE}/psp/Burnout Legends.iso"
+        rom_files.files[old_path] = b"disc"
+
+        moved_service._delete_rom_files(_make_install(1, file_path=old_path, rom_dir=None, system="psp"))
+
+        assert old_path not in rom_files.files
+        assert old_path in rom_files.remove_file_calls
+
+    def test_a_multi_file_rom_under_a_previous_structure_is_removed_whole(self, moved_service, rom_files):
+        old_dir = f"{_OLD_ROMS_BASE}/psp/Burnout Legends"
+        rom_files.files[f"{old_dir}/disc.iso"] = b"disc"
+
+        moved_service._delete_rom_files(
+            _make_install(1, file_path=f"{old_dir}/disc.iso", rom_dir=old_dir, system="psp")
+        )
+
+        assert old_dir in rom_files.remove_tree_calls
+        assert f"{old_dir}/disc.iso" not in rom_files.files
+
+    def test_a_path_outside_every_root_is_still_refused(self, moved_service, rom_files):
+        """Accepting old trees must not turn the guard into "delete anything recorded"."""
+        evil = "/evil/important.txt"
+        rom_files.files[evil] = b"do not delete"
+
+        with pytest.raises(ValueError, match="outside roms directory"):
+            moved_service._delete_rom_files(_make_install(1, file_path=evil, rom_dir=None))
+
+        assert evil in rom_files.files
+        assert rom_files.remove_file_calls == []
+
+    def test_current_root_still_deletes(self, moved_service, rom_files):
+        current = f"{_ROMS_BASE}/n64/game.z64"
+        rom_files.files[current] = b"rom"
+
+        moved_service._delete_rom_files(_make_install(1, file_path=current, rom_dir=None))
+
+        assert current not in rom_files.files
 
     def test_missing_file_no_crash(self, service):
         # File doesn't exist — should not raise and should not call any I/O

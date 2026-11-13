@@ -45,6 +45,14 @@ what is downloaded or launched next. Moving a library is a migration with its ow
 interrupted copies, a card that unmounts mid-move — and silently starting one because a
 dropdown changed is worse than a split tree the user can see.
 
+It does not orphan a deletion either. Uninstalling asks for the roots this plugin can have
+written to under any structure it can be set to, today's root first, and removes a recorded
+install from whichever of them contains it. Without that, changing the structure made every
+older game un-installable: the record was correct, the file was there, and the containment
+guard refused it because the tree it was downloaded into was no longer the current one. The
+guard keeps its meaning — a path outside all of those roots is still refused, and the roots
+are ours, not "wherever the record happens to point".
+
 ## Consequences
 
 - A fresh install writes everything it manages under its own data directory. That is the

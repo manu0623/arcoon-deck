@@ -41,7 +41,13 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from adapters.flatpak_install import flatpak_app_files_dirs
-from domain.runtime import _LEGACY_BUILTIN, RuntimeMode, resolve_mode, resolve_roots
+from domain.runtime import (
+    _LEGACY_BUILTIN,
+    RuntimeMode,
+    resolve_mode,
+    resolve_roots,
+    roms_roots_for_installs,
+)
 from lib.retrodeck_health import RetroDeckConfigHealth
 
 if TYPE_CHECKING:
@@ -175,6 +181,29 @@ class RetroDeckPathsAdapter:
 
     def roms_path(self) -> str:
         return self._owned_root("roms") or self._get_path("roms_path", "roms")
+
+    def roms_roots(self) -> tuple[str, ...]:
+        """Every roms root an installed ROM may sit under, today's first (ADR-0046).
+
+        Deletion asks this rather than :meth:`roms_path`, so a game downloaded
+        under a previous structure is still removable without moving files.
+        """
+        roots = roms_roots_for_installs(
+            mode=self.runtime_mode(),
+            home=self._user_home,
+            # ``resolve_roots`` answers a RETRODECK runtime straight from this mapping,
+            # so it needs the whole set even though only ``roms`` is read here.
+            retrodeck_roots={
+                "roms": self._get_path("roms_path", "roms"),
+                "saves": self._get_path("saves_path", "saves"),
+                "bios": self._get_path("bios_path", "bios"),
+                "states": self._get_path("states_path", "states"),
+                "cores": self._get_path("cores_path", "cores"),
+            },
+            settings=None if self._settings is None else self._settings(),
+            data_dir=self._data_dir,
+        )
+        return tuple(os.path.realpath(root) for root in roots)
 
     def saves_path(self) -> str:
         return self._owned_root("saves") or self._get_path("saves_path", "saves")
