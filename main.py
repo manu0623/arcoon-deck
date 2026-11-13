@@ -212,6 +212,7 @@ class Plugin:
         self._emulator_provisioning_service = services["emulator_provisioning_service"]
         self._emulator_shortcut_service = services["emulator_shortcut_service"]
         self._emulator_save_link_service = services["emulator_save_link_service"]
+        self._rom_install_discovery_service = services["rom_install_discovery_service"]
         self._disc_service = services["disc_service"]
         self._version_switch_service = services["version_switch_service"]
         self._prune_service = services["prune_service"]
@@ -241,6 +242,15 @@ class Plugin:
         # (ADR-0041).
         self._startup_healing_service.reconsider_launchability()
         self._startup_healing_service.reconcile_orphaned_sync_runs()
+        # A ROM the library knows and the disk already holds has no install row, so every
+        # reader that starts with one — the save answer, the launch bake — refuses for a
+        # file that is right there. Adoption is best-effort: it never blocks a start.
+        try:
+            found = await self._rom_install_discovery_service.adopt_found_content()
+            if found.get("adopted"):
+                decky.logger.info(f"ROM adoption: {len(found['adopted'])} install(s) recorded at startup")
+        except Exception as exc:  # adopting a file is never worth failing the plugin's start
+            decky.logger.warning(f"ROM adoption: startup pass failed: {exc}")
         # A standalone emulator reads its own folder, so point it at the tree the sync
         # writes before anything opens it; an emulator installed since the last start is
         # caught here rather than when a reader finds its saves missing (ADR-0051).
@@ -491,6 +501,16 @@ class Plugin:
         than raised, so a single unavailable core does not hide the ones that landed.
         """
         return await self._core_provisioning_service.ensure_for_system(system_name)
+
+    async def adopt_roms_on_disk(self):
+        """Record an install for every known ROM whose file is already on disk.
+
+        The on-demand form of the startup pass, so a library that arrived another way can
+        be asked about its saves without a restart. Returns what was adopted, what was
+        ambiguous (two files matching one row) and what was left alone because it is a
+        folder-backed ROM.
+        """
+        return await self._rom_install_discovery_service.adopt_found_content()
 
     async def ensure_emulator_save_links(self, system_name=None):
         """Point each standalone emulator's save folder at the tree the plugin syncs.

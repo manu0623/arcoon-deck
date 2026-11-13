@@ -44,6 +44,7 @@ from services.playtime import PlaytimeService, PlaytimeServiceConfig
 from services.prune import PruneService, PruneServiceConfig
 from services.relaunch_options_resolver import RelaunchOptionsResolver, RelaunchOptionsResolverConfig
 from services.rom_adoption import RomAdoptionService, RomAdoptionServiceConfig
+from services.rom_install_discovery import RomInstallDiscoveryConfig, RomInstallDiscoveryService
 from services.rom_install_recorder import RomInstallRecorder, RomInstallRecorderConfig
 from services.rom_removal import RomRemovalService, RomRemovalServiceConfig
 from services.saves import SaveService, SaveServiceConfig
@@ -505,6 +506,20 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         ),
     )
 
+    # Records an install for a ROM the library knows whose file is already on disk, so a
+    # library that arrived another way can be asked about its saves at all.
+    rom_install_discovery_service = RomInstallDiscoveryService(
+        config=RomInstallDiscoveryConfig(
+            logger=cfg.runtime.logger,
+            uow_factory=cfg.callbacks.uow_factory,
+            file_store=cfg.adapters.save_file_store,
+            roms_roots=cfg.callbacks.retrodeck_paths.roms_roots,
+            resolve_system=cfg.adapters.http_adapter.resolve_system,
+            system_extensions=cfg.callbacks.system_extensions,
+            now=lambda: cfg.runtime.clock.now().isoformat(),
+        ),
+    )
+
     # Names the emulators this machine has as a Steam collection's worth of tiles, so one
     # can be opened for its own settings or to test a build (ADR-0050).
     emulator_shortcut_service = EmulatorShortcutService(
@@ -711,6 +726,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         "emulator_provisioning_service": emulator_provisioning_service,
         "emulator_shortcut_service": emulator_shortcut_service,
         "emulator_save_link_service": emulator_save_link_service,
+        "rom_install_discovery_service": rom_install_discovery_service,
         "disc_service": disc_service,
         "version_switch_service": version_switch_service,
         "connection_service": connection_service,
