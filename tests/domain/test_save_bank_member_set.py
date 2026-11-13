@@ -58,11 +58,23 @@ class TestWhichPlatformsRestoreByExtraction:
 
     @pytest.mark.parametrize(
         "platform",
-        ["gba", "snes", "genesis", "n64", "psx", "ps2", "wii", "wiiu", "dreamcast"],
+        ["gba", "snes", "genesis", "n64", "psx", "dreamcast"],
     )
     def test_every_other_family_is_written_as_a_file(self, platform: str) -> None:
         """Only a flat member set restores by extraction; the rest keep their own rule."""
         assert restores_by_extraction(platform) is False
+
+    @pytest.mark.parametrize("platform", ["ps2", "wii", "wiiu"])
+    def test_a_category_split_title_restores_by_extraction(self, platform: str) -> None:
+        """The unit is the files inside a title folder, and RomM carries them as one zip.
+
+        Measured for Wii on the reference Deck: the download landed the archive in the
+        staging folder beside the title and nothing was extracted, so a save that had just
+        been uploaded never came back. Wii U shares the family rule and therefore the
+        restore, but its own tree has not been measured — which is why its save answer still
+        refuses without a provisioned entry.
+        """
+        assert restores_by_extraction(platform) is True
 
     def test_an_unknown_platform_is_not_a_member_set(self) -> None:
         """An unaudited system falls back to the libretro per-ROM file, as everywhere else."""
