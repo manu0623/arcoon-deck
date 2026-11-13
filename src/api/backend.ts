@@ -260,6 +260,46 @@ export interface CoreProvisionResult {
   skipped?: string[];
 }
 
+/** One standalone emulator a platform's inventory names a source for. */
+export interface PlatformEmulatorRow {
+  label: string;
+  /** Where it comes from: a flatpak store, or the project's own GitHub release. */
+  source: "store" | "release" | null;
+  app_id: string | null;
+  repo: string | null;
+}
+
+/** What a platform offers to install, and what it cannot fetch at all. */
+export interface PlatformEmulatorsAnswer {
+  system: string;
+  /** False when the inventory does not describe this system at all. */
+  known: boolean;
+  emulators: PlatformEmulatorRow[];
+  /** Emulators with no stated source — the user installs these by hand. */
+  manual: string[];
+}
+
+/** What installing one emulator did. */
+export interface EmulatorInstallResult {
+  label: string;
+  ok: boolean;
+  already_present?: boolean;
+  reason?: string;
+  version?: string | null;
+  path?: string;
+  app_id?: string;
+}
+
+export const getPlatformEmulators = callable<[string], PlatformEmulatorsAnswer>("get_platform_emulators");
+/**
+ * Install one of a platform's standalone emulators. The backend refuses anything it
+ * cannot verify — a release asset with no published hash, or one whose download does not
+ * match it — so `reason` is the failure to show, not an exception to swallow.
+ */
+export const ensurePlatformEmulator = callable<[string, string], EmulatorInstallResult>(
+  "ensure_platform_emulators",
+);
+
 /** Install the runtime and every enabled platform's missing cores, in one call. */
 export const ensureAllPlatformCores = callable<[], CoreProvisionResult>("ensure_all_platform_cores");
 

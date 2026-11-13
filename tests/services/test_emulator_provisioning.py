@@ -135,3 +135,75 @@ class TestTheInstall:
         assert result["success"] is False
         assert result["reason"] == "no_source"
         assert result["manual"] == ["Eden (Standalone)"]
+
+
+class TestTheReading:
+    """What a surface asks before it draws a button: the rows, and where each comes from."""
+
+    def _service(self, harness: _Harness) -> EmulatorProvisioningService:
+        return EmulatorProvisioningService(
+            config=EmulatorProvisioningConfig(
+                loop=asyncio.get_running_loop(),
+                logger=logging.getLogger("test_emulator_provisioning"),
+                inventory=harness.platform_for,
+                installer=harness.install,
+            )
+        )
+
+    @pytest.mark.asyncio
+    async def test_it_names_the_source_of_each_row(self, harness: _Harness) -> None:
+        answer = self._service(harness).describe_for_system("gc")
+
+        assert answer["known"] is True
+        assert answer["emulators"] == [
+            {"label": "Dolphin (Standalone)", "source": "store", "app_id": "org.DolphinEmu.dolphin-emu", "repo": None}
+        ]
+        assert answer["manual"] == []
+
+    @pytest.mark.asyncio
+    async def test_a_row_with_no_source_is_listed_as_manual(self, harness: _Harness) -> None:
+        answer = self._service(harness).describe_for_system("switch")
+
+        assert [row["label"] for row in answer["emulators"]] == ["Eden (Flatpak)"]
+        assert answer["manual"] == ["Eden (Standalone)", "Citron (Standalone)"]
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_system_says_it_is_unknown(self, harness: _Harness) -> None:
+        answer = self._service(harness).describe_for_system("ps4")
+
+        assert answer == {"system": "ps4", "known": False, "emulators": [], "manual": []}
+
+
+class TestOneRowAtATime:
+    @pytest.mark.asyncio
+    async def test_a_label_narrows_the_install_to_that_row(self, harness: _Harness) -> None:
+        service = EmulatorProvisioningService(
+            config=EmulatorProvisioningConfig(
+                loop=asyncio.get_running_loop(),
+                logger=logging.getLogger("test_emulator_provisioning"),
+                inventory=harness.platform_for,
+                installer=harness.install,
+            )
+        )
+
+        result = await service.ensure_for_system("switch", label="Eden (Flatpak)")
+
+        assert result["success"] is True
+        assert harness.asked == ["Eden (Flatpak)"]
+
+    @pytest.mark.asyncio
+    async def test_a_label_this_system_does_not_offer_is_refused(self, harness: _Harness) -> None:
+        service = EmulatorProvisioningService(
+            config=EmulatorProvisioningConfig(
+                loop=asyncio.get_running_loop(),
+                logger=logging.getLogger("test_emulator_provisioning"),
+                inventory=harness.platform_for,
+                installer=harness.install,
+            )
+        )
+
+        result = await service.ensure_for_system("switch", label="RetroArch")
+
+        assert result["success"] is False
+        assert result["reason"] == "unknown_emulator"
+        assert harness.asked == []

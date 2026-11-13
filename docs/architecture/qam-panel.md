@@ -252,7 +252,7 @@ does not say it owns its regions. A tabbed body gets none from the frame, and ne
 | --------------- | ----- | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
 | Main            | 348   | notices, status, the conditional slot, the download summary, the menu                                         | as described                                                                      |
 | Sync            | 854   | preview as a table, the run as a plan, Skip preview, Force Full Sync, Steam memory, session budget, last runs | as described; the import choice (#1364) is the one thing still to come            |
-| Library         | 854   | Platforms as list and detail (sync, core, BIOS files, removal); Collections as filter and list                | Platforms is built; Collections still carries the narrow page's controls and list |
+| Library         | 854   | Platforms as list and detail (sync, core, emulator install, BIOS files, removal); Collections as filter and list | Platforms is built; Collections still carries the narrow page's controls and list |
 | Settings        | 854   | five sections, list and detail                                                                                | as described; RetroAchievements has no sign-in to hold yet (#1627)                |
 | Data Management | 854   | five library-wide operations, list and detail                                                                 | narrow; opens the cleanup in a modal                                              |
 | Downloads       | 348   | the queue with its controls                                                                                   | unchanged                                                                         |
@@ -839,6 +839,16 @@ asking for a preview and starting the run is made on the frontend, by this page'
 ## Library
 
 Wide, two tabs.
+
+**Standalone emulators** sit in the detail pane between the core line and the BIOS files
+(`src/components/library/EmulatorInstallSection.tsx`). One press fetches every emulator the
+inventory names a source for, one row at a time, so each line reports its own outcome as it
+lands — a store build through `flatpak install --user`, a release build as a hash-verified
+AppImage. A row the plugin cannot fetch is named as "install by hand" rather than dropped,
+and a platform with no standalone row at all draws nothing: most platforms are libretro-only,
+and a title over an empty body on all of them is noise. The section reads its own rows from
+`get_platform_emulators`, independent of the pane's core read, so a failure there leaves the
+rest of the pane alone.
 
 **Platforms** is list and detail. The list holds every platform RomM reports with at least one ROM — what
 `get_platforms` returns; a platform with nothing to sync is not listed — in two groups, **Synced** (the toggle is on)

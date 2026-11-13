@@ -483,7 +483,16 @@ class Plugin:
         """
         return await self._core_provisioning_service.ensure_for_system(system_name)
 
-    async def ensure_platform_emulators(self, system_name):
+    async def get_platform_emulators(self, system_name):
+        """What this system's inventory offers to install, and where each row comes from.
+
+        The read half of :meth:`ensure_platform_emulators`, so a surface can name the
+        emulators and their sources before anything is downloaded — and can say which rows
+        are the emulator the user has to install themselves.
+        """
+        return self._emulator_provisioning_service.describe_for_system(system_name)
+
+    async def ensure_platform_emulators(self, system_name, label=None):
         """Install this system's standalone emulators from the sources the inventory states.
 
         The other half of :meth:`ensure_platform_cores`: Switch, PS3, 3DS and Wii U have no
@@ -491,8 +500,11 @@ class Plugin:
         launches. A store build goes through ``flatpak install --user``; a release build is
         the project's own AppImage, refused unless its hash matches the release's. Rows
         with no source come back under ``manual`` — an emulator this plugin cannot fetch.
+
+        *label* narrows the work to one row, which is how a surface shows per-emulator
+        progress: one call per emulator, each reporting as it lands.
         """
-        return await self._emulator_provisioning_service.ensure_for_system(system_name)
+        return await self._emulator_provisioning_service.ensure_for_system(system_name, label=label)
 
     async def get_system_core_info(self, platform_slug):
         return await self._core_service.get_system_core_info(platform_slug)

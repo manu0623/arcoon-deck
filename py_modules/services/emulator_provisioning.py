@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from domain.emulator_install import install_plan
+from domain.emulator_install import FlatpakInstall, ReleaseInstall, install_plan
 
 if TYPE_CHECKING:
     import asyncio
@@ -46,20 +46,54 @@ class EmulatorProvisioningService:
         self._inventory = config.inventory
         self._installer = config.installer
 
-    async def ensure_for_system(self, system_name: str) -> dict[str, Any]:
+    def describe_for_system(self, system_name: str) -> dict[str, Any]:
+        """What *system_name* offers and where each row comes from, without installing.
+
+        A surface needs this before it can show a button: which rows have a source, which
+        source each one is (a store id or a release repository), and which rows are the
+        emulator the user installs by hand. It reads the inventory and nothing else, so it
+        is cheap enough to ask on every platform selection.
+        """
+        platform = self._inventory(system_name)
+        if platform is None:
+            return {"system": system_name, "known": False, "emulators": [], "manual": []}
+        return {
+            "system": system_name,
+            "known": True,
+            "emulators": [_describe(emulator) for emulator in platform.emulators if install_plan(emulator) is not None],
+            "manual": [emulator.label for emulator in platform.emulators if install_plan(emulator) is None],
+        }
+
+    async def ensure_for_system(self, system_name: str, *, label: str | None = None) -> dict[str, Any]:
         """Install what *system_name* names a source for, and report every outcome.
 
         ``reason`` is set only for the answers a caller can act on: ``unknown_system``
-        (the inventory does not describe this system) and ``no_source`` (it describes the
-        system, but every row is an emulator the user installs themselves). Installs run
-        one at a time in the executor: they are hundreds of megabytes each, and serialising
-        them keeps the progress story simple without blocking the event loop.
+        (the inventory does not describe this system), ``unknown_emulator`` (a label this
+        system does not offer) and ``no_source`` (it describes the system, but every row
+        is an emulator the user installs themselves).
+
+        *label* narrows the work to one row, which is what a surface showing per-emulator
+        progress calls once per row: one install at a time, each reporting as it lands.
+        Installs run one at a time in the executor either way — they are hundreds of
+        megabytes each, and serialising them keeps the progress story simple without
+        blocking the event loop.
         """
         platform = self._inventory(system_name)
         if platform is None:
             return {"success": False, "reason": "unknown_system", "system": system_name, "emulators": []}
         installable = [emulator for emulator in platform.emulators if install_plan(emulator) is not None]
         manual = [emulator.label for emulator in platform.emulators if install_plan(emulator) is None]
+        if label is not None:
+            matched = [emulator for emulator in installable if emulator.label == label]
+            if not matched:
+                return {
+                    "success": False,
+                    "reason": "unknown_emulator",
+                    "system": system_name,
+                    "emulators": [],
+                    "manual": manual,
+                }
+            installable = matched
         if not installable:
             return {
                 "success": False,
@@ -85,3 +119,18 @@ class EmulatorProvisioningService:
             "failed": failed,
             "manual": manual,
         }
+
+
+def _describe(emulator: InventoryEmulator) -> dict[str, Any]:
+    """One row as a surface reads it: the label, and the source it would use.
+
+    ``prefer_newest`` is the same call the installer makes, so a row that says "release"
+    is the row that downloads a release — the two cannot disagree about which channel is
+    in play.
+    """
+    plan = install_plan(emulator)
+    if isinstance(plan, FlatpakInstall):
+        return {"label": emulator.label, "source": "store", "app_id": plan.app_id, "repo": None}
+    if isinstance(plan, ReleaseInstall):
+        return {"label": emulator.label, "source": "release", "app_id": None, "repo": plan.repo}
+    return {"label": emulator.label, "source": None, "app_id": None, "repo": None}
