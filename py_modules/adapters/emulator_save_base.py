@@ -25,8 +25,6 @@ import os
 import posixpath
 from typing import TYPE_CHECKING
 
-from domain.emulator_config import ConfigFormat, layout_for, parse_config, parse_flat
-
 if TYPE_CHECKING:
     import logging
     from collections.abc import Callable
@@ -39,6 +37,10 @@ _YUZU_LINEAGE: tuple[str, ...] = ("eden", "citron", "sudachi", "yuzu")
 # The key each of them states its nand root under. One spelling for all four — they
 # share the settings format, which is why they share this reader.
 _NAND_KEY = "nand_directory"
+
+# Each lineage member's XDG app directory and settings file. The yuzu forks share both.
+_APP_DIRS: dict[str, str] = {"eden": "eden", "citron": "citron", "sudachi": "sudachi", "yuzu": "yuzu"}
+_CONFIG_FILENAME = "qt-config.ini"
 
 
 class EmulatorSaveBaseAdapter:
@@ -75,10 +77,10 @@ class EmulatorSaveBaseAdapter:
         return None
 
     def _nand_directory(self, emulator_id: str) -> str | None:
-        layout = layout_for(emulator_id)
-        if layout is None or layout.fmt is not ConfigFormat.INI:
+        app_dir = _APP_DIRS.get(emulator_id)
+        if app_dir is None:
             return None
-        for path in self._candidate_paths(layout.app_dir, layout.filename):
+        for path in self._candidate_paths(app_dir, _CONFIG_FILENAME):
             if not self._exists(path):
                 continue
             try:
@@ -86,14 +88,14 @@ class EmulatorSaveBaseAdapter:
             except OSError as error:
                 self._logger.debug(f"save base: {emulator_id} settings unreadable ({error})")
                 continue
-            # A QSettings file writes its top-level keys BEFORE the first ``[Section]``, and
-            # a file with no section header at all is not parseable as INI — the reference
-            # Deck's ``qt-config.ini`` is exactly that shape (``nand_directory`` at line 978,
-            # no sections above it). So the INI read is tried first and a flat scan answers
-            # when it cannot; both read the same file, so neither can disagree about a key
-            # that only one of them can see.
-            values = parse_config(layout.fmt, text)
-            nand = (values.get(_NAND_KEY) or parse_flat(text).get(_NAND_KEY) or "").strip()
+            # A QSettings file writes its top-level keys BEFORE its first ``[Section]``, and
+            # the reference Deck's ``qt-config.ini`` has no section header at all — so the
+            # key is read off the raw text rather than through an INI parser that would
+            # reject the file. The read is deliberately local: importing
+            # ``domain.emulator_config`` pulls in ``xml.etree``, which Decky Loader's
+            # sandboxed interpreter does not ship, and a settings reader is not worth
+            # failing the whole plugin to load.
+            nand = (_value(text, _NAND_KEY) or "").strip()
             if nand:
                 self._logger.debug(f"save base: {emulator_id} states nand={nand} ({path})")
                 return nand
@@ -110,6 +112,20 @@ class EmulatorSaveBaseAdapter:
             posixpath.join(self._user_home, ".config", app_dir, filename),
             posixpath.join(self._user_home, ".local", "share", app_dir, filename),
         )
+
+
+def _value(text: str, key: str) -> str | None:
+    """The first ``key=value`` line's value, or ``None``.
+
+    Matched exactly, so ``nand_directory\\default=false`` next to ``nand_directory=…``
+    cannot answer for it. Quotes are stripped because QSettings writes strings unquoted but
+    a hand-edited file may not.
+    """
+    for line in text.splitlines():
+        name, separator, value = line.partition("=")
+        if separator and name.strip() == key:
+            return value.strip().strip('"')
+    return None
 
 
 def _read_text(path: str) -> str:
