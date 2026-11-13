@@ -12,7 +12,9 @@ import struct
 
 from domain.ps3_title_id import SECTOR, find_param_sfo, title_id_from_image, title_id_from_sfo
 
-TITLE_ID = "BLUS30448"
+#: Measured on the reference Deck: ``3D Dot Game Heroes (USA).iso`` states this, as
+#: ``0x0204``, inside ``PS3_GAME/PARAM.SFO``.
+TITLE_ID = "BLUS30490"
 
 
 def sfo(*entries: tuple[str, str]) -> bytes:
@@ -34,7 +36,7 @@ def sfo(*entries: tuple[str, str]) -> bytes:
     data_table = key_table + len(keys)
     out = struct.pack("<4sIIII", b"" + bytes(1) + b"PSF", 0x00000101, key_table, data_table, len(entries))
     for key_offset, length, offset in zip(key_offsets, lengths, data_offsets, strict=True):
-        out += struct.pack("<HHIII", key_offset, 0x0404, length, length, offset)
+        out += struct.pack("<HHIII", key_offset, 0x0204, length, length, offset)
     return out + keys + data
 
 
@@ -101,6 +103,18 @@ class TestTheTitleId:
         """``TITLE_ID`` is four letters and five digits; a demo's ``NPUA80001`` is not one,
         and a save folder is never named after it."""
         assert title_id_from_sfo(sfo(("TITLE_ID", "DEMO"))) is None
+
+    def test_the_terminated_utf8_format_is_read_too(self) -> None:
+        blob = bytearray(sfo(("TITLE_ID", TITLE_ID)))
+        struct.pack_into("<H", blob, 20 + 2, 0x0404)
+
+        assert title_id_from_sfo(bytes(blob)) == TITLE_ID
+
+    def test_a_value_in_another_format_is_refused(self) -> None:
+        blob = bytearray(sfo(("TITLE_ID", TITLE_ID)))
+        struct.pack_into("<H", blob, 20 + 2, 0x0404 + 0x0100)
+
+        assert title_id_from_sfo(bytes(blob)) is None
 
     def test_something_that_is_not_an_sfo_is_refused(self) -> None:
         assert title_id_from_sfo(b"not an sfo at all, just bytes") is None

@@ -37,6 +37,14 @@ digits; anything else is refused rather than normalised into a guess.
 walk covers it; an image with no `CD001` descriptor returns `None` and the save layer will
 report that it cannot place the game rather than inventing a folder.
 
+## The format the first draft got wrong
+
+The synthetic file in the tests stated ``TITLE_ID`` as ``0x0404``, the NUL-terminated UTF-8
+format, and the real image said ``0x0204``. The reader refused a ``PARAM.SFO`` that had
+answered perfectly well, and the first live probe of ``3D Dot Game Heroes (USA).iso``
+returned nothing at all. Both formats are accepted now, and any other is still refused.
+Measured value for that disc: ``BLUS30490``.
+
 ## What is still missing
 
 The link itself has two unmet prerequisites, both measured on this Deck:

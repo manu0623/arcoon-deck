@@ -32,7 +32,11 @@ ReadAt = Callable[[int, int], bytes]
 _SFO_MAGIC = b"\x00PSF"
 _SFO_HEADER = 20
 _SFO_ENTRY = 16
-_UTF8 = 0x0404
+#: The two UTF-8 formats the format defines. Measured on the reference image, the real
+#: ``PARAM.SFO`` states ``TITLE_ID`` as ``0x0204`` — the NUL-terminated variant is what a
+#: hand-written file tends to use, and refusing it would have been a guess about a file
+#: that answered perfectly well.
+_UTF8 = frozenset({0x0204, 0x0404})
 _PS3_GAME = "PS3_GAME"
 _PARAM_SFO = "PARAM.SFO"
 _ROOT_RECORD = 156
@@ -56,7 +60,7 @@ def title_id_from_sfo(blob: bytes) -> str | None:
         key = _text(blob, key_table + key_offset)
         if key != "TITLE_ID":
             continue
-        if data_format != _UTF8:
+        if data_format not in _UTF8:
             return None
         value = _text(blob, data_table + data_offset, data_len)
         return _normalise(value)
