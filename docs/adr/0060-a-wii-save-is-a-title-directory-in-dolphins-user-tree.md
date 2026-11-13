@@ -69,3 +69,20 @@ sync that overwrote it with another device's copy would be carrying metadata as 
   only applied to a command that carries an ES-DE emulator token, and this build bakes a
   direct flatpak command. The gap is real and recorded here — pointing these launches is the
   next cut, and the answer above follows the emulator rather than the wish until then.
+
+## Amendment (0.48.18–0.48.19): two rules the first cut needed
+
+Both were measured by moving the title's `data/` aside after a successful upload and asking
+the plugin to put it back.
+
+- **An empty managed folder is a restore target.** The first cut filled a `title-dir` unit's
+  members from the folder's listing and refused when the listing was empty, so a folder the
+  provisioner had named — and whose contents RomM was holding — could never be refilled. An
+  empty listing now means "syncable, no members yet", the same rule ADR-0058 gave GameCube's
+  empty card, one level down.
+- **A Wii title restores by extraction.** The download landed `Super Mario Galaxy 2 (USA)
+  (En,Fr,Es).zip` in the `.arcoon-archive` staging folder beside the title and stopped: the
+  engine asks `restores_by_extraction` whether to unpack an archive into the answer's
+  directory, and the `CATEGORY_SPLIT` family was not on that list although its unit is packed
+  from a folder. With the family added, the same sync unpacked `GameData.bin` and `banner.bin`
+  back into `data/` byte-identically (`sha256sum` compared before and after).
