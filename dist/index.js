@@ -11638,17 +11638,22 @@ const SettingsPage = ({ onBack, section }) => {
             const result = await ensureAllPlatformCores();
             const installed = result.installed ?? [];
             const failed = result.failed ?? [];
+            const skipped = result.skipped ?? [];
+            const uncovered = skipped.length > 0 ? ` No automatic emulator yet for: ${skipped.join(", ")}.` : "";
             if (failed.length > 0) {
-                setCoresStatus(`Installed ${installed.length}, but ${failed.length} failed: ${failed.map((entry) => entry.core).join(", ")}`);
+                setCoresStatus(`Installed ${installed.length}, but ${failed.length} failed: ${failed.map((entry) => entry.core).join(", ")}.${uncovered}`);
             }
             else if (installed.length > 0) {
-                setCoresStatus(`Installed ${installed.length} core${installed.length === 1 ? "" : "s"}.`);
+                setCoresStatus(`Installed ${installed.length} core${installed.length === 1 ? "" : "s"}.${uncovered}`);
+            }
+            else if (skipped.length > 0) {
+                setCoresStatus(`Nothing to install for your platforms.${uncovered}`);
             }
             else if (result.runtime?.reason) {
                 setCoresStatus(`Could not install the runtime: ${result.runtime.reason}`);
             }
             else {
-                setCoresStatus("Everything your enabled platforms need is already installed.");
+                setCoresStatus("Everything your platforms need is already installed.");
             }
         }
         catch (error) {

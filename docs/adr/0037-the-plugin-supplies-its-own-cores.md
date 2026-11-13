@@ -57,7 +57,11 @@ one unavailable core does not abort the batch, and the response separates `insta
   system and `ensure_all_platform_cores()` sweeps every enabled platform; **Settings →
   Emulators & Cores → Install Missing Cores** is the button that calls the sweep. Until
   that button existed the machinery had no caller in the UI, which is indistinguishable
-  from not having it.
+  from not having it. The sweep reads `enabled_platforms` and falls back to the synced
+  platforms when that dict is still empty, and it **names** the platforms it cannot
+  install for (no inventory entry, or standalone-only) instead of counting them as done
+  — a device told "everything is installed" while four of its platforms were never looked
+  at is the failure that makes the button untrustworthy.
 - A successful install is visible to everything else without a cache flush:
   `OwnedCatalogueAdapter` probes the cores directory on every answer by design, so the rows
   become bakeable as soon as the file is there.

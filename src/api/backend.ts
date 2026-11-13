@@ -256,6 +256,8 @@ export interface CoreProvisionResult {
   runtime?: { success?: boolean; app_id?: string; already_present?: boolean; skipped?: string; reason?: string };
   installed?: string[];
   failed?: CoreProvisionFailure[];
+  /** Platforms this build has no emulator data for — named, never counted as done. */
+  skipped?: string[];
 }
 
 /** Install the runtime and every enabled platform's missing cores, in one call. */

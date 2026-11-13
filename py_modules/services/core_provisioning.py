@@ -95,6 +95,13 @@ class CoreProvisioningService:
         results: list[dict[str, Any]] = [await self.ensure_for_system(system) for system in systems]
         installed = [core for result in results for core in result.get("installed", [])]
         failed = [core for result in results for core in result.get("failed", [])]
+        # Platforms the button cannot install for: no inventory entry at all, or an entry
+        # that knows only standalone emulators (an AppImage the plugin does not fetch).
+        # Reported rather than dropped — "everything is installed" over a device whose
+        # platforms were never looked at is the answer that made the button untrustworthy.
+        uncovered_reasons = {"unknown_system", "no_libretro"}
+        unknown = {result.get("system") for result in results if result.get("reason") in uncovered_reasons}
+        skipped = sorted({slug for slug in platform_slugs if self._resolve_system(slug) in unknown})
         broken = [
             result
             for result in results
@@ -106,6 +113,7 @@ class CoreProvisioningService:
             "systems": results,
             "installed": installed,
             "failed": failed,
+            "skipped": skipped,
         }
 
     async def ensure_for_system(self, system_name: str) -> dict[str, Any]:
