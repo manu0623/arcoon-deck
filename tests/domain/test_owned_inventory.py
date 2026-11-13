@@ -21,7 +21,11 @@ _DOC = {
                     "label": "Eden (Standalone)",
                     "id": "eden",
                     "kind": "standalone",
-                    "host": {"binaries": ["~/Applications/Eden.AppImage"], "args": ["-f", "-g"]},
+                    "host": {
+                        "binaries": ["~/Applications/Eden.AppImage"],
+                        "args": ["-f", "-g"],
+                        "flatpak": "io.github.eden_emulator.Eden",
+                    },
                 },
                 {"label": "Ryujinx", "id": "ryujinx", "kind": "libretro", "core": "ryujinx_libretro"},
             ],
@@ -33,6 +37,27 @@ _DOC = {
                 {"label": "Beetle PSX HW", "id": "beetle", "kind": "libretro", "core": "mednafen_psx_hw_libretro"}
             ],
         },
+    }
+}
+
+
+_FLATPAK_DOC = {
+    "platforms": {
+        "gc": {
+            "extensions": ["iso"],
+            "emulators": [
+                {
+                    "label": "Dolphin (Standalone)",
+                    "id": "dolphin",
+                    "kind": "standalone",
+                    "host": {
+                        "binaries": ["~/Applications/Dolphin.AppImage"],
+                        "args": ["-b", "-e"],
+                        "flatpak": "org.DolphinEmu.dolphin-emu",
+                    },
+                }
+            ],
+        }
     }
 }
 
@@ -117,3 +142,34 @@ class TestWhatThePickerOffers:
 
     def test_nothing_installed_selects_no_default(self) -> None:
         assert select_default_option(self._options(core_ok=False, binary=None)) is None
+
+
+class TestFlatpakInstalledEmulators:
+    """An emulator installed as a Flatpak is launchable, not missing."""
+
+    def _options(self, *, binary: str | None = None, flatpak: str | None = None):
+        inventory = parse_inventory(_FLATPAK_DOC)
+        return options_for(
+            inventory["gc"],
+            core_installed=lambda _core: True,
+            binary_for=lambda _emulator: binary,
+            flatpak_for=lambda _emulator: flatpak,
+        )
+
+    def test_the_document_carries_the_app_id(self) -> None:
+        assert parse_inventory(_FLATPAK_DOC)["gc"].emulators[0].flatpak == "org.DolphinEmu.dolphin-emu"
+
+    def test_a_flatpak_install_is_launchable_without_a_binary(self) -> None:
+        row = self._options(flatpak="/usr/bin/flatpak")[0]
+        assert (row.status, row.reason) == ("bakeable", None)
+        assert row.command == (
+            "%EMULATOR_FLATPAK-SPAWN% --host /usr/bin/flatpak run org.DolphinEmu.dolphin-emu -b -e %ROM%"
+        )
+
+    def test_a_binary_outranks_the_flatpak(self) -> None:
+        row = self._options(binary="/apps/Dolphin.AppImage", flatpak="/usr/bin/flatpak")[0]
+        assert row.command.startswith("%EMULATOR_FLATPAK-SPAWN% --host /apps/Dolphin.AppImage")
+
+    def test_installed_nowhere_still_says_why(self) -> None:
+        row = self._options()[0]
+        assert (row.status, row.reason) == ("needs_setup", "not_installed")

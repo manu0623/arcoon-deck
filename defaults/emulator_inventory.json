@@ -15,7 +15,8 @@
               "~/Applications/dolphin-emu.AppImage",
               "/usr/bin/dolphin-emu"
             ],
-            "args": ["-b", "-e"]
+            "args": ["-b", "-e"],
+            "flatpak": "org.DolphinEmu.dolphin-emu"
           }
         },
         {"label": "Dolphin (libretro)", "id": "dolphin", "kind": "libretro", "core": "dolphin_libretro"}
@@ -34,7 +35,8 @@
               "~/Applications/dolphin-emu.AppImage",
               "/usr/bin/dolphin-emu"
             ],
-            "args": ["-b", "-e"]
+            "args": ["-b", "-e"],
+            "flatpak": "org.DolphinEmu.dolphin-emu"
           }
         }
       ]
@@ -52,7 +54,8 @@
               "~/Applications/Eden.AppImage",
               "~/Applications/eden.AppImage"
             ],
-            "args": ["-f", "-g"]
+            "args": ["-f", "-g"],
+            "flatpak": "io.github.eden_emulator.Eden"
           }
         },
         {
@@ -61,7 +64,8 @@
           "kind": "standalone",
           "host": {
             "binaries": ["~/Applications/Citron.AppImage"],
-            "args": ["-f", "-g"]
+            "args": ["-f", "-g"],
+            "flatpak": "org.citron_emu.Citron"
           }
         }
       ]
@@ -80,7 +84,8 @@
               "~/Applications/pcsx2-Qt.AppImage",
               "/usr/bin/pcsx2-qt"
             ],
-            "args": ["--fullscreen", "--nogui", "--"]
+            "args": ["--fullscreen", "--nogui", "--"],
+            "flatpak": "net.pcsx2.PCSX2"
           }
         },
         {"label": "LRPS2", "id": "pcsx2", "kind": "libretro", "core": "pcsx2_libretro"}
@@ -103,7 +108,8 @@
               "~/Applications/duckstation.AppImage",
               "/usr/bin/duckstation-qt"
             ],
-            "args": ["-fullscreen", "-batch"]
+            "args": ["-fullscreen", "-batch"],
+            "flatpak": "org.duckstation.DuckStation"
           }
         }
       ]
@@ -180,7 +186,8 @@
               "~/Applications/ppsspp.AppImage",
               "/usr/bin/PPSSPPSDL"
             ],
-            "args": ["--fullscreen"]
+            "args": ["--fullscreen"],
+            "flatpak": "org.ppsspp.PPSSPP"
           }
         }
       ]

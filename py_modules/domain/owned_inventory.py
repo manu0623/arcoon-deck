@@ -55,6 +55,9 @@ class InventoryEmulator:
     core_so: str | None = None
     host_binaries: tuple[str, ...] = ()
     host_args: tuple[str, ...] = ()
+    #: A Flatpak application id, tried after the binary paths: many emulators on a Deck
+    #: are installed as a flatpak and never place a binary anywhere the plugin can see.
+    flatpak: str | None = None
 
 
 @dataclass(frozen=True)
@@ -97,12 +100,14 @@ def _emulator(raw: Any) -> InventoryEmulator | None:
             return None
         return InventoryEmulator(label=label, emulator=identity, kind=kind, core_so=core)
     host = raw.get("host") if isinstance(raw.get("host"), dict) else {}
+    flatpak = host.get("flatpak")
     return InventoryEmulator(
         label=label,
         emulator=identity,
         kind=kind,
         host_binaries=_strings(host.get("binaries")),
         host_args=_strings(host.get("args")),
+        flatpak=flatpak if isinstance(flatpak, str) and flatpak else None,
     )
 
 
@@ -164,6 +169,7 @@ def options_for(
     *,
     core_installed: Callable[[str], bool],
     binary_for: Callable[[InventoryEmulator], str | None],
+    flatpak_for: Callable[[InventoryEmulator], str | None] | None = None,
 ) -> list[EmulatorOption]:
     """Classify one platform's entries into picker options, in document order.
 
@@ -186,10 +192,19 @@ def options_for(
                 option = replace(option, status="needs_setup", reason="not_installed")
             options.append(option)
             continue
+        # A binary the plugin can name runs as itself; otherwise a Flatpak install runs
+        # through ``flatpak run`` — still a host command, so the bake renders it as bare
+        # argv and needs neither RetroDECK nor a sandbox hop.
         binary = binary_for(emulator)
-        command = host_command(binary, emulator.host_args) if binary else host_command(emulator.label)
+        flatpak = None if binary is not None or flatpak_for is None else flatpak_for(emulator)
+        if binary is not None:
+            command = host_command(binary, emulator.host_args)
+        elif flatpak is not None and emulator.flatpak:
+            command = host_command(f"{flatpak} run {emulator.flatpak}", emulator.host_args)
+        else:
+            command = host_command(emulator.label)
         option = classify_command(emulator.label, command, emulator=emulator.emulator)
-        if binary is None:
+        if binary is None and flatpak is None:
             option = replace(option, status="needs_setup", reason="not_installed")
         options.append(option)
     return options

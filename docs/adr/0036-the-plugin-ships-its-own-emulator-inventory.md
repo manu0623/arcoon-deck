@@ -54,8 +54,8 @@ follows, so the default is the first bakeable entry in both sources.
   It is in-repo (like `config.json`) rather than vendored, because a vendored snapshot
   cannot be refreshed when the upstream file is gone — the reason `bios_registry.json` was
   removed.
-- Rows the inventory cannot express stay out: an emulator that only exists as a flatpak
-  (no host binary path), and a system the document does not list, still need either ES-DE
-  or a future flatpak form.
+- Rows the inventory cannot express stay out: a system the document does not list still
+  needs either ES-DE or an inventory entry. A Flatpak-only emulator is no longer one of
+  these — see ADR-0038, which gives it a launch form and an installedness probe.
 - Cores are still supplied by the user's machine: the owned runtime's cores directory is
   probed, not populated. Provisioning them is the next slice.

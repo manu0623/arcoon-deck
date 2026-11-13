@@ -83,7 +83,10 @@ class OwnedCatalogueAdapter:
         return {
             "available": True,
             "options": options_for(
-                platform, core_installed=self._core_installed, binary_for=self._binary_for
+                platform,
+                core_installed=self._core_installed,
+                binary_for=self._binary_for,
+                flatpak_for=self._flatpak_for,
             ),
         }
 
@@ -175,6 +178,26 @@ class OwnedCatalogueAdapter:
             return True
         cores = self._cores_dir()
         return bool(cores) and os.path.isfile(os.path.join(cores, f"{core_so}.so"))
+
+    def _flatpak_for(self, emulator: InventoryEmulator) -> str | None:
+        """The ``flatpak`` executable when the entry's app id is installed, else ``None``.
+
+        Read from the two install trees rather than by running ``flatpak list``: the
+        picker asks on every menu open, and a subprocess per row is a price a directory
+        probe does not charge. A system-wide install and a per-user one both count, and
+        the executable is named absolutely when it is there because the launcher's ``PATH``
+        is Steam's, not a login shell's.
+        """
+        app_id = emulator.flatpak
+        if not app_id:
+            return None
+        installed = any(
+            os.path.isdir(os.path.join(root, "flatpak", "app", app_id))
+            for root in ("/var/lib", os.path.join(self._user_home, ".local", "share"))
+        )
+        if not installed:
+            return None
+        return "/usr/bin/flatpak" if os.path.isfile("/usr/bin/flatpak") else "flatpak"
 
     def _binary_for(self, emulator: InventoryEmulator) -> str | None:
         """The first existing binary among the entry's candidates, else ``None``.
