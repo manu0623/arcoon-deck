@@ -44,9 +44,21 @@ class TestWhichPlatformsRestoreByExtraction:
         """
         assert restores_by_extraction(platform) is True
 
+    def test_a_3ds_title_tree_is_a_member_set(self) -> None:
+        """``data`` and ``extdata`` are directories of files Azahar names itself.
+
+        The upload half already packed them (a ``title-dir`` answer is what decides that),
+        so a restore that renamed the zip beside the tree would have been the asymmetry
+        this rule exists to prevent: a save the plugin can send and cannot put back.
+        Measured shape on the reference Deck:
+        ``<id0>/<id1>/title/00040000/000ec300/data``.
+        """
+        assert restores_by_extraction("3ds") is True
+        assert restores_by_extraction("n3ds") is True
+
     @pytest.mark.parametrize(
         "platform",
-        ["gba", "snes", "genesis", "n64", "psx", "ps2", "n3ds", "wii", "wiiu", "dreamcast"],
+        ["gba", "snes", "genesis", "n64", "psx", "ps2", "wii", "wiiu", "dreamcast"],
     )
     def test_every_other_family_is_written_as_a_file(self, platform: str) -> None:
         """Only a flat member set restores by extraction; the rest keep their own rule."""

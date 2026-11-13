@@ -311,8 +311,20 @@ def restores_by_extraction(platform: str) -> bool:
     archive into the directory the answer names. GameCube's set and a Switch title
     folder are flat member sets; a PSP save is the set of ``<DISC_ID>*`` folders, which
     extracts back into the ``SAVEDATA`` tree exactly as it was packed.
+
+    A 3DS title answers True for the same reason as PSP, one level deeper: the unit is
+    ``data`` (and often ``extdata``) — directories of files the emulator names — so a
+    restore that renamed the zip beside the title tree would leave Azahar reading nothing,
+    the failure this rule was written for. The upload half already packed it (a
+    ``title-dir`` answer is what decides that), so leaving this False made the pair
+    asymmetric: it would have uploaded a save it could not put back.
     """
-    return layout_for(platform).family in {SaveFamily.GCI_SET, SaveFamily.SWITCH_TITLE, SaveFamily.PREFIX_BUNDLE}
+    return layout_for(platform).family in {
+        SaveFamily.GCI_SET,
+        SaveFamily.SWITCH_TITLE,
+        SaveFamily.PREFIX_BUNDLE,
+        SaveFamily.N3DS_TITLE,
+    }
 
 
 def save_bank_root(data_dir: str) -> str:

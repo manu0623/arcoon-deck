@@ -94,6 +94,13 @@ Azahar's own settings directory was also wrong before this: `_LAYOUTS` said `aza
 the flatpak keeps both roots under `azahar-emu`. Its `qt-config.ini` was therefore never
 found, so its emulator entry read as unconfigured.
 
+**The restore half had to follow the upload half.** The unit the sync carries is one
+archive (a `title-dir` answer is what decides packing), and `restores_by_extraction` decides
+what a download does with it. PSP, GameCube and Switch were in that set; 3DS was not, so the
+same save would have uploaded as an archive and come back as a zip renamed next to the title
+tree — the exact failure the rule was written for, in the one direction nobody had tried yet.
+A 3DS title now restores by extraction like the rest of the member sets.
+
 **The title-id path was verified before anything was moved**, which is the rule this table
 now lives by: reading each installed `.3ds` on the reference Deck through the content
 identity adapter gave `00040000000ec300` (A Link Between Worlds) and `00040000000a0600`…
