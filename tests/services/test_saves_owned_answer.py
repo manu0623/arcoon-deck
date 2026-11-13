@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import logging
 
-import pytest
 from fakes.fake_active_core_resolver import FakeActiveCoreResolver
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_save_location_reader import FakeSaveLocationReader
@@ -39,7 +38,9 @@ class _FileStore:
         return False
 
 
-def _service(*, emulator: EmulatorInvocation | None, bank_dir: str | None) -> tuple[RomInfoService, FakeSaveLocationReader]:
+def _service(
+    *, emulator: EmulatorInvocation | None, bank_dir: str | None
+) -> tuple[RomInfoService, FakeSaveLocationReader]:
     uow = FakeUnitOfWork()
     with uow:
         uow.roms.save(
