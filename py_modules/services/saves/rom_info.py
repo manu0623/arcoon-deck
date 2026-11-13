@@ -404,7 +404,12 @@ class RomInfoService:
                 emulator=emulator.label if emulator is not None else None,
                 content_installed=installed,
             )
-        elif emulator is not None and emulator.user_dir is not None:
+        elif emulator is not None and emulator.user_dir is not None and layout.family is SaveFamily.GCI_SET:
+            # The pinned user directory answers for a GAME CUBE card, which is the layout
+            # this branch is about. A Wii launch is pinned into the same emulator's user
+            # tree, but its save is a title directory rather than a card, so it must not be
+            # described in card terms — a card path for a Wii game is a path no emulator
+            # writes, and a sync that wrote there would carry nothing.
             answer = owned_dolphin_answer(emulator.user_dir, content_installed=installed)
         elif (unit := self._stated_platform_unit(platform, content_path, installed)) is not None:
             # A standalone emulator that states its own save tree: the same principle as the

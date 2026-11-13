@@ -598,8 +598,11 @@ def fill_gci_set(answer: SaveAnswer, *, game_code: str | None, names: Sequence[s
     from syncing in either direction. The listing resolves it: every entry carrying this
     disc's code IS this disc's save, so the set is the answer.
 
-    A card with no matching entry stays refused, which is right: there is nothing to
-    carry yet, and the download path places the members by their own names.
+    A card with no matching entry is a card this game has not written yet, and that is a
+    TARGET rather than a refusal: the folder is where a server save belongs, and the restore
+    names its members from the archive itself. Measured on the reference Deck: the only
+    ``.gci`` was deleted and the sync then refused with ``save_shape_unsupported``, so the
+    save RomM held was never fetched — the exact fresh-card case a restore exists for.
     """
     if not game_code or not answer.directory:
         return answer
@@ -607,7 +610,13 @@ def fill_gci_set(answer: SaveAnswer, *, game_code: str | None, names: Sequence[s
         return answer
     wanted = gci_names_for(names, game_code)
     if not wanted:
-        return answer
+        return replace(
+            answer,
+            state=SAVE_STATE_PER_GAME_FILES,
+            unestablished=None,
+            components=(),
+            caveats=tuple(caveat for caveat in answer.caveats if caveat != _FILE_NAMES_UNESTABLISHED),
+        )
     components = tuple(
         SaveComponent(name=name, directory=answer.directory, role="memory-card", granularity=answer.granularity)
         for name in wanted

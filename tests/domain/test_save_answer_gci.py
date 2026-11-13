@@ -95,14 +95,22 @@ class TestTheCardEntries:
         filled = fill_gci_set(fill_region(_hole(), "USA"), game_code="GZ2E", names=self._CARD)
         assert "file-names-unestablished" not in filled.caveats
 
-    def test_an_empty_card_stays_refused(self) -> None:
-        """Nothing to carry yet — and the download path places members by their names."""
-        answer = fill_region(_hole(), "USA")
-        assert fill_gci_set(answer, game_code="GZ2E", names=()) == answer
+    def test_an_empty_card_is_a_target_not_a_refusal(self) -> None:
+        """Measured: with the only ``.gci`` deleted, sync refused and the server's save
+        was never fetched. The folder is where a restore belongs, and the members come
+        back under the names they have inside the archive."""
+        filled = fill_gci_set(fill_region(_hole(), "USA"), game_code="GZ2E", names=())
+        assert filled.state == SAVE_STATE_PER_GAME_FILES
+        assert filled.syncable
+        assert filled.synced_names == ()
+        assert filled.directory == "/home/deck/retrodeck/saves/gc/User/GC/USA/Card A"
 
-    def test_another_games_card_is_not_this_ones(self) -> None:
-        answer = fill_region(_hole(), "USA")
-        assert fill_gci_set(answer, game_code="GALE", names=self._CARD) == answer
+    def test_another_games_card_is_still_a_target_for_this_one(self) -> None:
+        """A GCI card folder is shared by region, so another game's entry proves only that
+        this game has not written yet — it does not name a member of this game's save."""
+        filled = fill_gci_set(fill_region(_hole(), "USA"), game_code="GALE", names=self._CARD)
+        assert filled.state == SAVE_STATE_PER_GAME_FILES
+        assert filled.synced_names == ()
 
     def test_an_answer_that_already_names_its_files_is_untouched(self) -> None:
         answer = replace(_hole(), caveats=())

@@ -18,6 +18,7 @@ from domain.owned_dolphin import (
     gc_card_dir,
     is_owned_dolphin,
     user_dir_for,
+    wii_title_dir,
     with_user_dir,
 )
 from domain.save_answer import (
@@ -90,8 +91,17 @@ class TestTheDirectoryThePinImplies:
     def test_a_trailing_slash_does_not_double_up(self) -> None:
         assert user_dir_for("gc", "/home/deck/retrodeck/saves/") == "/home/deck/retrodeck/saves/gc/User"
 
-    def test_other_platforms_are_not_pinned(self) -> None:
-        assert user_dir_for("wii", "/home/deck/retrodeck/saves") is None
+    def test_wii_is_pinned_in_its_own_tree(self) -> None:
+        """The same program writes both systems' saves, so the same pin serves both."""
+        assert user_dir_for("wii", "/home/deck/retrodeck/saves") == "/home/deck/retrodeck/saves/wii/User"
+
+    def test_a_platform_this_emulator_does_not_write_is_not_pinned(self) -> None:
+        """Wii U is Cemu's; pinning Dolphin's tree onto it would cross saves."""
+        assert user_dir_for("wiiu", "/home/deck/retrodeck/saves") is None
+        assert user_dir_for("ps2", "/home/deck/retrodeck/saves") is None
+
+    def test_the_wii_title_tree_is_under_the_same_user_directory(self) -> None:
+        assert wii_title_dir(_USER_DIR) == f"{_USER_DIR}/Wii/title"
 
     def test_the_card_folder_is_the_emulators_own_default(self) -> None:
         assert gc_card_dir(_USER_DIR) == f"{_USER_DIR}/GC/<region>/Card A"

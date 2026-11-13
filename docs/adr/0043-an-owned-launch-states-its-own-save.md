@@ -45,6 +45,22 @@ files that exist are probed for upload — a core without one simply has none. A
 keeps its save under some other name is not matched by these, so the sync carries nothing
 rather than a wrong file.
 
+## Amendment (0.48.12) — Wii is pinned as well
+
+GameCube is no longer the only platform this pin covers. Dolphin is one program and writes both
+systems' saves, so a Wii launch is pinned to `<saves>/wii/User` exactly as a GameCube launch is
+pinned to `<saves>/gc/User` (`domain.owned_dolphin.user_dir_for`, whose map is now per platform).
+The statement is about OUR command either way: a directory we pass with `-u` is not a guess
+about where an emulator might write.
+
+The *save inside* that tree is a different question, and it is not answered here. Measured on
+the reference Deck, a Dolphin user directory holds an empty `Wii/title` beside `Wii/sys`,
+`Wii/ticket` and `Wii/shared1`, and no session has yet written a Wii save into it — so the title
+category, the title id spelling and the files under `data/` stay unmodelled until one has.
+Until then the answer for a Wii ROM stays the refusal it is today, and a card-shaped answer is
+never returned for a Wii launch (the owned-Dolphin branch of `_ask_resolver` is gated on the
+GameCube layout family for exactly that reason).
+
 ## Consequences
 
 - Save sync has a shape on a no-RetroDECK device: a server save for a GBA title downloads to

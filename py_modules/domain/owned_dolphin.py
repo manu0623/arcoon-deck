@@ -38,6 +38,16 @@ _DOLPHIN_NAMES = ("dolphin",)
 
 # Where RetroDECK keeps this emulator's user tree, relative to the saves root.
 _GC_USER_DIR = "gc/User"
+_WII_USER_DIR = "wii/User"
+
+# The platforms this emulator writes a save for at all. Wii U is Cemu's, not this one's.
+_DOLPHIN_SAVE_PLATFORMS = {
+    "gc": _GC_USER_DIR,
+    "ngc": _GC_USER_DIR,
+    "gamecube": _GC_USER_DIR,
+    "gcn": _GC_USER_DIR,
+    "wii": _WII_USER_DIR,
+}
 
 
 def is_owned_dolphin(label: str | None, emulator: str | None) -> bool:
@@ -99,13 +109,30 @@ def with_user_dir(invocation: EmulatorInvocation, user_dir: str) -> EmulatorInvo
 def user_dir_for(platform_slug: str, saves_base: str) -> str | None:
     """The Dolphin user directory for *platform_slug*, or ``None`` for platforms it does not cover.
 
-    Today only GameCube: the measured Deck keeps this emulator's user tree under
+    GameCube is measured: the reference Deck keeps this emulator's user tree under
     ``<saves>/gc/User``, which is where the last session actually wrote. Adopting it is why
     nothing has to move — the existing save is picked up on the first owned launch.
+
+    Wii is the same statement one platform over, and it is a statement about OUR command
+    rather than a reading of the emulator: both systems are this one program, so the tree
+    we pin for one is the tree we pin for the other, named after the platform the launch is
+    for. A Wii save is a directory under that tree, and where inside it is the emulator's
+    own layout — never something this module could have guessed.
     """
-    if platform_slug not in {"gc", "ngc", "gamecube", "gcn"}:
+    subdir = _DOLPHIN_SAVE_PLATFORMS.get(platform_slug)
+    if subdir is None:
         return None
-    return f"{saves_base.rstrip('/')}/{_GC_USER_DIR}"
+    return f"{saves_base.rstrip('/')}/{subdir}"
+
+
+def wii_title_dir(user_dir: str) -> str:
+    """The Wii title tree this user directory implies, with the game's own id still a hole.
+
+    ``<user>/Wii/title`` is where Dolphin keeps every Wii save, one directory per title; the
+    category and the title id below it are named by the disc, so they are filled from it and
+    never guessed here.
+    """
+    return f"{user_dir.rstrip('/')}/Wii/title"
 
 
 def gc_card_dir(user_dir: str) -> str:
