@@ -228,6 +228,7 @@ class SyncEngine:
             clock=config.clock,
             save_file_store=config.save_file_store,
             log_debug=config.log_debug,
+            emulator_identity=self._standalone_emulator_identity,
         )
         self._rollback = RollbackOrchestrator(
             uow_factory=config.uow_factory,
@@ -271,6 +272,22 @@ class SyncEngine:
         than re-queried per sync flow.
         """
         return self._devices.get_device_id()
+
+    def _standalone_emulator_identity(self, rom_id: int) -> str | None:
+        """The emulator a standalone launch of *rom_id* names, or ``None`` otherwise.
+
+        Only a standalone invocation has an emulator of its own to stamp: a libretro launch
+        is RetroArch by definition, so its upload tag stays ``retroarch-<core>``. The
+        identity is the resolver's own name for the program — a registry id (``eden``) or a
+        picker label (``Dolphin (Standalone)``), which ``domain.emulator_tag`` spells the
+        same way.
+        """
+        if self._active_core is None:
+            return None
+        invocation = self._active_core.active_emulator_for_rom(rom_id)
+        if invocation is None or getattr(invocation, "kind", None) != "standalone":
+            return None
+        return getattr(invocation, "emulator", None) or getattr(invocation, "label", None)
 
     def resolve_core(self, rom_id: int) -> str | None:
         """Resolve the active RetroArch core for a ROM, or ``None``.

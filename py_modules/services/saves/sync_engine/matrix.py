@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
-from domain.emulator_tag import build_emulator_tag
+from domain.emulator_tag import emulator_tag
 from domain.iso_time import parse_iso_to_epoch
 from domain.rom_save_sync_state import FileSyncState, RomSaveSyncState
 from domain.save_backup import BACKUP_DIR_NAME, backup_name, select_backups_to_prune
@@ -208,6 +208,7 @@ class MatrixExecutor:
         clock: Clock,
         save_file_store: SaveFileStore,
         log_debug: DebugLogger,
+        emulator_identity: Callable[[int], str | None] | None = None,
     ) -> None:
         self._rom_info = rom_info
         self._romm_api = romm_api
@@ -218,6 +219,28 @@ class MatrixExecutor:
         self._clock = clock
         self._save_file_store = save_file_store
         self._log_debug = log_debug
+        # What the resolving layer calls the emulator that ran a ROM: an upload is stamped
+        # with it instead of a launcher's name. Optional because a test or a probe may build
+        # the executor without one, and a missing answer must not fail an upload.
+        self._emulator_identity = emulator_identity
+
+    # ------------------------------------------------------------------
+    # Upload Emulator Identity
+    # ------------------------------------------------------------------
+
+    def _emulator_identity_for(self, rom_id: int) -> str | None:
+        """What the resolving layer calls the emulator that ran this ROM, or ``None``.
+
+        Swallowed on purpose: the tag is metadata on an upload, and a resolver that cannot
+        answer must not turn that upload into a failure — the libretro spelling remains.
+        """
+        if self._emulator_identity is None:
+            return None
+        try:
+            return self._emulator_identity(rom_id)
+        except Exception as error:
+            self._log_debug(f"upload emulator identity unavailable for rom_id={rom_id}: {error!r}")
+            return None
 
     # ------------------------------------------------------------------
     # Server Save Hash Helper
@@ -594,7 +617,7 @@ class MatrixExecutor:
             raise DeviceNotRegisteredError(DEVICE_NOT_REGISTERED)
 
         save_id = server_save.get("id") if server_save else None
-        emulator = build_emulator_tag(core_so)
+        emulator = emulator_tag(core_so, identity=self._emulator_identity_for(rom_id))
 
         slot = self._resolve_upload_slot(save_state, default_slot)
 

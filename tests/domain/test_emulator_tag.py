@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from domain.emulator_tag import build_emulator_tag, detect_core_change
+from domain.emulator_tag import (
+    build_emulator_tag,
+    detect_core_change,
+    emulator_tag,
+    normalize_emulator_identity,
+)
 
 # ---------------------------------------------------------------------------
 # TestBuildEmulatorTag
@@ -55,3 +60,41 @@ class TestDetectCoreChange:
 
     def test_both_none_returns_false(self):
         assert detect_core_change(None, None) is False
+
+
+# ---------------------------------------------------------------------------
+# TestEmulatorTag
+# ---------------------------------------------------------------------------
+
+
+class TestEmulatorTag:
+    """Measured on the reference Deck's own server: a GameCube save written by Dolphin is
+    filed under `dolphin`, a Switch save written by Eden under `eden` — and a Switch save
+    this plugin uploaded was filed under `retroarch` on a device with no RetroArch Switch
+    core at all."""
+
+    def test_a_standalone_identity_is_the_tag(self) -> None:
+        assert emulator_tag(None, identity="eden") == "eden"
+        assert emulator_tag(None, identity="dolphin") == "dolphin"
+
+    def test_a_picker_label_drops_its_provider(self) -> None:
+        assert emulator_tag(None, identity="Dolphin (Standalone)") == "dolphin"
+        assert emulator_tag(None, identity="Eden (Flatpak)") == "eden"
+
+    def test_a_libretro_launch_keeps_the_core_in_the_tag(self) -> None:
+        assert emulator_tag("mgba_libretro") == "retroarch-mgba"
+        assert emulator_tag("mgba_libretro", identity=None) == "retroarch-mgba"
+
+    def test_nothing_resolved_keeps_the_retroarch_fallback(self) -> None:
+        assert emulator_tag(None) == "retroarch"
+        assert emulator_tag(None, identity="") == "retroarch"
+
+    def test_an_identity_that_names_nothing_is_not_a_tag(self) -> None:
+        assert normalize_emulator_identity("(Standalone)") is None
+        assert normalize_emulator_identity(None) is None
+        assert emulator_tag(None, identity="(Standalone)") == "retroarch"
+
+    def test_a_multi_word_identity_is_hyphenated(self) -> None:
+        assert emulator_tag(None, identity="DuckStation (Standalone)") == "duckstation"
+        assert emulator_tag(None, identity="melonDS (Flatpak)") == "melonds"
+        assert emulator_tag(None, identity="PCSX2 v2 (Standalone)") == "pcsx2-v2"
