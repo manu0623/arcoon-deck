@@ -54,11 +54,27 @@ WII_PLATFORMS = ("wii",)
 # RetroDECK's sandbox instead produced audio with no picture.
 SWITCH_LAUNCH = ["%EMULATOR_FLATPAK-SPAWN%", "--host", "/home/deck/Applications/Eden.AppImage", "-f", "-g", "%ROM%"]
 
-# The launch this cut bakes for GameCube, with the save path it implies. The emulator token
-# and `%ROM%` stay placeholders: RetroDECK's launcher resolves them, exactly as it did before
-# this script existed. `-C Core/GCIFolderAPath` is the measured question ADR-0034 records as
-# open; until it is answered, adopting a directory is the only shape this script writes.
-GC_LAUNCH = ["%EMULATOR_DOLPHIN%", "-b", "-e", "%ROM%"]
+# The launch this cut bakes for Dolphin (GameCube and Wii alike), with the save paths it
+# implies. `-C Core/GCIFolderAPath` is the measured question ADR-0034 records as open; until
+# it is answered, adopting a directory is the only shape this script writes.
+#
+# Measured on the reference Deck, and the reason this is not the plain ES-DE command: a
+# managed platform's argv is baked as a `standalone` invocation, which the shortcut layer
+# always wraps in `flatpak run net.retrodeck.retrodeck -e "<command>"`. RetroDECK's launcher
+# resolves `%EMULATOR_DOLPHIN%` to ITS Dolphin, and the Deck's Dolphin is the host flatpak the
+# plugin installed — so the wrapper execs a binary that is not there and the game exits in a
+# fraction of a second. The host-spawn form runs the flatpak directly, which is the command
+# the working Dolphin shortcuts already carry.
+DOLPHIN_LAUNCH = [
+    "%EMULATOR_FLATPAK-SPAWN%",
+    "--host",
+    "/usr/bin/flatpak",
+    "run",
+    "org.DolphinEmu.dolphin-emu",
+    "-b",
+    "-e",
+    "%ROM%",
+]
 
 
 def build_manifest(root: Path, adopted: dict[str, str]) -> dict:
@@ -72,7 +88,7 @@ def build_manifest(root: Path, adopted: dict[str, str]) -> dict:
             # `Wii/title/00010000/53423445/data` with its `GameData.bin` beside `banner.bin`.
             platforms[platform] = {
                 "emulator": "Dolphin (Standalone)",
-                "launch": list(GC_LAUNCH),
+                "launch": list(DOLPHIN_LAUNCH),
                 "save_dir": f"{directory.rstrip('/')}/<save_id>/data",
                 "save_unit": "title-dir",
                 "needs": ["save_id"],
@@ -92,7 +108,7 @@ def build_manifest(root: Path, adopted: dict[str, str]) -> dict:
             continue
         platforms[platform] = {
             "emulator": "Dolphin (Standalone)",
-            "launch": list(GC_LAUNCH),
+            "launch": list(DOLPHIN_LAUNCH),
             "save_dir": directory,
             "save_unit": "gci-set",
             "needs": ["region"],

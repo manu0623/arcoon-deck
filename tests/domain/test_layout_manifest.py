@@ -25,6 +25,7 @@ from domain.save_answer import (
     fill_region,
     manifest_answer,
 )
+from domain.shortcut_data import EmulatorInvocation, resolve_emulator_invocation
 
 _ROOT = "/home/deck/homebrew/data/romm-tender"
 
@@ -191,3 +192,43 @@ class TestTheAnswerAManagedEntryStates:
 
     def test_no_entry_answers_nothing(self) -> None:
         assert manifest_answer(None, content_installed=True) is None
+
+
+def _provision_layout():
+    """The provisioner as a module, so the test asserts the argv it WRITES, not a copy."""
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[2] / "scripts" / "provision_layout.py"
+    spec = importlib.util.spec_from_file_location("provision_layout", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestTheProvisionedDolphinLaunch:
+    """Measured on the reference Deck: a managed argv is baked as a standalone invocation, and
+    the shortcut layer wraps that in ``flatpak run net.retrodeck.retrodeck -e "<command>"``.
+    RetroDECK's launcher resolves ``%EMULATOR_DOLPHIN%`` to ITS Dolphin, which this device does
+    not have, so the wrapper execs nothing and the game exits instantly — the failure that made
+    a Wii title refuse to start. The host-spawn form bakes bare argv instead.
+    """
+
+    def _manifest(self, platform: str, directory: str) -> dict:
+        module = _provision_layout()
+        return module.build_manifest(__import__("pathlib").Path("/tmp/layout"), {platform: directory})
+
+    @pytest.mark.parametrize("platform", ["gc", "wii"])
+    def test_the_stated_argv_bakes_to_the_host_flatpak(self, platform: str) -> None:
+        entry = self._manifest(platform, "/saves/root")["platforms"][platform]
+        invocation = EmulatorInvocation.standalone(" ".join(entry["launch"]))
+        assert (
+            resolve_emulator_invocation({}, invocation)
+            == "/usr/bin/flatpak run org.DolphinEmu.dolphin-emu -b -e"
+        )
+
+    def test_no_argv_carries_a_placeholder_nothing_resolves(self) -> None:
+        for platform in ("gc", "wii"):
+            entry = self._manifest(platform, "/saves/root")["platforms"][platform]
+            assert "%EMULATOR_DOLPHIN%" not in entry["launch"]
