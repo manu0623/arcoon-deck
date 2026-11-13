@@ -102,7 +102,7 @@ release.
 | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Dreamcast      | Flycast ships with **Per-Game VMUs off**, so every game shares `vmu_save_A1.bin` and its siblings in RetroDECK's system folder. The core _can_ write per-game VMUs; the names it uses then aren't pinned down yet.      |
 | PlayStation 2  | The LRPS2 core ships with **shared memory cards on** (`Mcd001.ps2` / `Mcd002.ps2`). With that option off it writes one `<game>.ps2` card per game — which would fit per-game sync.                                      |
-| GameCube / Wii | The Dolphin core appears to keep saves under its own subtree rather than the per-game save folder. Not confirmed on-device yet.                                                                                         |
+| Wii            | Dolphin keeps a Wii save as a title directory inside the user tree the plugin pins, but no session has written one on-device yet, so its shape is still unconfirmed.                                                     |
 | Neo Geo CD     | Ships writing one shared save. The core has a per-content mode; which one wins when loading isn't confirmed.                                                                                                            |
 | Nintendo 3DS   | The Azahar core appears to use its own save subtree. Not confirmed on-device yet.                                                                                                                                       |
 | PSP            | Where the PPSSPP core keeps its saves, and whether they are per game, hasn't been established.                                                                                                                          |
@@ -144,7 +144,6 @@ states still work locally). See the full table for specifics.
     | `gamate` | ❌ | Saves are stored separately by the emulator (MAME) |
     | `gameandwatch` | ❌ | Saves are stored separately by the emulator (MAME) |
     | `gamecom` | ❌ | Saves are stored separately by the emulator (MAME) |
-    | `gc` | ❌ | Dolphin core's own save subtree — not confirmed on-device |
     | `gmaster` | ❌ | Saves are stored separately by the emulator (MAME) |
     | `gx4000` | ❌ | Not synced |
     | `laserdisc` | ❌ | Saves are stored separately by the emulator (MAME) |
@@ -194,6 +193,7 @@ states still work locally). See the full table for specifics.
     | `gb` | ✅ | Synced |
     | `gba` | ✅ | Synced |
     | `gbc` | ✅ | Synced |
+    | `gc` | ✅ | Dolphin's GameCube card folder in GCI mode (`GC/<region>/Card A`); the entry is chosen by the disc's own game code, and a card holding nothing yet still restores from the server |
     | `genesis` | ✅ | Synced |
     | `mark3` | ✅ | Synced |
     | `mastersystem` | ✅ | Synced |
