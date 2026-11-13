@@ -14,6 +14,7 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from adapters.emulator_save_link import EmulatorSaveLinkAdapter
 from domain.owned_dolphin import user_dir_for
 from domain.runtime import RuntimeMode, resolve_launch_backend
 from domain.shortcut_data import RETRODECK_APP_ID
@@ -29,6 +30,7 @@ from services.disc import DiscService, DiscServiceConfig
 from services.disc_launch_resolver import DiscLaunchResolver, DiscLaunchResolverConfig
 from services.downloads import DownloadService, DownloadServiceConfig
 from services.emulator_provisioning import EmulatorProvisioningConfig, EmulatorProvisioningService
+from services.emulator_save_links import EmulatorSaveLinkConfig, EmulatorSaveLinkService
 from services.emulator_shortcuts import EmulatorShortcutConfig, EmulatorShortcutService
 from services.firmware import FirmwareService, FirmwareServiceConfig
 from services.game_detail import GameDetailService, GameDetailServiceConfig
@@ -491,6 +493,18 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         ),
     )
 
+    # Points a standalone emulator's save folder at the tree the plugin syncs, so a game
+    # played in PPSSPP's own window finds the savedata the sync put there (ADR-0051).
+    emulator_save_link_service = EmulatorSaveLinkService(
+        config=EmulatorSaveLinkConfig(
+            logger=cfg.runtime.logger,
+            external_emulators=cfg.adapters.external_emulators,
+            config_reader=cfg.adapters.emulator_config,
+            saves_path=cfg.callbacks.retrodeck_paths.saves_path,
+            apply=EmulatorSaveLinkAdapter(logger=cfg.runtime.logger).apply,
+        ),
+    )
+
     # Names the emulators this machine has as a Steam collection's worth of tiles, so one
     # can be opened for its own settings or to test a build (ADR-0050).
     emulator_shortcut_service = EmulatorShortcutService(
@@ -696,6 +710,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         "core_provisioning_service": core_provisioning_service,
         "emulator_provisioning_service": emulator_provisioning_service,
         "emulator_shortcut_service": emulator_shortcut_service,
+        "emulator_save_link_service": emulator_save_link_service,
         "disc_service": disc_service,
         "version_switch_service": version_switch_service,
         "connection_service": connection_service,

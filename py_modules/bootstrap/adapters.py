@@ -31,6 +31,7 @@ from adapters.core_install import CoreInstallAdapter
 from adapters.cover_art_file_store import CoverArtFileStoreAdapter
 from adapters.debug_logger import SettingsAwareDebugLogger
 from adapters.download_file import DownloadFileAdapter
+from adapters.emulator_config import EmulatorConfigReader
 from adapters.emulator_install import EmulatorInstallAdapter
 from adapters.emulator_save_base import EmulatorSaveBaseAdapter
 from adapters.es_find_rules import EsFindRulesAdapter
@@ -189,6 +190,7 @@ class AdapterBundle:
     # through flatpak, a release build as a hash-verified AppImage (ADR-0049).
     emulator_install: EmulatorInstallAdapter
     external_emulators: ExternalEmulatorProvider
+    emulator_config: EmulatorConfigReader
     retroarch_appendconfig: RetroArchAppendConfigFn
     retroarch_runner: RetroArchRunnerFn
     content_identity: ContentIdentityFn
@@ -580,6 +582,9 @@ def bootstrap(
     # launchers, bare flatpaks. Cached for a minute because the picker asks on every
     # menu open, while the probe behind it spawns ``flatpak list``.
     external_emulators = ExternalEmulatorsAdapter(user_home=user_home, logger=logger)
+    # Reads one install's own settings file, which is what says where *that* provider
+    # keeps the emulator's config — the answer the save link needs (ADR-0051).
+    emulator_config = EmulatorConfigReader(user_home=user_home)
     # Points a libretro launch's saves at the bank. RetroDECK's flatpak carries
     # ``filesystems=…;host;``, so the data directory is visible inside its sandbox
     # (verified on a Deck) and the baked ``--appendconfig`` path resolves there.
@@ -635,6 +640,7 @@ def bootstrap(
         runtime_install=RuntimeInstallAdapter(user_home=user_home, logger=logger),
         emulator_install=EmulatorInstallAdapter(user_home=user_home, logger=logger),
         external_emulators=external_emulators,
+        emulator_config=emulator_config,
         retroarch_appendconfig=retroarch_appendconfig.ensure,
         retroarch_runner=retroarch_runner,
         content_identity=content_identity,

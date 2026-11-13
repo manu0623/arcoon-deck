@@ -211,6 +211,7 @@ class Plugin:
         self._core_provisioning_service = services["core_provisioning_service"]
         self._emulator_provisioning_service = services["emulator_provisioning_service"]
         self._emulator_shortcut_service = services["emulator_shortcut_service"]
+        self._emulator_save_link_service = services["emulator_save_link_service"]
         self._disc_service = services["disc_service"]
         self._version_switch_service = services["version_switch_service"]
         self._prune_service = services["prune_service"]
@@ -240,6 +241,13 @@ class Plugin:
         # (ADR-0041).
         self._startup_healing_service.reconsider_launchability()
         self._startup_healing_service.reconcile_orphaned_sync_runs()
+        # A standalone emulator reads its own folder, so point it at the tree the sync
+        # writes before anything opens it; an emulator installed since the last start is
+        # caught here rather than when a reader finds its saves missing (ADR-0051).
+        try:
+            await self._emulator_save_link_service.ensure_all()
+        except Exception as exc:  # a link is never worth failing the plugin's start
+            decky.logger.warning(f"Emulator saves: startup link pass failed: {exc}")
         # No save-sync orphan prune: roms rows are permanent identity anchors
         # and saves/playtime survive a ROM leaving RomM (ADR-0007).
         self._sgdb_service.prune_orphaned_artwork_cache()
@@ -484,6 +492,19 @@ class Plugin:
         """
         return await self._core_provisioning_service.ensure_for_system(system_name)
 
+    async def ensure_emulator_save_links(self, system_name=None):
+        """Point each standalone emulator's save folder at the tree the plugin syncs.
+
+        A standalone emulator reads and writes its own folder, so a game's savedata the
+        plugin downloaded is invisible to it: measured on the reference Deck, the
+        standalone PPSSPP offered a first-run save while the game's folder sat in
+        ``<saves>/psp/PSP/SAVEDATA``. The link makes them the same directory, and
+        anything the emulator already saved is adopted rather than hidden (ADR-0051).
+        """
+        if system_name:
+            return await self._emulator_save_link_service.ensure_for_platform(system_name)
+        return await self._emulator_save_link_service.ensure_all()
+
     async def get_emulator_shortcuts(self):
         """Every emulator this machine has, each with the shortcut it already became.
 
@@ -532,7 +553,15 @@ class Plugin:
         *label* narrows the work to one row, which is how a surface shows per-emulator
         progress: one call per emulator, each reporting as it lands.
         """
-        return await self._emulator_provisioning_service.ensure_for_system(system_name, label=label)
+        result = await self._emulator_provisioning_service.ensure_for_system(system_name, label=label)
+        # An install that just landed has its save folder pointed in the same breath: an
+        # emulator opened before the link exists writes a save the sync never sees.
+        if result.get("success"):
+            try:
+                await self._emulator_save_link_service.ensure_for_platform(system_name)
+            except Exception as exc:  # a link failure must not fail the install
+                decky.logger.warning(f"Emulator saves: linking after installing {system_name} failed: {exc}")
+        return result
 
     async def get_system_core_info(self, platform_slug):
         return await self._core_service.get_system_core_info(platform_slug)
