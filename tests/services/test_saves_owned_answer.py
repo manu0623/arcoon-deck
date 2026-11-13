@@ -229,10 +229,12 @@ class _PspStore:
         return False
 
     def is_dir(self, path: str) -> bool:
-        return path in self._TREE
+        # The base itself, and any folder the base lists: that is what a member of a
+        # folder-shaped save is.
+        return path in self._TREE or os.path.dirname(path) == _PSP_BASE
 
     def exists(self, path: str) -> bool:
-        return path in self._TREE
+        return path in self._TREE or os.path.dirname(path) == _PSP_BASE
 
 
 def _psp_service(*, with_identity: bool) -> tuple[RomInfoService, FakeSaveLocationReader]:
