@@ -4,10 +4,17 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
 
+import pytest
 from fakes.fake_active_core_resolver import FakeActiveCoreResolver
 
 from domain.content_identity import ContentIdentity, IdentityKind
-from domain.save_answer import SaveAnswer, SaveComponent
+from domain.save_answer import (
+    SaveAnswer,
+    SaveComponent,
+    fill_gci_set,
+    fill_region,
+    owned_dolphin_answer,
+)
 
 if TYPE_CHECKING:
     from fakes.fake_save_location_reader import FakeSaveLocationReader
@@ -557,6 +564,45 @@ class TestSaveIdFromTheContentFile:
         _install_rom(svc, tmp_path, system="n3ds", file_name="game.3ds")
 
         assert svc._rom_info.save_answer(42).state == "hole"
+
+
+class TestWhichServerSavesAnEmptyCardCanPlace:
+    """Measured: a fresh GameCube card named no members, and the server's own entry was
+    then skipped as "not a file this emulator's answer carries" — so the restore never ran
+    and the save RomM held stayed on the server."""
+
+    _CODE = ContentIdentity("GZ2E", IdentityKind.GAME_CODE, "GameCube .rvz header", region="USA")
+
+    def _filter(self, tmp_path, *, names: tuple[str, ...] = ()):
+        svc, _ = make_service(tmp_path, content_identity=lambda path, platform: self._CODE)
+        _install_rom(svc, tmp_path, system="gc", file_name="game.rvz")
+        answer = fill_gci_set(
+            fill_region(owned_dolphin_answer("/saves/gc/User", content_installed=True), "USA"),
+            game_code="GZ2E",
+            names=names,
+        )
+        return svc._rom_info.server_target_filter(svc._rom_info.get_rom_save_info(42), answer)
+
+    def test_a_card_entry_carrying_this_discs_code_is_admitted(self, tmp_path) -> None:
+        predicate = self._filter(tmp_path)
+        assert predicate is not None
+        assert predicate("01-GZ2E-gczelda2.gci") is True
+
+    @pytest.mark.parametrize(
+        "target",
+        [
+            "Legend of Zelda, The - Twilight Princess (USA).gci",
+            "Legend of Zelda, The - Twilight Princess (USA).zip",
+            "01-GMSE-other.gci",
+        ],
+    )
+    def test_an_older_shape_is_not_placed_in_a_card_folder(self, tmp_path, target: str) -> None:
+        predicate = self._filter(tmp_path)
+        assert predicate is not None
+        assert predicate(target) is False
+
+    def test_an_answer_that_names_its_members_needs_no_filter(self, tmp_path) -> None:
+        assert self._filter(tmp_path, names=("01-GZ2E-gczelda2.gci",)) is None
 
 
 class TestTheSaveBankDirectory:

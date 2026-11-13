@@ -33,11 +33,13 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal
 
 from domain.owned_dolphin import gc_card_dir
-from domain.save_bank import restores_by_extraction
+from domain.save_bank import canonical_platform, restores_by_extraction
 from domain.save_layout import SAVE_SYNC_CONTENT_DIR_REASON
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+    from domain.content_identity import ContentIdentity
 
 # The five states. Exactly one holds for any ROM.
 SAVE_STATE_PER_GAME_FILES = "per_game_files"
@@ -567,6 +569,21 @@ def fill_region(answer: SaveAnswer, region: str | None) -> SaveAnswer:
     )
     state, shape = _state_after_fill(filled, remaining=remaining, components=components)
     return replace(filled, state=state, unestablished=shape)
+
+
+def member_target_accepted(platform: str, identity: ContentIdentity, target: str) -> bool:
+    """Whether *target* is a file this platform could place in an EMPTY member set.
+
+    The question the sync matrix asks when the folder holds nothing yet: the answer names no
+    members, so the server's own targets are the candidates, and each is admitted only when
+    the platform's naming rule could produce it from this game's identity. For a GameCube
+    card that is the ``<maker>-<code>-<internal>.gci`` shape carrying THIS disc's code —
+    measured on the reference Deck, whose server rows also held a ROM-named ``.gci`` and the
+    misplaced ``…(USA).zip``, neither of which a card folder can place.
+    """
+    if canonical_platform(platform) == "gc":
+        return bool(gci_names_for((target,), identity.save_id))
+    return False
 
 
 def gci_names_for(names: Sequence[str], game_code: str) -> tuple[str, ...]:

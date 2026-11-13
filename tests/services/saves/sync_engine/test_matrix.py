@@ -2725,3 +2725,40 @@ class TestQuarantineBackupRetention:
 
         assert save.read_bytes() == b"keep"
         assert list(outside.iterdir()) == []
+
+
+class TestAnEmptyMemberSetAndTheServersOwnEntry:
+    """Measured on the reference Deck: a fresh GameCube card answered a syncable target with
+    NO members, and the server's entry was then skipped as "not a file this emulator's
+    answer carries" — so the restore never ran and the save RomM held stayed on the server.
+    """
+
+    _DIR = "/tmp/saves/gc/User/GC/USA/Card A"
+
+    def _outcomes(self, tmp_path, *, server_target_filter):
+        svc, _ = make_service(tmp_path)
+        _install_rom(svc, tmp_path)
+        info = svc._rom_info.get_rom_save_info(42)
+        server = [_server_save(100, filename="pokemon [2026-03-24_15-19-26].srm")]
+        return list(
+            svc._sync_engine._matrix.iter_matrix_outcomes(
+                server,
+                save_state=None,
+                device_id="dev-1",
+                info=info,
+                save_names=(),
+                saves_dir=self._DIR,
+                server_target_filter=server_target_filter,
+            )
+        )
+
+    def test_an_admitted_target_is_downloaded(self, tmp_path) -> None:
+        outcomes = self._outcomes(tmp_path, server_target_filter=lambda t: t == "pokemon.srm")
+        assert [outcome.filename for outcome in outcomes] == ["pokemon.srm"]
+        assert outcomes[0].local_path is None
+
+    def test_a_target_the_filter_refuses_is_left_alone(self, tmp_path) -> None:
+        assert self._outcomes(tmp_path, server_target_filter=lambda t: False) == []
+
+    def test_without_a_filter_nothing_new_is_placed(self, tmp_path) -> None:
+        assert self._outcomes(tmp_path, server_target_filter=None) == []

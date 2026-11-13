@@ -33,7 +33,7 @@ from services.saves._messages import DEVICE_NOT_REGISTERED
 
 if TYPE_CHECKING:
     import logging
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
     from domain.save_answer import SaveAnswer
     from services.protocols import (
@@ -49,6 +49,15 @@ if TYPE_CHECKING:
 
 
 _BACKUP_RETENTION = 10  # max .romm-backup copies kept per save file (#974)
+
+
+def _novel_target_accepted(target: str, server_target_filter: Callable[[str], bool] | None) -> bool:
+    """Whether a server-only target may be placed while the answer names no members.
+
+    No filter at all is the ordinary case — the answer names what it carries — and it admits
+    nothing, so a target the answer never mentioned is still passed over in both directions.
+    """
+    return server_target_filter is not None and server_target_filter(target)
 
 
 def _extension(name: str) -> str:
@@ -918,6 +927,7 @@ class MatrixExecutor:
         info: dict[str, Any],
         save_names: tuple[str, ...],
         saves_dir: str | None,
+        server_target_filter: Callable[[str], bool] | None = None,
     ) -> Iterator[MatrixOutcome]:
         """Yield one :class:`MatrixOutcome` per save file in the ROM's active slot.
 
@@ -999,7 +1009,7 @@ class MatrixExecutor:
             target = local_save_target(ss, rom_name, known_names=save_names)
             if target in handled_filenames:
                 continue
-            if target not in carried:
+            if target not in carried and not _novel_target_accepted(target, server_target_filter):
                 self._log_debug(
                     f"iter_matrix_outcomes({rom_name!r}): server save {target!r} is not a file this emulator's "
                     f"answer carries — leaving both copies alone"
@@ -1083,6 +1093,10 @@ class MatrixExecutor:
         # a restore cannot disagree: a unit RomM carries as ONE archive is packed here and
         # synced as that single file, with downloads extracted into the folder it came from.
         save_names, answer_dir, restore_dir = self._rom_info.save_unit(info, answer)
+        # Which server-side names an empty member set may still place: a fresh card has no
+        # local names to compare against, so without this the server's own entry is skipped
+        # and the restore never happens.
+        server_target_filter = self._rom_info.server_target_filter(info, answer)
         # The backstop every sync path crosses. A refusing answer pairs its names
         # with a ``None`` directory, so nothing is probed and no state is written
         # — the sweep has no room in its one result to say which ROM was passed
@@ -1137,6 +1151,7 @@ class MatrixExecutor:
             # The ANSWER's directory, which is None wherever the answer refuses,
             # so the pairing that makes a refusal probe nothing survives here too.
             saves_dir=answer_dir,
+            server_target_filter=server_target_filter,
         ):
             origin = "local" if outcome.local_path is not None else "server-only"
             self._log_debug(

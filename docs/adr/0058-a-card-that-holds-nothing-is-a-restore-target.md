@@ -42,6 +42,18 @@ Nothing is uploaded for a target with no members. The upload compares the member
 names; with none, there is nothing to claim, and a folder-shaped upload would carry the whole
 region's card.
 
+**The answer alone was not enough, and the second reading is the measurement that finished
+the fix.** With the target in place the sync ran and reported `downloaded=0`: the matrix only
+downloads a server row whose target the answer *names* (`carried`), and an empty target names
+nothing — its log line was `server save '01-GZ2E-gczelda2.gci' is not a file this emulator's
+answer carries — leaving both copies alone`. So the answer now also states which server names
+an empty member set may still place (`RomInfoService.server_target_filter`), and the matrix
+admits a server-only group when that filter accepts the target. The filter is the platform's
+own naming rule applied to the game's identity — for GameCube, a `.gci` carrying this disc's
+game code — which is why the same ROM's other server rows are refused: the server for rom 5319
+holds three real card entries plus a ROM-named `.gci` and the misplaced `…(USA).zip`, and only
+the card entries can be placed in `GC/USA/Card A`.
+
 ## Consequences
 
 - A fresh card restores: the server's save is fetched and its entries land under their own

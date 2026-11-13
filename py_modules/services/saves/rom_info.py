@@ -28,6 +28,7 @@ from domain.save_answer import (
     fill_region,
     fill_save_id,
     manifest_answer,
+    member_target_accepted,
     owned_dolphin_answer,
     owned_libretro_answer,
     unestablished_answer,
@@ -643,6 +644,30 @@ class RomInfoService:
         if restores_by_extraction(info["system"]):
             return answer.directory
         return info["saves_dir"]
+
+    def server_target_filter(self, info: dict[str, Any], answer: SaveAnswer) -> Callable[[str], bool] | None:
+        """Which server targets an EMPTY member set may still place, or ``None`` when the
+        answer already names what it carries.
+
+        Measured on the reference Deck: with a fresh GameCube card the answer became a
+        syncable target with no members, and the server's own entry was then skipped as
+        "not a file this emulator's answer carries" — so the download never ran and the
+        save RomM held stayed on the server. A member set that restores by extraction names
+        its files from the archive, so while the folder holds nothing the server's targets
+        are the candidates; each is admitted only when this platform's naming rule could
+        produce it from this game's identity (a ``.gci`` carrying the disc's code), which
+        keeps an older shape — a ROM-named ``.gci``, a misplaced ``.zip`` — out of a card
+        folder.
+        """
+        if answer.synced_names or self._content_identity is None:
+            return None
+        if not restores_by_extraction(info["system"]):
+            return None
+        identity = self._content_identity(info["file_path"], info["platform_slug"])
+        if identity is None:
+            return None
+        platform = info["platform_slug"]
+        return lambda target: member_target_accepted(platform, identity, target)
 
     def save_unit(self, info: dict[str, Any], answer: SaveAnswer) -> tuple[tuple[str, ...], str | None, str | None]:
         """Where a ROM's save actually lives, as ``(names, directory, extract_dir)``.
