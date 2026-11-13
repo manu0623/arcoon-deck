@@ -36,6 +36,12 @@ export function resolveSaveSetupOutcome(info: SaveSetupInfo): SaveSetupOutcome {
   if (info.recommended_action === "auto_confirm_default") {
     return { kind: "auto_confirm", slot: info.default_slot };
   }
+  // Nothing local, saves on the server: adopt the newest one (ADR-0047). The backend's
+  // confirm is a metadata flip — the sync that follows pulls the files — so the first
+  // launch is current instead of asking a question with nothing at stake.
+  if (info.recommended_action === "auto_adopt_server") {
+    return { kind: "auto_confirm", slot: info.auto_slot ?? info.default_slot };
+  }
   // Reached with nothing local AND nothing on the server — the one state the
   // backend routes to the wizard (`recommended_action` is `auto_confirm_default`
   // only when local saves exist) and the launch path settles itself. The

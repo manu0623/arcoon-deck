@@ -360,6 +360,10 @@ class SaveService:
         """Get info needed for the first-sync setup wizard."""
         return await self._slots.get_save_setup_info(rom_id)
 
+    async def auto_adopt_server_slot(self, rom_id: int) -> dict[str, Any]:
+        """Confirm the newest server slot when this machine holds no save (ADR-0047)."""
+        return await self._slots.auto_adopt_server_slot(rom_id)
+
     async def confirm_slot_choice(
         self,
         rom_id: int,

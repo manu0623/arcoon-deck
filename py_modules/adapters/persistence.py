@@ -113,7 +113,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "steamgriddb_api_key": "",
     "romm_allow_insecure_ssl": False,
     "log_level": "warn",
-    "save_sync_enabled": False,
+    # Save sync is on out of the box: the point of the app is that a game launches with
+    # the save the user last played elsewhere, and a toggle that defaults off makes every
+    # first launch a setup chore (ADR-0047).
+    "save_sync_enabled": True,
     "sync_before_launch": True,
     "sync_after_exit": True,
     "default_slot": "autosave",

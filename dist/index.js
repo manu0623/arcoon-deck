@@ -2552,6 +2552,9 @@ function resolveSaveSetupOutcome(info) {
     if (info.recommended_action === "auto_confirm_default") {
         return { kind: "auto_confirm", slot: info.default_slot };
     }
+    if (info.recommended_action === "auto_adopt_server") {
+        return { kind: "auto_confirm", slot: info.auto_slot ?? info.default_slot };
+    }
     if (info.server_slots.length === 0) {
         return { kind: "auto_confirm", slot: info.default_slot };
     }

@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from domain.iso_time import epoch_to_iso, parse_iso_to_epoch
 from domain.rom_save_sync_state import RomSaveSyncState
+from domain.save_adoption import newest_named_server_slot
 from domain.save_layout import SAVE_SYNC_CONTENT_DIR_REASON
 from domain.save_slot import save_in_slot
 from lib.errors import RommNotFoundError, classify_error
@@ -226,14 +227,23 @@ class SetupWizard:
         slot_confirmed = bool(game_state.slot_confirmed) if game_state else False
         active_slot = game_state.active_slot if (game_state and slot_confirmed) else None
 
-        # Pre-computed wizard recommendation: auto-confirm the default slot only
-        # when there are local saves and the server has no slots yet. Every other
-        # combination needs the wizard so the user can choose. The
-        # ``server_unreachable`` branch returns early above — reaching this point
+        # What the callers should do without asking (ADR-0047):
+        #
+        # - nothing local, saves on the server → adopt the newest one. There is no local
+        #   save to lose, so a question here only costs the "press Play and the game is
+        #   already up to date" experience.
+        # - local saves, nothing on the server → confirm the default slot.
+        # - both sides have saves → the wizard, because that divergence is the user's.
+        #
+        # The ``server_unreachable`` branch returns early above — reaching this point
         # means the server answered, so an empty ``server_slots`` is authoritative.
-        recommended_action = (
-            "auto_confirm_default" if (len(local_files) > 0 and len(server_slots) == 0) else "show_wizard"
-        )
+        auto_slot = newest_named_server_slot(server_slots)
+        if not local_files and auto_slot is not None:
+            recommended_action = "auto_adopt_server"
+        elif len(local_files) > 0 and len(server_slots) == 0:
+            recommended_action = "auto_confirm_default"
+        else:
+            recommended_action = "show_wizard"
 
         return {
             "has_local_saves": len(local_files) > 0,
@@ -243,6 +253,8 @@ class SetupWizard:
             "slot_confirmed": slot_confirmed,
             "active_slot": active_slot,
             "recommended_action": recommended_action,
+            # Which slot "auto_adopt_server" means. ``None`` on every other action.
+            "auto_slot": auto_slot if recommended_action == "auto_adopt_server" else None,
             "server_query_failed": False,
         }
 
@@ -250,6 +262,57 @@ class SetupWizard:
         with self._uow_factory() as uow:
             state = uow.rom_save_sync_states.get(rom_id)
         return state, self._device_registry.get_device_id()
+
+    async def auto_adopt_server_slot(self, rom_id: int) -> dict[str, Any]:
+        """Confirm the slot holding the newest server save for a fresh install.
+
+        The case this exists for: a game was just downloaded, this machine holds no save
+        for it, and the server does. Adoption is a metadata flip — no migration, no
+        download — so the sync that follows pulls the files, and the wizard never appears
+        for a decision with nothing at stake.
+
+        It refuses whenever a local save exists: that is exactly the divergence the wizard
+        is for. A failed server query refuses too, rather than treating an empty list as
+        authoritative — an unproven server view must not confirm a slot.
+        """
+        rom_id = int(rom_id)
+        local_files = await self._loop.run_in_executor(None, self._rom_info.find_save_files, rom_id)
+        if local_files:
+            return {"adopted": False, "reason": "local_saves_present", "slot": None}
+
+        game_state, device_id = await self._loop.run_in_executor(None, self._read_setup_inputs, rom_id)
+        if game_state is not None and game_state.slot_confirmed and game_state.active_slot:
+            return {"adopted": False, "reason": "already_confirmed", "slot": game_state.active_slot}
+
+        try:
+            server_saves: list[dict[str, Any]] = await self._loop.run_in_executor(
+                None,
+                lambda: self._retry.with_retry(lambda: self._romm_api.list_saves(rom_id, device_id=device_id)),
+            )
+        except Exception as e:
+            self._logger.warning(f"auto_adopt_server_slot({rom_id}): listing server saves failed: {e}")
+            return {"adopted": False, "reason": "server_unreachable", "slot": None}
+
+        slots: dict[str | None, list[dict[str, Any]]] = {}
+        for save in server_saves:
+            slots.setdefault(save.get("slot"), []).append(save)
+        summaries = [
+            {
+                "slot": slot,
+                "latest_updated_at": max(
+                    (s.get("updated_at", "") for s in saves),
+                    key=lambda u: parse_iso_to_epoch(u) or 0.0,
+                    default=None,
+                ),
+            }
+            for slot, saves in slots.items()
+        ]
+        slot = newest_named_server_slot(summaries)
+        if slot is None:
+            return {"adopted": False, "reason": "no_named_slot", "slot": None}
+
+        result = await self.confirm_slot_choice(rom_id, slot, migrate=False)
+        return {"adopted": bool(result.get("success")), "reason": None, "slot": slot}
 
     async def confirm_slot_choice(
         self,

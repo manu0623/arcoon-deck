@@ -696,6 +696,123 @@ class TestGetSaveSetupInfo:
         assert result["server_query_failed"] is False
 
 
+class TestAutoAdoptingTheServerSlot:
+    """A fresh install adopts the newest server save instead of asking (ADR-0047)."""
+
+    @pytest.mark.asyncio
+    async def test_no_local_saves_with_a_named_slot_recommends_adoption(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "dev-1")
+        _install_rom(svc, tmp_path)
+        fake.saves[1] = _server_save(save_id=1, slot="desktop", updated_at="2024-05-01T10:00:00Z")
+
+        result = await svc.get_save_setup_info(42)
+
+        assert result["has_local_saves"] is False
+        assert result["recommended_action"] == "auto_adopt_server"
+        assert result["auto_slot"] == "desktop"
+
+    @pytest.mark.asyncio
+    async def test_the_newest_named_slot_is_the_one_offered(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "dev-1")
+        _install_rom(svc, tmp_path)
+        fake.saves[1] = _server_save(save_id=1, slot="old", updated_at="2023-05-01T10:00:00Z")
+        fake.saves[2] = _server_save(save_id=2, slot="autosave", updated_at="2024-05-01T10:00:00Z")
+
+        result = await svc.get_save_setup_info(42)
+
+        assert result["recommended_action"] == "auto_adopt_server"
+        assert result["auto_slot"] == "autosave"
+
+    @pytest.mark.asyncio
+    async def test_local_saves_still_get_the_wizard(self, tmp_path):
+        """A machine that already has a save makes the divergence the user's decision."""
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "dev-1")
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path)
+        fake.saves[1] = _server_save(save_id=1, slot="desktop")
+
+        result = await svc.get_save_setup_info(42)
+
+        assert result["recommended_action"] == "show_wizard"
+        assert result["auto_slot"] is None
+
+    @pytest.mark.asyncio
+    async def test_adoption_confirms_the_state_and_moves_no_files(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "dev-1")
+        _install_rom(svc, tmp_path)
+        fake.saves[1] = _server_save(save_id=1, slot="desktop", updated_at="2024-05-01T10:00:00Z")
+
+        result = await svc.auto_adopt_server_slot(42)
+
+        assert result == {"adopted": True, "reason": None, "slot": "desktop"}
+        state = svc._config.uow_factory().rom_save_sync_states.get(42)
+        assert state.slot_confirmed is True
+        assert state.active_slot == "desktop"
+
+    @pytest.mark.asyncio
+    async def test_adoption_refuses_when_a_local_save_exists(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "dev-1")
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path)
+        fake.saves[1] = _server_save(save_id=1, slot="desktop")
+
+        result = await svc.auto_adopt_server_slot(42)
+
+        assert result["adopted"] is False
+        assert result["reason"] == "local_saves_present"
+
+    @pytest.mark.asyncio
+    async def test_adoption_refuses_a_legacy_only_server(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "dev-1")
+        _install_rom(svc, tmp_path)
+        fake.saves[1] = _server_save(save_id=1, slot=None)
+
+        result = await svc.auto_adopt_server_slot(42)
+
+        assert result["adopted"] is False
+        assert result["reason"] == "no_named_slot"
+
+    @pytest.mark.asyncio
+    async def test_adoption_refuses_an_unproven_server_view(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "dev-1")
+        _install_rom(svc, tmp_path)
+        fake.fail_on_next(RommApiError(500, "Server error"))
+
+        result = await svc.auto_adopt_server_slot(42)
+
+        assert result["adopted"] is False
+        assert result["reason"] == "server_unreachable"
+
+    @pytest.mark.asyncio
+    async def test_adoption_leaves_an_already_confirmed_slot_alone(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "dev-1")
+        _install_rom(svc, tmp_path)
+        await svc.confirm_slot_choice(42, "custom", migrate=False)
+        fake.saves[1] = _server_save(save_id=1, slot="desktop")
+
+        result = await svc.auto_adopt_server_slot(42)
+
+        assert result["adopted"] is False
+        assert result["reason"] == "already_confirmed"
+        assert result["slot"] == "custom"
+
+
 class TestConfirmSlotChoice:
     @pytest.mark.asyncio
     async def test_confirm_sets_state(self, tmp_path):

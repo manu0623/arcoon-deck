@@ -847,14 +847,15 @@ class TestRetryMRO:
 
 
 class TestSaveSyncFeatureFlag:
-    """Tests for the save_sync_enabled feature flag (off by default)."""
+    """Tests for the save_sync_enabled feature flag (on by default since ADR-0047)."""
 
     @pytest.mark.asyncio
-    async def test_default_disabled(self, plugin):
-        """save_sync_enabled defaults to False when absent from settings.json."""
-        # Reset to defaults — the toggle lives in settings.json now (#822).
+    async def test_default_enabled(self, plugin):
+        """save_sync_enabled reads as on when the key is absent from settings.json."""
+        # The shipped default lives in settings.json's own DEFAULTS (#822), and the point
+        # of the app is that a launch is already current (ADR-0047).
         plugin._save_settings.pop("save_sync_enabled", None)
-        assert plugin._save_sync_service.is_save_sync_enabled() is False
+        assert plugin._save_sync_service.is_save_sync_enabled() is True
 
     @pytest.mark.asyncio
     async def test_ensure_device_disabled(self, plugin):

@@ -206,7 +206,17 @@ export interface SaveSetupInfo {
   // real server saves on first sync). They differ only in cause: "not_found"
   // is the server ANSWERING that it has no such ROM or device id, so it must
   // not report the server offline (#1570). See backend `get_save_setup_info`.
-  recommended_action: "auto_confirm_default" | "show_wizard" | "server_unreachable" | "not_found";
+  // "auto_adopt_server" (ADR-0047): this machine holds no save and the server does,
+  // so confirm ``auto_slot`` instead of asking. A caller that ignores it still launches
+  // on the local (empty) state, so it stays a recommendation.
+  recommended_action:
+    | "auto_confirm_default"
+    | "auto_adopt_server"
+    | "show_wizard"
+    | "server_unreachable"
+    | "not_found";
+  // Which slot "auto_adopt_server" means; null on every other action.
+  auto_slot?: string | null;
   // True whenever that query failed, either way — for call sites routing on a
   // boolean rather than the enum.
   server_query_failed?: boolean;

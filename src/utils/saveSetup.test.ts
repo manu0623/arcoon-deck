@@ -21,6 +21,11 @@ import {
 } from "./saveSetup";
 import type { SaveSetupInfo } from "../types";
 
+/** One server slot row as `get_save_setup_info` reports it. */
+function slotInfo(slot: string, latest = "2024-01-01T00:00:00Z"): SaveSetupInfo["server_slots"][number] {
+  return { slot, saves: [], count: 0, latest_updated_at: latest };
+}
+
 function makeInfo(overrides: Partial<SaveSetupInfo> = {}): SaveSetupInfo {
   return {
     has_local_saves: false,
@@ -424,7 +429,29 @@ describe("legacy-migration copy (#1498)", () => {
       );
     });
 
-    it("pluralizes the count and the legacy-stays clause when more than one save migrated", () => {
+    it("adopts the newest server slot when this machine holds no save", () => {
+    // ADR-0047: nothing local, saves on the server — no question to ask.
+    const info = makeInfo({
+      has_local_saves: false,
+      server_slots: [slotInfo("desktop"), slotInfo("autosave")],
+      recommended_action: "auto_adopt_server",
+      auto_slot: "autosave",
+    });
+
+    expect(resolveSaveSetupOutcome(info)).toEqual({ kind: "auto_confirm", slot: "autosave" });
+  });
+
+  it("falls back to the default slot when the payload carries no auto_slot", () => {
+    const info = makeInfo({
+      has_local_saves: false,
+      server_slots: [slotInfo("desktop")],
+      recommended_action: "auto_adopt_server",
+    });
+
+    expect(resolveSaveSetupOutcome(info)).toEqual({ kind: "auto_confirm", slot: info.default_slot });
+  });
+
+  it("pluralizes the count and the legacy-stays clause when more than one save migrated", () => {
       expect(wizardMigrationOutcomeToastBody(2, 0, "default")).toBe(
         "Migrated 2 saves into ‘default’. The legacy saves stay in the read-only legacy bucket.",
       );

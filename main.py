@@ -116,6 +116,12 @@ class Plugin:
             lease_token = await acquire_prune_conflict_lease(self, event)
             payload["prune_lease_token"] = lease_token
             args = (payload, *args[1:])
+        if event == "download_complete" and payload is not None and payload.get("rom_id") is not None:
+            # A game that just landed on the device should already point at the save the
+            # user last played elsewhere (ADR-0047). Scheduled rather than awaited: the
+            # frontend is waiting on this event, and the launch path runs the same adoption
+            # again before Play, so a slow server here cannot delay either.
+            self._schedule_save_adoption(int(payload["rom_id"]))
         try:
             await decky.emit(event, *args)
         except BaseException:
@@ -913,6 +919,10 @@ class Plugin:
 
     @migration_blocked
     @prune_active_blocked
+    async def auto_adopt_server_slot(self, rom_id):
+        """Adopt the newest server save slot when no local save exists (ADR-0047)."""
+        return await self._save_sync_service.auto_adopt_server_slot(rom_id)
+
     async def confirm_slot_choice(
         self, rom_id, chosen_slot, migrate=False, migrate_from_slot=None, use_server_on_conflict=False
     ):
@@ -973,6 +983,18 @@ class Plugin:
         task = self._schedule_playtime_flush()
         await retain_prune_conflict(self, task, "record_session_start")
         return result
+
+    def _schedule_save_adoption(self, rom_id: int) -> None:
+        """Run the fresh-install save adoption in the background, logging failures."""
+
+        async def run() -> None:
+            try:
+                result = await self._save_sync_service.auto_adopt_server_slot(rom_id)
+                self._debug_logger(f"[save-adoption] rom {rom_id}: {result}")
+            except Exception as e:  # a save fetch must never break a download event
+                self._debug_logger(f"[save-adoption] rom {rom_id} failed: {e}")
+
+        self.loop.create_task(run())
 
     def _schedule_playtime_flush(self):
         """Kick off the offline play-session flush as a tracked background task.
