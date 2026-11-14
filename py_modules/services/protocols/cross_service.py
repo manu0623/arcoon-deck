@@ -256,6 +256,16 @@ class ActiveCoreReader(Protocol):
 
     def active_emulator_for_rom(self, rom_id: int) -> EmulatorInvocation | None: ...
 
+    def standalone_emulator_identity(self, rom_id: int) -> str | None:
+        """The emulator a standalone launch of ``rom_id`` names, or ``None``.
+
+        The upload tag's source, and a projection of ``active_emulator_for_rom``
+        rather than a second resolution: a libretro launch is RetroArch by
+        definition, so only a standalone invocation has an emulator of its own,
+        and ``None`` there leaves the tag to the core alone (ADR-0063).
+        """
+        ...
+
     def managed_entry(self, rom_id: int) -> ManagedPlatform | None: ...
 
     def managed_save_entry(self, rom_id: int) -> ManagedPlatform | None: ...

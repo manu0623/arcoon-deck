@@ -65,6 +65,20 @@ class FakeActiveCoreResolver:
 
     def active_emulator_for_rom(self, rom_id: int) -> EmulatorInvocation | None:
         self.emulator_calls.append(rom_id)
+        return self._emulator(rom_id)
+
+    def standalone_emulator_identity(self, rom_id: int) -> str | None:
+        """The upload tag's source, projected without touching the launch call log.
+
+        A test that asserts ``emulator_calls`` is pinning the LAUNCH seam; asking
+        for a tag must not look like a launch resolution.
+        """
+        invocation = self._emulator(rom_id)
+        if invocation is None or invocation.kind != "standalone":
+            return None
+        return invocation.emulator or invocation.label
+
+    def _emulator(self, rom_id: int) -> EmulatorInvocation | None:
         if rom_id in self.per_rom_emulator:
             return self.per_rom_emulator[rom_id]
         if self.default_emulator is not None:
