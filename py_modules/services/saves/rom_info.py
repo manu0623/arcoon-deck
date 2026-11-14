@@ -665,6 +665,15 @@ class RomInfoService:
         keeps an older shape — a ROM-named ``.gci``, a misplaced ``.zip`` — out of a card
         folder.
         """
+        if save_layout_for(info.get("system") or "").family is SaveFamily.PS2_CARD:
+            # A PS2 save RomM holds as a card image belongs to the card folder whether or
+            # not this game has saved here yet, and the matrix is what opens it: the import
+            # writes the game's folder and records it as this device's copy of that save, so
+            # the sync sees agreement rather than an unexplained local change (ADR-0072).
+            # ``.ps2`` is the one extension a PS2 card keeps (``ps2_card_import.CARD_EXTENSION``),
+            # written out here rather than imported so this module has no cycle through the
+            # services package.
+            return lambda target: target.lower().endswith(".ps2")
         if answer.synced_names or self._content_identity is None:
             return None
         if not restores_by_extraction(info["system"]):

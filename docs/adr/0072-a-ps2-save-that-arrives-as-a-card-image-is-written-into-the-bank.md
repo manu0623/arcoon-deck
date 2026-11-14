@@ -56,6 +56,17 @@ The folder is chosen by name (`read_file_card` → `select_folder`): a card hold
 one folder is that game's save; a card holding several and none of them the expected name
 is ambiguous and refused, since guessing writes one game's progress over another's.
 
+### The sync decides, not a hook before it
+
+The first version applied the newest card in the plugin's own pre-launch hook, before the
+sync looked at the bank. Measured on the reference Deck: the imported bytes then looked
+like an unexplained local change while the server also had a newer save, so the sync raised
+a conflict between a save and itself — reporting the server's own save as "local" — and
+"keep local" was refused as stale on every retry. So the row is admitted as a target by
+`RomInfoService.server_target_filter` and the matrix downloads it like any other, which
+records the applied bytes as this device's copy of that save. Which save wins stays the
+sync's decision, and the import cannot disagree with the bookkeeping that follows it.
+
 ### Which folder, and which card
 
 A PS2 answer's directory is the **card folder** (`…/saves/ps2/Mcd001.ps2`), and every member
