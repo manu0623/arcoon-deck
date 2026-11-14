@@ -437,7 +437,18 @@ class MatrixExecutor:
             return
         plan = place_archive_members(members, target_dir)
         placements = dict(plan.placements) if plan is not None else None
-        if plan is not None and plan.refused:
+        if plan is not None and not plan.placements:
+            # The archive is packed above this folder and holds nothing that belongs in it — a
+            # save RomM kept from a folder that had only metadata in it, measured as rom 6938's
+            # newest save in its active slot. Writing it flat put Dolphin's title metadata in the
+            # save folder, so nothing is written at all.
+            self._logger.info(
+                "Restore skipped %s: none of its %s members belongs in %s",
+                server_save.get("file_name") or server_save.get("id"),
+                len(members),
+                target_dir,
+            )
+        elif plan is not None and plan.refused:
             self._logger.info(
                 "Restore kept %s of %s members in %s: %s name paths outside it",
                 len(plan.placements),

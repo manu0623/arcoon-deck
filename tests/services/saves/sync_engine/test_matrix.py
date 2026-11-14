@@ -2888,3 +2888,36 @@ class TestRootedArchiveRestore:
         # The overwritten save is recoverable, as every restore quarantines first.
         backups = [p.name for p in (save_dir / ".romm-backup").iterdir()]
         assert any(name.startswith("wiimj2d_") for name in backups)
+
+    def test_an_archive_holding_nothing_for_the_save_writes_nothing(self, tmp_path) -> None:
+        """Measured on rom 6938: the active slot's newest save holds only title metadata.
+
+        Reading that flat put ``content/title.tmd`` inside Dolphin's save folder. An archive
+        packed above the destination with nothing that fits is refused whole.
+        """
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path, system="wii", file_name="New Super Mario Bros. Wii.wbfs")
+        save_dir = tmp_path / "Wii" / "title" / "00010000" / "534d4e45" / "data"
+        save_dir.mkdir(parents=True)
+        (save_dir / "wiimj2d.sav").write_bytes(b"local save")
+        staging = tmp_path / ".arcoon-archive"
+        staging.mkdir()
+        archive_name = "autosave.zip"
+        self._stage(fake, self._SAVE_ID, {"534d4e45/content/title.tmd": b"title metadata"})
+
+        state = RomSaveSyncState()
+        svc._sync_engine._matrix.do_download_save(
+            _server_save(save_id=self._SAVE_ID, filename=archive_name),
+            str(staging),
+            archive_name,
+            state,
+            "device-1",
+            "wii",
+            None,
+            restore_dir=str(save_dir),
+        )
+
+        assert (save_dir / "wiimj2d.sav").read_bytes() == b"local save"
+        assert sorted(p.name for p in save_dir.iterdir()) == ["wiimj2d.sav"]
+        assert set(state.files) == set()

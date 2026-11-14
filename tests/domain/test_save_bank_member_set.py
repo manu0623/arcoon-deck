@@ -143,9 +143,16 @@ class TestPlaceArchiveMembers:
             ("id0/id1/title/00040000/00033500/data/save.bin", "title/00040000/00033500/data/save.bin"),
         )
 
-    def test_nothing_placed_means_no_alignment(self) -> None:
-        """An archive holding only files outside the save is read flat, never emptied."""
-        assert place_archive_members(("534d4e45/content/title.tmd",), self._WII_SAVE) is None
+    def test_an_archive_with_nothing_for_the_save_refuses_all_of_it(self) -> None:
+        """Measured: rom 6938's active-slot save holds only Dolphin's title metadata.
+
+        Reading it flat wrote `content/title.tmd` into the save folder, so an archive packed above
+        the destination with nothing that fits it is refused whole rather than read as flat.
+        """
+        plan = place_archive_members(("534d4e45/content/title.tmd",), self._WII_SAVE)
+        assert plan is not None
+        assert plan.placements == ()
+        assert plan.refused == ("534d4e45/content/title.tmd",)
 
     def test_no_members_is_not_an_alignment(self) -> None:
         assert place_archive_members((), self._WII_SAVE) is None

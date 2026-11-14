@@ -74,9 +74,14 @@ inside it, and refuses the rest.
    against the destination's components, deepest occurrence first, and the components below it must
    be the start of every member's tail — so `534d4e45/data/wiimj2d.sav` against
    `…/534d4e45/data` places `wiimj2d.sav`, and `534d4e45/content/title.tmd` is refused.
-2. A flat archive (the shape this plugin packs), a mixed one, an archive headed by a name that is not
-   on the destination's path (PSP's `ULUS10064DATA00/` sits *inside* `SAVEDATA`, not above it), or one
-   from which nothing would be placed is read exactly as before: members into the destination, whole.
+2. A flat archive (the shape this plugin packs), a mixed one, or an archive headed by a name that is
+   not on the destination's path (PSP's `ULUS10064DATA00/` sits *inside* `SAVEDATA`, not above it) is
+   read exactly as before: members into the destination, whole.
+   An archive that IS packed above the destination but holds nothing that fits it comes back with no
+   placements and every member refused. It is never read flat: measured on the reference Deck while
+   verifying the deployed build, rom 6938's newest save in its active `autosave` slot holds only
+   `534d4e45/content/title.tmd`, and reading that flat wrote Dolphin's title metadata into the save
+   folder.
 3. `SaveFileStore.extract_archive(..., placements=…)` writes only the placed members, under their
    placed names, and skips everything else. Those names are still resolved against the destination
    through the existing realpath/symlink guard, so a placement can never write outside it. The names
@@ -96,6 +101,9 @@ inside it, and refuses the rest.
 - Archives packed two or more levels above the destination, or with two different headings, are still
   read flat — one extra heading is what was measured, and a guess beyond that would move files on the
   server's behalf without proof.
+- A save RomM holds from a folder that had only metadata in it restores nothing and says so in the log
+  (`Restore skipped …, none of its members belongs in …`). It is not this plugin's save and not this
+  plugin's to invent; the slot can be corrected in RomM.
 - A save fetched in a differently-packed shape uploads one duplicate version the next sync (RomM's
   content hash is over member names), then reports `Skip` from then on. Measured on Switch: upload,
   then skip.

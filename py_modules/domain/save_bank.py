@@ -505,9 +505,15 @@ def place_archive_members(members: Sequence[str], destination: str) -> ArchivePl
     outside *destination* is not part of this save — Wii's ``content/title.tmd`` is the
     emulator's, not the game's — and is refused rather than written.
 
-    ``None`` when the archive is flat (the shape this plugin packs), mixed, headed by a name that
-    is not on the destination's path (PSP's ``<DISC_ID>DATA00`` beside it), or when nothing would
-    be placed at all: a caller only changes an archive it can align, never on a guess.
+    ``None`` when the archive is flat (the shape this plugin packs), mixed, or headed by a name
+    that is not on the destination's path (PSP's ``<DISC_ID>DATA00`` sits *inside* ``SAVEDATA``,
+    not above it): those are read as they are.
+
+    An archive that IS headed by the destination's own ancestry but holds nothing for it comes
+    back with no placements and every member refused — never ``None``. Measured on the reference
+    Deck: rom 6938's newest save in its active slot holds only ``534d4e45/content/title.tmd``, and
+    reading that flat wrote Dolphin's title metadata into the save folder. An archive packed above
+    the destination is the destination's shape; if none of it fits, none of it is the save.
     """
     parts = [part for part in destination.replace("\\", "/").split("/") if part not in ("", ".")]
     if not parts or not members:
@@ -540,7 +546,7 @@ def place_archive_members(members: Sequence[str], destination: str) -> ArchivePl
                 return None
         placements.append((member, "/".join(tail_parts)))
     if not placements:
-        return None
+        return ArchivePlacement(placements=(), refused=tuple(members))
     return ArchivePlacement(placements=tuple(placements), refused=tuple(refused))
 
 
