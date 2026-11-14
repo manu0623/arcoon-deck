@@ -2774,12 +2774,14 @@ class TestAnEmptyMemberSetAndTheServersOwnEntry:
 
 
 class TestRootedArchiveRestore:
-    """ADR-0066: an archive that packed the title folder itself restores INTO it.
+    """ADR-0066: an archive packed ABOVE the destination restores the subtree the save owns.
 
-    Measured on the reference Deck: the other console's save arrived as members named
-    ``01006BB00C6F0000/savedata1.bin``; the restore wrote them under the title folder as
-    they were, so Eden read an empty ``<title>/`` and started a new game while the save sat
-    in ``<title>/01006BB00C6F0000/``. The members belong in the folder their heading names.
+    Measured on the reference Deck: the other console's Switch save arrived as members named
+    ``01006BB00C6F0000/savedata1.bin`` and the restore wrote them under the title folder as they
+    were, so Eden read an empty ``<title>/`` and started a new game. Wii has the same shape one
+    level higher — RomM holds rom 6938's save with ``534d4e45/data/wiimj2d.sav`` beside
+    ``534d4e45/content/title.tmd`` while Dolphin reads ``<title>/data/`` — and the ``content/``
+    half is the emulator's title metadata, never the save's to write.
     """
 
     _TITLE = "01006BB00C6F0000"
@@ -2843,3 +2845,46 @@ class TestRootedArchiveRestore:
 
         assert (title_dir / "savedata1.bin").read_bytes() == b"server save"
         assert set(state.files) == {"savedata1.bin", "screenshot0.bin"}
+
+    def test_a_title_folder_archive_writes_the_save_and_leaves_content_alone(self, tmp_path) -> None:
+        """Wii rom 6938's shape: ``<title>/data/<file>`` lands in ``<title>/data/``."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path, system="wii", file_name="New Super Mario Bros. Wii.wbfs")
+        save_dir = tmp_path / "Wii" / "title" / "00010000" / "534d4e45" / "data"
+        save_dir.mkdir(parents=True)
+        (save_dir / "wiimj2d.sav").write_bytes(b"old local save")
+        staging = tmp_path / ".arcoon-archive"
+        staging.mkdir()
+        archive_name = "New Super Mario Bros. Wii.zip"
+        self._stage(
+            fake,
+            self._SAVE_ID,
+            {
+                "534d4e45/data/wiimj2d.sav": b"server save",
+                "534d4e45/data/banner.bin": b"banner",
+                "534d4e45/content/title.tmd": b"title metadata",
+            },
+        )
+
+        state = RomSaveSyncState()
+        svc._sync_engine._matrix.do_download_save(
+            _server_save(save_id=self._SAVE_ID, filename=archive_name),
+            str(staging),
+            archive_name,
+            state,
+            "device-1",
+            "wii",
+            None,
+            restore_dir=str(save_dir),
+        )
+
+        assert (save_dir / "wiimj2d.sav").read_bytes() == b"server save"
+        assert (save_dir / "banner.bin").read_bytes() == b"banner"
+        assert set(state.files) == {"wiimj2d.sav", "banner.bin"}
+        # Neither the nested duplicate nor Dolphin's own title metadata is written.
+        assert not (save_dir / "534d4e45").exists()
+        assert not (save_dir.parent / "content").exists()
+        # The overwritten save is recoverable, as every restore quarantines first.
+        backups = [p.name for p in (save_dir / ".romm-backup").iterdir()]
+        assert any(name.startswith("wiimj2d_") for name in backups)

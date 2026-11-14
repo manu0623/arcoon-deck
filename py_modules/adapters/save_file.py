@@ -25,7 +25,7 @@ from domain.save_hash import combine_zip_entry_hashes
 
 if TYPE_CHECKING:
     import logging
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Mapping
 
     from models.prune import MutationOutcome, SourceClaim
 
@@ -149,7 +149,9 @@ class SaveFileAdapter:
                 archive.write(source, arcname=name)
         os.replace(tmp_path, archive_path)
 
-    def extract_archive(self, archive_path: str, dest_dir: str, *, strip_root: str | None = None) -> tuple[str, ...]:
+    def extract_archive(
+        self, archive_path: str, dest_dir: str, *, placements: Mapping[str, str] | None = None
+    ) -> tuple[str, ...]:
         """Extract *archive_path*'s regular files into *dest_dir*; return their names.
 
         The archive arrives from a server, so its member names are untrusted
@@ -158,26 +160,22 @@ class SaveFileAdapter:
         whose target is a symlink — writing through a link would put save bytes
         anywhere on the device. Directories are created as needed.
 
-        *strip_root* names a heading every member must sit under, and the one to drop before
-        writing: an archive that packed *dest_dir* itself names it at its root (ADR-0066),
-        and writing those members as they are would recreate the folder inside itself. A
-        member outside the heading is refused, never silently dropped, so what the guard
-        below sees is the destination the bytes really go to.
+        *placements* maps each member this save owns to the name it takes under *dest_dir*,
+        for an archive that was packed above the destination or carries more than the save
+        (ADR-0066). A member with no placement is not written at all — an over-packed archive
+        carries the emulator's own files, and those are not this save's to replace.
         """
         real_dest = os.path.realpath(dest_dir)
-        head = (strip_root or "").strip("/\\")
-        heading = f"{head}/" if head else None
         written: list[str] = []
         with zipfile.ZipFile(archive_path, "r") as archive:
             for info in archive.infolist():
                 if info.is_dir():
                     continue
                 name = info.filename
-                if heading is not None:
-                    normalized = name.replace("\\", "/")
-                    if not normalized.startswith(heading):
-                        raise ValueError(f"ZIP member {name!r} is not under {strip_root!r}")
-                    name = normalized[len(heading) :]
+                if placements is not None:
+                    if name not in placements:
+                        continue
+                    name = placements[name]
                 target = os.path.realpath(os.path.join(real_dest, name))
                 if target != real_dest and not target.startswith(real_dest + os.sep):
                     raise ValueError(f"ZIP member {info.filename!r} would extract outside {dest_dir!r}")

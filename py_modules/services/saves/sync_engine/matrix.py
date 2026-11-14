@@ -24,7 +24,7 @@ from domain.emulator_tag import emulator_tag
 from domain.iso_time import parse_iso_to_epoch
 from domain.rom_save_sync_state import FileSyncState, RomSaveSyncState
 from domain.save_backup import BACKUP_DIR_NAME, backup_name, select_backups_to_prune
-from domain.save_bank import archive_members_under, restores_by_extraction
+from domain.save_bank import place_archive_members, restores_by_extraction
 from domain.save_slot import filter_saves_to_slot
 from domain.sync_action import Conflict, Download, Skip, SyncAction, Upload
 from lib.errors import DeviceNotRegisteredError, RommApiError, RommConflictError, classify_error
@@ -414,12 +414,14 @@ class MatrixExecutor:
         recorded per restored file name, so the next sync compares the bytes
         the emulator will actually write against this download.
 
-        An archive can also arrive *rooted at the folder itself* — a client that packed the
-        folder rather than its contents names every member ``<folder>/<file>``, and the
-        folder those belong in is the one that heading names. Extracting them as they are
-        recreated that folder inside itself, and the emulator read an empty folder and
-        started a new game while the save sat one level down (ADR-0066). The heading is
-        dropped before the bytes are written, so nothing is written outside *target_dir*.
+        An archive can also arrive packed ABOVE *target_dir* — a client that packed the folder
+        rather than its contents names every member ``<folder>/<file>``, and one that packed
+        the folder's parent (Wii's title folder, holding both ``data/`` and the emulator's
+        ``content/``) names them ``<title>/data/<file>``. Writing those as they are nests the
+        save, and the emulator reads an empty folder and starts a new game while the bytes sit
+        one level down (ADR-0066). So the members are aligned against *target_dir* and only the
+        ones that land inside it are written; a member outside it — ``content/title.tmd`` is
+        Dolphin's installed title metadata, not the game's save — is refused, never written.
         """
         # The folder the members belong in: the answer's own directory, or — for a unit
         # staged as one archive outside it — the folder the archive was packed from.
@@ -433,13 +435,23 @@ class MatrixExecutor:
             # whole restore — and refusing here would throw away a save RomM holds.
             self._restore_bare_member(archive_path, target_dir, server_save, save_state, system, default_slot)
             return
-        strip_root = os.path.basename(target_dir.rstrip("/\\")) or None
-        if strip_root is not None and archive_members_under(members, strip_root) is None:
-            strip_root = None
+        plan = place_archive_members(members, target_dir)
+        placements = dict(plan.placements) if plan is not None else None
+        if plan is not None and plan.refused:
+            self._logger.info(
+                "Restore kept %s of %s members in %s: %s name paths outside it",
+                len(plan.placements),
+                len(members),
+                target_dir,
+                len(plan.refused),
+            )
         try:
             for member in members:
-                self.quarantine_local_file(target_dir, os.path.basename(member))
-            restored = self._save_file_store.extract_archive(archive_path, target_dir, strip_root=strip_root)
+                name = placements.get(member) if placements is not None else member
+                if name is None:
+                    continue
+                self.quarantine_local_file(target_dir, os.path.basename(name))
+            restored = self._save_file_store.extract_archive(archive_path, target_dir, placements=placements)
         finally:
             self._save_file_store.remove_file(archive_path)
         if not restored:

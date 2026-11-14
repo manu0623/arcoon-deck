@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from domain.save_bank import archive_members_under, restores_by_extraction
+from domain.save_bank import place_archive_members, restores_by_extraction
 
 
 class TestWhichPlatformsRestoreByExtraction:
@@ -81,39 +81,71 @@ class TestWhichPlatformsRestoreByExtraction:
         assert restores_by_extraction("some-new-core") is False
 
 
-class TestArchiveMembersUnder:
-    """An archive can arrive rooted at the folder it belongs in (ADR-0066).
+class TestPlaceArchiveMembers:
+    """An archive can arrive packed above the folder the save belongs in (ADR-0066).
 
     Measured on the reference Deck: a Switch save uploaded elsewhere carried members named
     ``01006BB00C6F0000/savedata1.bin``, the restore extracted them into the title folder as
     they were, and Eden read ``<title>/`` — empty — while the save sat at
-    ``<title>/01006BB00C6F0000/savedata1.bin``. The game started a new one.
+    ``<title>/01006BB00C6F0000/savedata1.bin``. The game started a new one. Wii has the same
+    shape one level higher: RomM holds rom 6938's save with members ``534d4e45/data/wiimj2d.sav``
+    and ``534d4e45/content/title.tmd``, and the folder Dolphin reads is ``<title>/data``.
     """
 
+    _SWITCH_TITLE = "/nand/user/save/0000000000000000/93543B1D30E2AEB87D0F28AE30D83730/01006BB00C6F0000"
+    _WII_SAVE = "/Wii/title/00010000/534d4e45/data"
+
     def test_members_named_after_the_folder_are_read_relative_to_it(self) -> None:
-        members = ("01006BB00C6F0000/savedata1.bin", "01006BB00C6F0000/screenshot0.bin")
-        assert archive_members_under(members, "01006BB00C6F0000") == (
-            "savedata1.bin",
-            "screenshot0.bin",
+        plan = place_archive_members(
+            ("01006BB00C6F0000/savedata1.bin", "01006BB00C6F0000/screenshot0.bin"),
+            self._SWITCH_TITLE,
+        )
+        assert plan is not None
+        assert plan.placements == (
+            ("01006BB00C6F0000/savedata1.bin", "savedata1.bin"),
+            ("01006BB00C6F0000/screenshot0.bin", "screenshot0.bin"),
+        )
+        assert plan.refused == ()
+
+    def test_a_title_folder_archive_places_only_the_saves_own_subtree(self) -> None:
+        """The heading names the destination's parent, and ``content/`` is not the save."""
+        plan = place_archive_members(
+            ("534d4e45/data/wiimj2d.sav", "534d4e45/content/title.tmd"),
+            self._WII_SAVE,
+        )
+        assert plan is not None
+        assert plan.placements == (("534d4e45/data/wiimj2d.sav", "wiimj2d.sav"),)
+        assert plan.refused == ("534d4e45/content/title.tmd",)
+
+    def test_a_flat_archive_is_left_alone(self) -> None:
+        """The shape this plugin packs: the members ARE the folder's own, so nothing moves."""
+        assert place_archive_members(("wiimj2d.sav", "banner.bin"), self._WII_SAVE) is None
+
+    def test_a_heading_that_is_not_on_the_path_is_left_alone(self) -> None:
+        """A PSP save folder sits INSIDE the destination, so nothing is aligned away."""
+        assert place_archive_members(("ULUS10064DATA00/data.bin",), "/PSP/SAVEDATA") is None
+
+    def test_mixed_headings_are_left_alone(self) -> None:
+        """Two headings are not one archive packed above the destination — no alignment."""
+        assert place_archive_members(("534d4e45/data/a.sav", "other/data/b.sav"), self._WII_SAVE) is None
+
+    def test_a_sibling_whose_name_only_starts_the_same_is_not_the_heading(self) -> None:
+        assert place_archive_members(("534d4e451/data/a.sav",), self._WII_SAVE) is None
+
+    def test_a_lower_level_below_the_heading_is_kept(self) -> None:
+        """A 3DS archive names the ids above the title, and the tree under it survives."""
+        plan = place_archive_members(
+            ("id0/id1/title/00040000/00033500/data/save.bin",),
+            "/3ds/id0/id1",
+        )
+        assert plan is not None
+        assert plan.placements == (
+            ("id0/id1/title/00040000/00033500/data/save.bin", "title/00040000/00033500/data/save.bin"),
         )
 
-    def test_a_flat_archive_is_not_rooted_at_the_folder(self) -> None:
-        """The shape this plugin packs: the members ARE the folder's own, so nothing moves."""
-        assert archive_members_under(("savedata1.bin", "screenshot0.bin"), "01006BB00C6F0000") is None
+    def test_nothing_placed_means_no_alignment(self) -> None:
+        """An archive holding only files outside the save is read flat, never emptied."""
+        assert place_archive_members(("534d4e45/content/title.tmd",), self._WII_SAVE) is None
 
-    def test_one_member_outside_the_heading_keeps_the_flat_reading(self) -> None:
-        """A mixed archive is not provably rooted there, so no caller may move its destination."""
-        members = ("01006BB00C6F0000/savedata1.bin", "screenshot0.bin")
-        assert archive_members_under(members, "01006BB00C6F0000") is None
-
-    def test_a_longer_name_with_the_heading_as_its_prefix_is_not_that_heading(self) -> None:
-        members = ("01006BB00C6F00001/savedata1.bin",)
-        assert archive_members_under(members, "01006BB00C6F0000") is None
-
-    def test_a_nested_member_keeps_its_own_tree(self) -> None:
-        """A PSP save folder inside the heading survives with its folder intact."""
-        members = ("01006BB00C6F0000/DATA00/data.bin",)
-        assert archive_members_under(members, "01006BB00C6F0000") == ("DATA00/data.bin",)
-
-    def test_no_members_is_not_a_rooted_archive(self) -> None:
-        assert archive_members_under((), "01006BB00C6F0000") is None
+    def test_no_members_is_not_an_alignment(self) -> None:
+        assert place_archive_members((), self._WII_SAVE) is None

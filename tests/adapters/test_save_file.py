@@ -526,40 +526,43 @@ class TestCreateArchive:
         assert not archive.exists()
 
 
-class TestExtractArchiveStripRoot:
-    """ADR-0066: an archive packed from the folder itself restores into the folder."""
+class TestExtractArchivePlacements:
+    """ADR-0066: an archive packed above the destination lands where the save belongs."""
 
-    @staticmethod
-    def _rooted_archive(path) -> None:
-        """Write the shape another client uploads: members named after the folder."""
-        with zipfile.ZipFile(path, "w") as archive:
-            archive.writestr("01006BB00C6F0000/savedata1.bin", b"server save")
-            archive.writestr("01006BB00C6F0000/screenshot0.bin", b"shot")
-
-    def test_the_heading_is_dropped_so_the_folder_is_not_recreated(self, save_files, tmp_path):
-        archive = tmp_path / "save.zip"
-        self._rooted_archive(archive)
-        target = tmp_path / "01006BB00C6F0000"
-        target.mkdir()
-
-        written = save_files.extract_archive(str(archive), str(target), strip_root="01006BB00C6F0000")
-
-        assert sorted(written) == ["savedata1.bin", "screenshot0.bin"]
-        assert (target / "savedata1.bin").read_bytes() == b"server save"
-        assert not (target / "01006BB00C6F0000").exists()
-
-    def test_a_member_outside_the_heading_is_refused(self, save_files, tmp_path):
-        """Stripping must never become a way to write somewhere the heading does not name."""
+    def test_only_placed_members_are_written_under_their_placed_names(self, save_files, tmp_path):
+        """Wii's title-folder archive: the ``data/`` files go in, ``content/`` does not."""
         archive = tmp_path / "save.zip"
         with zipfile.ZipFile(archive, "w") as zf:
-            zf.writestr("01006BB00C6F0000/savedata1.bin", b"server save")
-            zf.writestr("other/savedata0.bin", b"elsewhere")
+            zf.writestr("534d4e45/data/wiimj2d.sav", b"server save")
+            zf.writestr("534d4e45/content/title.tmd", b"metadata")
+        target = tmp_path / "534d4e45" / "data"
+        target.mkdir(parents=True)
 
-        with pytest.raises(ValueError, match="not under"):
-            save_files.extract_archive(str(archive), str(tmp_path), strip_root="01006BB00C6F0000")
+        written = save_files.extract_archive(
+            str(archive),
+            str(target),
+            placements={"534d4e45/data/wiimj2d.sav": "wiimj2d.sav"},
+        )
+
+        assert written == ("wiimj2d.sav",)
+        assert (target / "wiimj2d.sav").read_bytes() == b"server save"
+        # The emulator's own title metadata is not this save's to replace.
+        assert not (target.parent / "content").exists()
+        assert not (target / "534d4e45").exists()
+
+    def test_a_placement_that_climbs_out_is_refused(self, save_files, tmp_path):
+        """Placements are names under the destination, never a way out of it."""
+        archive = tmp_path / "save.zip"
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("t/data/save.bin", b"server save")
+        target = tmp_path / "data"
+        target.mkdir()
+
+        with pytest.raises(ValueError, match="outside"):
+            save_files.extract_archive(str(archive), str(target), placements={"t/data/save.bin": "../escaped.bin"})
 
     def test_a_flat_archive_is_untouched(self, save_files, tmp_path):
-        """The shape this plugin packs names the folder's own files and needs no strip."""
+        """The shape this plugin packs needs no placement at all."""
         archive = tmp_path / "save.zip"
         with zipfile.ZipFile(archive, "w") as zf:
             zf.writestr("savedata1.bin", b"server save")

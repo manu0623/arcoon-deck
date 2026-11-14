@@ -137,15 +137,23 @@ quarantining each file it is about to overwrite first, and tracking each restore
 asked of the bank (`restores_by_extraction`), not of a file extension: only a family whose members live flat in
 one directory qualifies, because a nested family would need its tree rebuilt rather than its names restored.
 
-A member set can arrive **rooted at the folder itself**: a client that packs the folder rather than its
-contents names every member `<folder>/<file>`, and those members are relative to the folder's parent.
-Extracting them into the folder recreated it inside itself — measured on the reference Deck, a Switch save
-uploaded by another device restored to `<title>/01006BB00C6F0000/savedata1.bin`, and Eden read `<title>/`,
-found it empty and started a new game while the save sat one level down. So the restore asks the bank
-(`archive_members_under`) whether every member sits under exactly the destination folder's own name and,
-only then, drops that heading before writing: `extract_archive(strip_root=…)` refuses a member outside the
-heading and still writes nothing outside the destination. A flat archive — the shape this plugin packs — a
-mixed one, or a sibling whose name merely starts the same way is read exactly as before (ADR-0066).
+A member set can arrive **packed above the folder it belongs in**: a client that packs the folder rather
+than its contents names every member `<folder>/<file>`, and those members are relative to the folder's
+parent. Extracting them into the folder recreated it inside itself — measured on the reference Deck, a
+Switch save uploaded by another device restored to `<title>/01006BB00C6F0000/savedata1.bin`, and Eden read
+`<title>/`, found it empty and started a new game while the save sat one level down.
+
+The same shape sits one level higher on Wii, where the unit is `<title>/data` and a save can be packed from
+the title folder itself: RomM holds rom 6938 as `534d4e45/data/wiimj2d.sav` beside
+`534d4e45/content/title.tmd`. Here the heading names the destination's *parent*, and `content/title.tmd` is
+Dolphin's installed title metadata — not the game's save, and not something a restore may replace.
+
+So the restore asks the bank (`place_archive_members`) to align the archive's one heading with the
+destination's own path and to name the members that land inside it; the rest are refused.
+`extract_archive(placements=…)` writes only those, under those names, through the same guard that keeps
+bytes inside the destination. A flat archive — the shape this plugin packs — a mixed one, one headed by a
+name that is not on the destination's path (a PSP `<DISC_ID>DATA00` folder sits *inside* `SAVEDATA`), or a
+sibling whose name merely starts the same way is read exactly as before (ADR-0066).
 
 Restoring is only half of it: a GameCube save still has to be *named* before anything can be uploaded, and the
 resolver refuses names inside the card folder on purpose (`file-names-unestablished`) since it will not guess

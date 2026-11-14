@@ -474,33 +474,82 @@ def match_archive_root(layout: SaveLayout, root_name: str, save_id: str | None =
     return None
 
 
-def archive_members_under(members: Sequence[str], folder_name: str) -> tuple[str, ...] | None:
-    """The members' own names when the archive is rooted at *folder_name*, else ``None``.
+@dataclass(frozen=True, slots=True)
+class ArchivePlacement:
+    """Where each member of an over-packed archive lands, and what is not this save.
 
-    RomM holds whatever bytes a client gave it, and a client that packs the unit folder
-    *itself* writes members named ``<folder>/<file>``. Those members are relative to the
-    folder's PARENT, so extracting them into the folder nests the save one level deep —
-    measured on the reference Deck, where a Switch save uploaded by another device restored
-    to ``<title>/<title>/savedata1.bin`` while Eden read ``<title>/`` and started a new game
-    (ADR-0066). A flat archive — the shape this plugin packs — names the folder's own files
-    and is left alone.
-
-    ``None`` unless every member sits under exactly that one heading, so a caller only
-    changes a destination it can prove; a mixed archive keeps its flat reading.
+    ``placements`` pairs the archive's own member names with the names they take under the
+    destination; ``refused`` names the members the archive carries but the save does not own,
+    which are never written.
     """
-    heading = folder_name.strip().strip("/\\")
-    if not heading or not members:
+
+    placements: tuple[tuple[str, str], ...]
+    refused: tuple[str, ...]
+
+
+def place_archive_members(members: Sequence[str], destination: str) -> ArchivePlacement | None:
+    """Where the members of an archive belong under *destination*, or ``None`` for a flat one.
+
+    RomM holds whatever bytes a client gave it, and clients pack at different depths. A client
+    that packs the unit folder itself names every member ``<folder>/<file>``; one that packs the
+    folder's parent — Wii's title folder, which holds both ``data/`` (the save) and ``content/``
+    (the emulator's installed title metadata) — names them ``<title>/data/<file>``. Both are
+    relative to a directory ABOVE the destination, so writing them as they are nests the save,
+    and the emulator reads an empty folder while the bytes sit one level down. Measured on the
+    reference Deck: a Switch save restored to ``<title>/<title>/savedata1.bin`` and Eden offered
+    a new game (ADR-0066), and Wii rom 6938's newest server save is packed from its title folder.
+
+    So the heading is aligned with the destination's own path: when every member sits under one
+    heading that names a component of *destination*, the members are read from that heading's
+    directory down, and each one is placed relative to *destination*. A member that then falls
+    outside *destination* is not part of this save — Wii's ``content/title.tmd`` is the
+    emulator's, not the game's — and is refused rather than written.
+
+    ``None`` when the archive is flat (the shape this plugin packs), mixed, headed by a name that
+    is not on the destination's path (PSP's ``<DISC_ID>DATA00`` beside it), or when nothing would
+    be placed at all: a caller only changes an archive it can align, never on a guess.
+    """
+    parts = [part for part in destination.replace("\\", "/").split("/") if part not in ("", ".")]
+    if not parts or not members:
         return None
-    relative: list[str] = []
-    for member in members:
-        normalized = member.replace("\\", "/")
-        while normalized.startswith("./"):
-            normalized = normalized[2:]
-        head, separator, tail = normalized.partition("/")
-        if head != heading or not separator or not tail:
+    normalized = tuple(_zip_member_name(member) for member in members)
+    headings = {name.partition("/")[0] for name in normalized}
+    if len(headings) != 1:
+        return None
+    # The deepest place the heading holds on the destination's own path: aligning with the
+    # shallowest would read the archive from further up than it was packed.
+    heading = next(iter(headings))
+    positions = [index for index, part in enumerate(parts) if part == heading]
+    if not positions:
+        return None
+    below = parts[positions[-1] + 1 :]
+    placements: list[tuple[str, str]] = []
+    refused: list[str] = []
+    for member, name in zip(members, normalized, strict=True):
+        tail = name.partition("/")[2]
+        if not tail:
+            # A member that IS the heading names a directory, not a file this rule can place.
             return None
-        relative.append(tail)
-    return tuple(relative)
+        tail_parts = tail.split("/")
+        if below:
+            if tail_parts[: len(below)] != below:
+                refused.append(member)
+                continue
+            tail_parts = tail_parts[len(below) :]
+            if not tail_parts:
+                return None
+        placements.append((member, "/".join(tail_parts)))
+    if not placements:
+        return None
+    return ArchivePlacement(placements=tuple(placements), refused=tuple(refused))
+
+
+def _zip_member_name(member: str) -> str:
+    """A member name as ``/``-separated parts without a leading ``./``, as a zip spells it."""
+    name = member.replace("\\", "/")
+    while name.startswith("./"):
+        name = name[2:]
+    return name
 
 
 def ps2_name_matches(folder_name: str, save_id: str) -> bool:

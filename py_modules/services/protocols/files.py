@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
     from contextlib import AbstractContextManager
 
     from models.adoption import ArchiveMemberInfo, ExistingContent, MoveOutcome, TopLevelEntry, TopLevelName
@@ -619,14 +619,16 @@ class SaveFileStore(Protocol):
         """Write *names* from *directory* into *archive_path*; members sit at the root."""
         ...
 
-    def extract_archive(self, archive_path: str, dest_dir: str, *, strip_root: str | None = None) -> tuple[str, ...]:
+    def extract_archive(
+        self, archive_path: str, dest_dir: str, *, placements: Mapping[str, str] | None = None
+    ) -> tuple[str, ...]:
         """Extract *archive_path*'s regular files into *dest_dir*; return their names.
 
         Member names come from a server, so an entry that would land outside
         *dest_dir* — absolute, or climbing with ``..`` — or through a symlink is
-        refused rather than written. *strip_root* names a heading every member must
-        sit under, and the one to drop first: an archive packed from the folder itself
-        names the folder at its root, and restoring it as-is nests the save.
+        refused rather than written. *placements* names, for every member this save owns,
+        the name it takes under *dest_dir*; a member left out of it is not written, which is
+        how an archive packed above the destination keeps the emulator's own files.
         """
         ...
 
