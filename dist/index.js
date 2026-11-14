@@ -243,6 +243,7 @@ const setGameCore = callable("set_game_core");
 const clearGameCore = callable("clear_game_core");
 const getPlatformCoreInfo = callable("get_platform_core_info");
 const getSystemCoreInfo = callable("get_system_core_info");
+const ensurePlatformCores = callable("ensure_platform_cores");
 const getDiscSelection = callable("get_disc_selection");
 const selectDisc = callable("select_disc");
 const getVersionList = callable("get_version_list");
@@ -8416,7 +8417,7 @@ function formatReleaseDate(timestamp) {
         return null;
     const date = new Date(timestamp * 1000);
     const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    return `${date.getDate()} ${months[date.getMonth()]} ${date.getFullYear()}`;
+    return `${date.getUTCDate()} ${months[date.getUTCMonth()]} ${date.getUTCFullYear()}`;
 }
 function metadataRows(meta, platformName) {
     const rows = [];
@@ -12206,7 +12207,7 @@ const useSyncRunning = () => {
     return syncRunning;
 };
 
-const REASON_TEXT = {
+const REASON_TEXT$1 = {
     no_digest: "the release publishes no hash to check the download against",
     hash_mismatch: "the download did not match the hash its release publishes",
     asset_unresolved: "the release does not attach exactly one Linux build",
@@ -12214,9 +12215,9 @@ const REASON_TEXT = {
     no_install_path: "the inventory names no place to install it",
     no_source: "the inventory states no source for it",
 };
-const reasonText = (reason) => {
+const reasonText$1 = (reason) => {
     const [code = ""] = reason.split(":", 1);
-    const known = REASON_TEXT[code];
+    const known = REASON_TEXT$1[code];
     if (known)
         return known;
     const detail = reason.includes(":") ? reason.slice(reason.indexOf(":") + 1).trim() : reason;
@@ -12235,7 +12236,7 @@ const StatusLine = ({ row, state }) => {
         return SP_JSX.jsx("span", { style: { fontSize: SECONDARY_FONT, color: GREEN }, children: `${row.label} is already installed` });
     }
     if (state.kind === "failed") {
-        return SP_JSX.jsx("span", { style: { fontSize: SECONDARY_FONT, color: RED }, children: `${row.label}: ${reasonText(state.reason)}` });
+        return SP_JSX.jsx("span", { style: { fontSize: SECONDARY_FONT, color: RED }, children: `${row.label}: ${reasonText$1(state.reason)}` });
     }
     return SP_JSX.jsx("span", { style: { fontSize: SECONDARY_FONT, color: MUTED }, children: `${row.label} · ${sourceText(row)}` });
 };
@@ -12298,6 +12299,86 @@ const EmulatorInstallSection = ({ slug }) => {
     return (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsx(SectionTitle, { title: "Standalone emulators" }), readFailed && (SP_JSX.jsx(Muted, { children: "Could not read which emulators this platform can install. Reopen the platform to try again." })), rows?.map((row) => (SP_JSX.jsx("div", { style: { padding: "2px 16px" }, children: SP_JSX.jsx(StatusLine, { row: row, state: rowsState[row.label] ?? { kind: "idle" } }) }, row.label))), manual.length > 0 && (SP_JSX.jsx("div", { style: { padding: "2px 16px", fontSize: SECONDARY_FONT, color: MUTED }, children: `Install by hand — the plugin has no source for ${manual.join(", ")}` })), rows !== null && rows.length > 0 && (SP_JSX.jsx("div", { style: { display: "flex", padding: "6px 16px 2px" }, children: SP_JSX.jsx(DFL.DialogButton, { style: FLAT_BUTTON, disabled: running, onClick: () => {
                         void install();
                     }, children: SP_JSX.jsxs("span", { style: { display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "13px" }, children: [running && SP_JSX.jsx(DFL.Spinner, { width: 12, height: 12 }), rows.length > 1 ? "Install emulators" : "Install emulator"] }) }) }))] }));
+};
+
+const REASON_TEXT = {
+    no_cores_dir: "there is no cores folder to install into — the runtime is not installed yet",
+    not_a_zip: "the download was not the archive the build bot publishes",
+    no_core_member: "the archive did not contain this core",
+    corrupt_member: "the archive was truncated or corrupt",
+    too_small: "the download was too small to be a core",
+    not_elf: "the download was not a Linux core",
+    unknown_system: "this build has no emulator data for this platform",
+    no_libretro: "this platform launches with standalone emulators, not libretro cores",
+};
+const reasonText = (reason) => {
+    if (!reason)
+        return "the download did not finish";
+    const [code = ""] = reason.split(":", 1);
+    const known = REASON_TEXT[code];
+    if (known)
+        return known;
+    const detail = reason.includes(":") ? reason.slice(reason.indexOf(":") + 1).trim() : reason;
+    return detail || "it could not be installed";
+};
+const coresFor = (core) => {
+    const seen = new Set();
+    return core.emulators.filter((option) => {
+        if (option.kind !== "libretro" || !option.core_so || seen.has(option.core_so))
+            return false;
+        seen.add(option.core_so);
+        return true;
+    });
+};
+const CoreInstallSection = ({ slug, core }) => {
+    const [state, setState] = SP_REACT.useState({ kind: "idle" });
+    if (!core || !core.emulator_data_available)
+        return null;
+    const rows = coresFor(core);
+    if (rows.length === 0)
+        return null;
+    const installed = rows.filter((row) => row.reason === null).length;
+    const missing = rows.length - installed;
+    const force = missing === 0;
+    const label = force
+        ? rows.length > 1
+            ? "Reinstall cores"
+            : "Reinstall core"
+        : missing > 1
+            ? `Download ${missing} missing cores`
+            : "Download the missing core";
+    const run = async () => {
+        if (state.kind === "running")
+            return;
+        setState({ kind: "running" });
+        try {
+            const result = await ensurePlatformCores(slug, force);
+            const landed = result.installed ?? [];
+            const failed = result.failed ?? [];
+            if (failed.length > 0) {
+                const first = failed[0];
+                setState({ kind: "failed", text: `${first?.core ?? "a core"}: ${reasonText(first?.reason)}` });
+                return;
+            }
+            if (!result.success) {
+                setState({ kind: "failed", text: reasonText(result.reason) });
+                return;
+            }
+            const verb = force ? "Reinstalled" : "Installed";
+            const count = landed.length;
+            setState({
+                kind: "done",
+                text: count === 1 ? `${verb} ${landed[0]?.replace(/_libretro$/, "")}.` : `${verb} ${count} cores.`,
+            });
+        }
+        catch (error) {
+            logWarn(`Installing cores for ${slug} failed: ${String(error)}`);
+            setState({ kind: "failed", text: String(error) });
+        }
+    };
+    return (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsx(SectionTitle, { title: "Libretro cores" }), rows.map((row) => (SP_JSX.jsx("div", { style: { padding: "2px 16px" }, children: SP_JSX.jsx("span", { style: { fontSize: SECONDARY_FONT, color: row.reason === null ? GREEN : MUTED }, children: `${row.label} · ${row.reason === null ? "installed" : "missing"}` }) }, row.core_so ?? row.label))), state.kind === "done" && (SP_JSX.jsx(Muted, { children: SP_JSX.jsx("span", { style: { color: GREEN }, children: state.text }) })), state.kind === "failed" && (SP_JSX.jsx(Muted, { children: SP_JSX.jsx("span", { style: { color: RED }, children: state.text }) })), SP_JSX.jsx("div", { style: { display: "flex", padding: "6px 16px 2px" }, children: SP_JSX.jsx(DFL.DialogButton, { style: FLAT_BUTTON, disabled: state.kind === "running", onClick: () => {
+                        void run();
+                    }, children: SP_JSX.jsxs("span", { style: { display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "13px" }, children: [state.kind === "running" && SP_JSX.jsx(DFL.Spinner, { width: 12, height: 12 }), state.kind === "running" ? "Downloading…" : label] }) }) })] }));
 };
 
 const scopedStatus = (status) => status && { key: status.slug, scope: status.scope, text: status.text };
@@ -12579,7 +12660,7 @@ const PlatformDetail = ({ row, state }) => {
                                 platformCoreLabel: null,
                                 onPick: (label) => state.changeCore(row.slug, label),
                             }), getEventTarget(e));
-                        }, children: SP_JSX.jsx(FaMicrochip, { size: 16, color: coreColor }) })] }), state.shortcutCountsFailed && (SP_JSX.jsx(Muted, { children: "Could not read how many of these games are in Steam. Removing them still works, it just cannot say how many. Reopen the page to try again." })), state.removalProgress?.slug === row.slug && (SP_JSX.jsx(Muted, { children: `Removing ${state.removalProgress.removed} of ${state.removalProgress.total}…` })), SP_JSX.jsx(BusyElsewhere, { busyKey: state.busySlug, ownKey: row.slug, busyName: state.rows.get(state.busySlug ?? "")?.name ?? "another platform" }), SP_JSX.jsx(CoreNotice, { row: row, state: state, offer: offer }), SP_JSX.jsx(EmulatorInstallSection, { slug: row.slug }), row.firmwareStale && (SP_JSX.jsx(Muted, { children: "Could not re-read the BIOS state, so what is below may be out of date. Pick the platform again to retry." })), firmware ? (SP_JSX.jsx(BiosSection, { row: row, state: state, firmware: firmware })) : (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsx(SectionTitle, { title: "BIOS files" }), row.firmwareState === "pending" && SP_JSX.jsx(Muted, { children: "Checking what this platform needs\u2026" }), row.firmwareState === "failed" && (SP_JSX.jsx(Muted, { children: "Could not read the BIOS state. Pick the platform again to retry." })), row.firmwareState === "nothing" && SP_JSX.jsx(Muted, { children: "Nothing is known about this platform's BIOS files." })] })), SP_JSX.jsx(RemoveSection, { row: row, state: state })] }));
+                        }, children: SP_JSX.jsx(FaMicrochip, { size: 16, color: coreColor }) })] }), state.shortcutCountsFailed && (SP_JSX.jsx(Muted, { children: "Could not read how many of these games are in Steam. Removing them still works, it just cannot say how many. Reopen the page to try again." })), state.removalProgress?.slug === row.slug && (SP_JSX.jsx(Muted, { children: `Removing ${state.removalProgress.removed} of ${state.removalProgress.total}…` })), SP_JSX.jsx(BusyElsewhere, { busyKey: state.busySlug, ownKey: row.slug, busyName: state.rows.get(state.busySlug ?? "")?.name ?? "another platform" }), SP_JSX.jsx(CoreNotice, { row: row, state: state, offer: offer }), SP_JSX.jsx(EmulatorInstallSection, { slug: row.slug }), SP_JSX.jsx(CoreInstallSection, { slug: row.slug, core: core }), row.firmwareStale && (SP_JSX.jsx(Muted, { children: "Could not re-read the BIOS state, so what is below may be out of date. Pick the platform again to retry." })), firmware ? (SP_JSX.jsx(BiosSection, { row: row, state: state, firmware: firmware })) : (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsx(SectionTitle, { title: "BIOS files" }), row.firmwareState === "pending" && SP_JSX.jsx(Muted, { children: "Checking what this platform needs\u2026" }), row.firmwareState === "failed" && (SP_JSX.jsx(Muted, { children: "Could not read the BIOS state. Pick the platform again to retry." })), row.firmwareState === "nothing" && SP_JSX.jsx(Muted, { children: "Nothing is known about this platform's BIOS files." })] })), SP_JSX.jsx(RemoveSection, { row: row, state: state })] }));
 };
 
 function biosTooltip(row) {
