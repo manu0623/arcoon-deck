@@ -526,9 +526,9 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
     # the app names no folder while another runtime drives this machine.
     def owned_bios_root() -> str | None:
         """The BIOS root this app's firmware install writes, or none while RetroDECK drives."""
-        if cfg.adapters.retrodeck_paths.runtime_mode() is not RuntimeMode.BUILTIN:
+        if cfg.callbacks.retrodeck_paths.runtime_mode() is not RuntimeMode.BUILTIN:
             return None
-        return cfg.adapters.retrodeck_paths.bios_path()
+        return cfg.callbacks.retrodeck_paths.bios_path()
 
     emulator_bios_home_service = EmulatorBiosHomeService(
         config=EmulatorBiosHomeConfig(
