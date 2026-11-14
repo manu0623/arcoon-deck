@@ -3,7 +3,7 @@
 The write is a single setting in a file the emulator owns, so everything about the file
 this service is not changing has to come back exactly as it was: DuckStation's
 ``settings.ini`` holds its GPU backend, pad bindings, per-game overrides and everything
-else, and a rewrite through a parser would reformat all of it. :func:`_rewrite` walks the
+else, and a rewrite through a parser would reformat all of it. :func:`lib.ini_lines.rewrite_value` walks the
 text line by line, replaces the one key inside the one section, and leaves every other
 byte — order, comments, blank lines, Windows line ends already normalised by the split —
 in place.
@@ -25,6 +25,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+from lib.ini_lines import rewrite_value
 
 if TYPE_CHECKING:
     import logging
@@ -52,49 +54,6 @@ class BiosHomeOutcome:
     def changed(self) -> bool:
         """Whether this pass wrote the file."""
         return self.status == "pointed"
-
-
-def _rewrite(text: str, *, section: str, key: str, value: str) -> str:
-    """*text* with ``[section] key`` set to *value*, and every other line untouched.
-
-    An absent key is added at the end of its section and an absent section at the end of
-    the file, which is where an emulator's own defaults would put them.
-    """
-    out: list[str] = []
-    in_section = False
-    seen_section = False
-    written = False
-
-    def add_key() -> None:
-        """Put the key at the end of the section, above the blank lines that close it."""
-        blanks: list[str] = []
-        while out and not out[-1].strip():
-            blanks.append(out.pop())
-        out.append(f"{key} = {value}")
-        out.extend(blanks)
-
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("[") and stripped.endswith("]"):
-            if in_section and not written:
-                add_key()
-                written = True
-            in_section = stripped[1:-1].strip() == section
-            seen_section = seen_section or in_section
-            out.append(line)
-            continue
-        if in_section and not written and "=" in stripped and stripped.split("=", 1)[0].strip() == key:
-            out.append(f"{key} = {value}")
-            written = True
-            continue
-        out.append(line)
-    if in_section and not written:
-        add_key()
-    if not seen_section:
-        if out and out[-1].strip():
-            out.append("")
-        out.extend((f"[{section}]", f"{key} = {value}"))
-    return "\n".join(out) + "\n"
 
 
 class EmulatorBiosHomeAdapter:
@@ -145,7 +104,7 @@ class EmulatorBiosHomeAdapter:
             text = self._read_text(plan.config_path)
         except OSError as exc:
             return self._outcome(plan, "failed", note=f"unreadable settings: {exc}")
-        rewritten = _rewrite(text, section=plan.section, key=plan.key, value=plan.directory)
+        rewritten = rewrite_value(text, section=plan.section, key=plan.key, value=plan.directory)
         if rewritten == text:
             return self._outcome(plan, "already")
         try:

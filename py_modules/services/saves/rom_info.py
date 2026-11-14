@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from domain.content_identity import save_id_text
+from domain.emulator_card_stage import stages_emulator
 from domain.emulator_save_link import links_emulator
 from domain.save_answer import (
     SAVE_ID_NEED,
@@ -382,8 +383,13 @@ class RomInfoService:
         # PSP played in the standalone PPSSPP reported ``save_shape_unsupported`` — the
         # catalogue it was asked has no ES-DE to answer from — and neither the download nor
         # the upload ever ran, which looked like a save that never reached the server.
+        # A staged emulator counts here too: the plugin points its card folder at the bank
+        # and puts this game's card in the slot, so the bank states where it writes exactly
+        # as a link does for PPSSPP or the appendconfig does for a core (ADR-0071).
         pointed_standalone = (
-            emulator is not None and emulator.kind == "standalone" and links_emulator(emulator.emulator)
+            emulator is not None
+            and emulator.kind == "standalone"
+            and (links_emulator(emulator.emulator) or stages_emulator(emulator.emulator))
         )
         layout = save_layout_for(platform)
         # A launch nobody resolved or a libretro launch is only the bank's business when the

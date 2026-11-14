@@ -190,3 +190,8 @@ class SaveServiceConfig:
     # emulator's own settings. ``None`` (or answering ``None``) leaves the catalogue in
     # charge, which is the pre-existing behaviour.
     standalone_save_base: Callable[[str], str | None] | None = None
+    # Optional: the ROM id, before a launch and after it exits, for an emulator whose memory
+    # card this plugin stages out of the bank (DuckStation's shared card). ``None`` leaves
+    # the emulator's card exactly where its own settings put it.
+    stage_emulator_card: Callable[[int], Any] | None = None
+    adopt_emulator_card: Callable[[int], Any] | None = None

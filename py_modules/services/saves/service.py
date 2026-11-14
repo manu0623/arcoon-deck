@@ -70,6 +70,10 @@ class SaveService:
         # save count walks the filesystem once per installed ROM, and the page
         # asks it on every selection.
         self._loop = config.loop
+        # The two card hooks, held as callables so this façade never learns which emulator
+        # stages a card or where its settings live (ADR-0071).
+        self._stage_card = config.stage_emulator_card
+        self._adopt_card = config.adopt_emulator_card
         # Resolve plugin version once at construction; the DeviceRegistry and
         # any other consumer receive the resolved string, not the Protocol.
         plugin_version = config.plugin_metadata.read_version(config.plugin_dir)
@@ -311,12 +315,44 @@ class SaveService:
     # ------------------------------------------------------------------
 
     async def pre_launch_sync(self, rom_id: int) -> dict[str, Any]:
-        """Download newer saves from server before game launch."""
+        """Download newer saves from server before game launch.
+
+        A staged emulator's card is put in its slot first: the emulator opens one fixed card
+        file, so the game's card has to be there before the launch resolves the save (ADR-0071).
+        """
+        self._stage_emulator_card(int(rom_id))
         return await self._sync_engine.pre_launch_sync(rom_id)
 
     async def post_exit_sync(self, rom_id: int) -> dict[str, Any]:
-        """Upload changed saves after game exit."""
+        """Upload changed saves after game exit.
+
+        The card the emulator wrote is taken back into the bank first, so the upload carries
+        this session's save rather than the one staged into it.
+        """
+        self._adopt_emulator_card(int(rom_id))
         return await self._sync_engine.post_exit_sync(rom_id)
+
+    def rom_save_info(self, rom_id: int) -> dict[str, Any] | None:
+        """This ROM's install facts as the save layer reads them: path, system, platform."""
+        return self._rom_info.get_rom_save_info(int(rom_id))
+
+    def _stage_emulator_card(self, rom_id: int) -> None:
+        """Put this game's card where the emulator will open it; never fail the launch."""
+        if self._stage_card is None:
+            return
+        try:
+            self._stage_card(rom_id)
+        except Exception as exc:  # a card that could not move is not a failed sync
+            self._logger.warning(f"Emulator cards: staging before launch failed: {exc}")
+
+    def _adopt_emulator_card(self, rom_id: int) -> None:
+        """Take the card the emulator wrote back into the bank; never fail the exit."""
+        if self._adopt_card is None:
+            return
+        try:
+            self._adopt_card(rom_id)
+        except Exception as exc:
+            self._logger.warning(f"Emulator cards: adopting after exit failed: {exc}")
 
     async def sync_rom_saves(self, rom_id: int) -> dict[str, Any]:
         """Bidirectional sync for a single ROM (manual trigger from game detail)."""

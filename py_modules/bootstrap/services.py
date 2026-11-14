@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from adapters.coredumps import CoredumpAdapter
 from adapters.emulator_bios_home import EmulatorBiosHomeAdapter
+from adapters.emulator_card_stage import EmulatorCardStageAdapter
 from adapters.emulator_save_link import EmulatorSaveLinkAdapter
 from adapters.ps2_memcard import Ps2MemcardAdapter
 from domain.owned_dolphin import user_dir_for
@@ -34,6 +35,7 @@ from services.disc import DiscService, DiscServiceConfig
 from services.disc_launch_resolver import DiscLaunchResolver, DiscLaunchResolverConfig
 from services.downloads import DownloadService, DownloadServiceConfig
 from services.emulator_bios_homes import EmulatorBiosHomeConfig, EmulatorBiosHomeService
+from services.emulator_card_stages import EmulatorCardStageConfig, EmulatorCardStageService
 from services.emulator_provisioning import EmulatorProvisioningConfig, EmulatorProvisioningService
 from services.emulator_save_links import EmulatorSaveLinkConfig, EmulatorSaveLinkService
 from services.emulator_shortcuts import EmulatorShortcutConfig, EmulatorShortcutService
@@ -221,6 +223,12 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         ),
     )
 
+    # A declared emulator's memory card is staged out of the bank, one game at a time, so the
+    # PS1 save a standalone DuckStation writes is the same file the sync already carries
+    # (ADR-0071). Built after the save service because its card hooks read the ROM's install
+    # facts from there; the binding is what lets the hooks reach it lazily.
+    card_stage_binding: LateBinding[EmulatorCardStageService] = LateBinding("emulator_card_stage")
+
     save_service_config = SaveServiceConfig(
         romm_api=cfg.adapters.romm_api,
         retry=cfg.adapters.http_adapter,
@@ -238,6 +246,8 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         content_identity=cfg.adapters.content_identity,
         save_bank_dir=cfg.adapters.save_bank_dir,
         standalone_save_base=cfg.adapters.emulator_save_base,
+        stage_emulator_card=lambda rom_id: card_stage_binding.get().stage(rom_id),
+        adopt_emulator_card=lambda rom_id: card_stage_binding.get().adopt(rom_id),
         resolve_system=cfg.adapters.http_adapter.resolve_system,
         hostname_provider=cfg.runtime.hostname_provider,
         machine_id_provider=cfg.runtime.machine_id_provider,
@@ -541,6 +551,23 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         ),
     )
 
+    card_stage_adapter = EmulatorCardStageAdapter(logger=cfg.runtime.logger)
+    emulator_card_stage_service = EmulatorCardStageService(
+        config=EmulatorCardStageConfig(
+            logger=cfg.runtime.logger,
+            external_emulators=cfg.adapters.external_emulators,
+            config_reader=cfg.adapters.emulator_config,
+            saves_path=cfg.callbacks.retrodeck_paths.saves_path,
+            rom_info=save_sync_service.rom_save_info,
+            active_emulator=active_core_resolver.active_emulator_for_rom,
+            config_exists=os.path.exists,
+            apply_home=card_stage_adapter.write_home,
+            stage_card=card_stage_adapter.stage,
+            adopt_card=card_stage_adapter.adopt,
+        ),
+    )
+    card_stage_binding.set(lambda: emulator_card_stage_service)
+
     # Records an install for a ROM the library knows whose file is already on disk, so a
     # library that arrived another way can be asked about its saves at all.
     rom_install_discovery_service = RomInstallDiscoveryService(
@@ -777,6 +804,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         "emulator_shortcut_service": emulator_shortcut_service,
         "emulator_save_link_service": emulator_save_link_service,
         "emulator_bios_home_service": emulator_bios_home_service,
+        "emulator_card_stage_service": emulator_card_stage_service,
         "rom_install_discovery_service": rom_install_discovery_service,
         "disc_service": disc_service,
         "version_switch_service": version_switch_service,

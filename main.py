@@ -213,6 +213,7 @@ class Plugin:
         self._emulator_shortcut_service = services["emulator_shortcut_service"]
         self._emulator_save_link_service = services["emulator_save_link_service"]
         self._emulator_bios_home_service = services["emulator_bios_home_service"]
+        self._emulator_card_stage_service = services["emulator_card_stage_service"]
         self._rom_install_discovery_service = services["rom_install_discovery_service"]
         self._disc_service = services["disc_service"]
         self._version_switch_service = services["version_switch_service"]
@@ -266,6 +267,13 @@ class Plugin:
             await self._emulator_bios_home_service.ensure_all()
         except Exception as exc:  # a BIOS pointer is never worth failing the plugin's start
             decky.logger.warning(f"Emulator BIOS: startup pass failed: {exc}")
+        # And the emulator that stages a memory card out of the bank has its card folder
+        # pointed there before it is first opened: one fixed card file, one game at a time
+        # (ADR-0071).
+        try:
+            await self._emulator_card_stage_service.ensure_homes()
+        except Exception as exc:  # a card pointer is never worth failing the plugin's start
+            decky.logger.warning(f"Emulator cards: startup pass failed: {exc}")
         # No save-sync orphan prune: roms rows are permanent identity anchors
         # and saves/playtime survive a ROM leaving RomM (ADR-0007).
         self._sgdb_service.prune_orphaned_artwork_cache()
