@@ -1,5 +1,5 @@
 site_name: Arcoon Deck
-site_description: Arcoon Deck — a modification of Tender: a Decky Loader plugin that syncs your self-hosted RomM library into Steam
+site_description: "Arcoon Deck — a modification of Tender, a Decky Loader plugin that syncs your self-hosted RomM library into Steam"
 site_url: https://manu0623.github.io/arcoon-deck/
 copyright: >-
   Arcoon Deck — a modification of <a href="https://github.com/danielcopper/romm-tender">Tender</a> by
