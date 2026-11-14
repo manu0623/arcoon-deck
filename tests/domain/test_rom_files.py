@@ -13,6 +13,7 @@ from domain.rom_files import (
     folder_boot_root,
     is_launchable_target,
     is_multi_file_download,
+    is_pc_archive,
     needs_m3u,
     resolve_extract_dir_name,
     resolve_local_file_name,
@@ -582,3 +583,28 @@ class TestResolveExtractDirName:
 
     def test_missing_fs_name_and_id_uses_unknown_fallback(self):
         assert resolve_extract_dir_name({}) == "rom_unknown"
+
+
+class TestIsPcArchive:
+    """A PC game served as ONE archive must be unpacked, not installed as a file."""
+
+    def test_windows_zip_is_an_archive(self):
+        assert is_pc_archive("windows", "Need for Speed - Carbon.zip") is True
+
+    def test_the_win_slug_counts_too(self):
+        # RomM's own library names the platform ``win``; ``windows`` is the ES-DE
+        # system. Measured on the reference Deck: 17 entries, all ``win``.
+        assert is_pc_archive("win", "Deadpool.7z") is True
+
+    def test_rar_and_upper_case(self):
+        assert is_pc_archive("win", "Spider-Man 3.RAR") is True
+
+    def test_an_exe_is_not_an_archive(self):
+        assert is_pc_archive("win", "Game.exe") is False
+
+    def test_an_archive_on_another_platform_is_not_this_rule(self):
+        # A PS2 iso zipped by RomM is the multi-file path's business, not a PC game's.
+        assert is_pc_archive("ps2", "Sly Cooper.iso.zip") is False
+
+    def test_no_file_name_is_not_an_archive(self):
+        assert is_pc_archive("win", None) is False

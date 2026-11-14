@@ -6,6 +6,7 @@ import contextlib
 import os
 import socket
 import zipfile
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -985,3 +986,135 @@ class TestProtocolMethodCount:
         # All listed methods are implemented on the concrete adapter.
         for name in method_names:
             assert hasattr(DownloadFileAdapter(), name), f"missing {name}"
+
+
+class TestExtractArchive:
+    """The container is sniffed, and every container ends under the same rules."""
+
+    @staticmethod
+    @staticmethod
+    def _seven_zip(tmp_path):
+        archive = tmp_path / "game.7z"
+        archive.write_bytes(b"7z" + bytes([0xBC, 0xAF, 0x27, 0x1C]) + b"pad" * 4)
+        return str(archive)
+
+    @staticmethod
+    def _rar(tmp_path):
+        archive = tmp_path / "game.rar"
+        archive.write_bytes(b"Rar!" + bytes([0x1A, 0x07, 0x00]) + b"pad" * 4)
+        return str(archive)
+
+    def test_zip_goes_through_the_standard_library(self, adapter, tmp_path):
+        archive = tmp_path / "game.zip"
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("Game.exe", b"MZ")
+        dest = tmp_path / "out"
+        dest.mkdir()
+
+        adapter.extract_archive(str(archive), str(dest), str(tmp_path))
+
+        assert (dest / "Game.exe").read_bytes() == b"MZ"
+
+    def test_seven_zip_runs_the_system_tool_into_the_target(self, adapter, tmp_path, monkeypatch):
+        archive = self._seven_zip(tmp_path)
+        dest = tmp_path / "out"
+        dest.mkdir()
+        calls = []
+
+        def fake_run(argv, **kwargs):
+            calls.append(argv)
+            (dest / "Game.exe").write_bytes(b"MZ")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr("adapters.download_file.subprocess.run", fake_run)
+
+        adapter.extract_archive(archive, str(dest), str(tmp_path))
+
+        assert calls[0][0] == "7z"
+        assert f"-o{dest}" in calls[0]
+        assert archive in calls[0]
+        assert (dest / "Game.exe").exists()
+
+    def test_rar_runs_unrar(self, adapter, tmp_path, monkeypatch):
+        archive = self._rar(tmp_path)
+        dest = tmp_path / "out"
+        dest.mkdir()
+        calls = []
+
+        def fake_run(argv, **kwargs):
+            calls.append(argv)
+            (dest / "Game.exe").write_bytes(b"MZ")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr("adapters.download_file.subprocess.run", fake_run)
+
+        adapter.extract_archive(archive, str(dest), str(tmp_path))
+
+        assert calls[0][0] == "unrar"
+
+    def test_a_missing_tool_is_a_readable_refusal(self, adapter, tmp_path, monkeypatch):
+        archive = self._seven_zip(tmp_path)
+        dest = tmp_path / "out"
+        dest.mkdir()
+
+        def missing(argv, **kwargs):
+            raise FileNotFoundError()
+
+        monkeypatch.setattr("adapters.download_file.subprocess.run", missing)
+
+        with pytest.raises(ValueError, match="not installed"):
+            adapter.extract_archive(archive, str(dest), str(tmp_path))
+
+    def test_a_failed_unpacker_reports_its_last_line(self, adapter, tmp_path, monkeypatch):
+        archive = self._seven_zip(tmp_path)
+        dest = tmp_path / "out"
+        dest.mkdir()
+
+        def failed(argv, **kwargs):
+            return SimpleNamespace(returncode=2, stdout="", stderr="Headers Error | Cannot open file as archive")
+
+        monkeypatch.setattr("adapters.download_file.subprocess.run", failed)
+
+        with pytest.raises(ValueError, match="Cannot open file as archive"):
+            adapter.extract_archive(archive, str(dest), str(tmp_path))
+
+    def test_a_container_it_cannot_read_is_refused(self, adapter, tmp_path):
+        archive = tmp_path / "game.zip"
+        archive.write_bytes(b"this is not an archive")
+        dest = tmp_path / "out"
+        dest.mkdir()
+
+        with pytest.raises(ValueError, match="not an archive"):
+            adapter.extract_archive(str(archive), str(dest), str(tmp_path))
+
+    def test_an_unpacker_that_writes_nothing_is_refused(self, adapter, tmp_path, monkeypatch):
+        archive = self._seven_zip(tmp_path)
+        dest = tmp_path / "out"
+        dest.mkdir()
+
+        def silent(argv, **kwargs):
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr("adapters.download_file.subprocess.run", silent)
+
+        with pytest.raises(ValueError, match="nothing to extract"):
+            adapter.extract_archive(archive, str(dest), str(tmp_path))
+
+    def test_a_link_out_of_the_game_folder_is_refused(self, adapter, tmp_path, monkeypatch):
+        archive = self._seven_zip(tmp_path)
+        dest = tmp_path / "out"
+        dest.mkdir()
+        outside = tmp_path / "secret.txt"
+        outside.write_text("x", encoding="utf-8")
+
+        def linked(argv, **kwargs):
+            try:
+                os.symlink(str(outside), str(dest / "passwd"))
+            except (OSError, NotImplementedError):
+                pytest.skip("this filesystem cannot create symlinks")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr("adapters.download_file.subprocess.run", linked)
+
+        with pytest.raises(ValueError, match="is a link"):
+            adapter.extract_archive(archive, str(dest), str(tmp_path))

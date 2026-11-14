@@ -24,6 +24,7 @@ from domain.rom_files import (
     es_de_collapse_rename,
     folder_boot_layout_root,
     is_multi_file_download,
+    is_pc_archive,
     needs_m3u,
     resolve_extract_dir_name,
     resolve_local_file_name,
@@ -569,7 +570,9 @@ class DownloadService:
         rom_name = rom_detail.get("name", file_name)
         platform_name = rom_detail.get("platform_name", rom_detail.get("platform_slug", ""))
         extract_cb = self._make_extract_callback(rom_id, rom_name, platform_name, file_name)
-        self._download_file_store.extract_zip(tmp_zip, extract_dir, roms_base, progress_callback=extract_cb)
+        # Whatever container this is: a zip through the standard library, a 7z or rar
+        # through the system unpacker and the same path checks afterwards.
+        self._download_file_store.extract_archive(tmp_zip, extract_dir, roms_base, progress_callback=extract_cb)
         self._download_file_store.remove_file(tmp_zip)
         self._download_file_store.decode_url_encoded_names(extract_dir)
         # Heal a folder-boot disc dump whose PS3_DISC.SFB ships .txt-suffixed,
@@ -591,7 +594,12 @@ class DownloadService:
         # launch file is only known after extraction (the M3U may be
         # auto-generated above), so the rename happens here, last of all the
         # filesystem work, so a later failure cleans up the renamed dir.
-        extract_dir, launch_file = self._maybe_es_de_collapse_io(extract_dir, launch_file)
+        #
+        # Not for a Windows game: its launch target is an .exe, so the collapse would
+        # name the install folder "Game.exe" for a consumer (ES-DE) this launch path
+        # does not use — the shortcut names the exe itself.
+        if not is_windows_platform(rom_detail.get("platform_slug", "")):
+            extract_dir, launch_file = self._maybe_es_de_collapse_io(extract_dir, launch_file)
 
         return self._install_recorder.do_record_install(
             rom_id=rom_id,
@@ -929,12 +937,20 @@ class DownloadService:
         rom_name = rom_detail.get("name", file_name)
         platform_name = rom_detail.get("platform_name", rom_detail.get("platform_slug", ""))
         has_multiple = is_multi_file_download(rom_detail)
+        # A Windows game is usually uploaded as ONE archive, so RomM serves one file
+        # and the multi-file gate answers False — but the file is a container, not the
+        # game, and installing it as-is is a shortcut pointed at a .zip. Measured on
+        # the reference Deck before this rule: `Need for Speed: Carbon` sat in
+        # `roms/win/` as one unopened 4.15 GB zip. It takes the extraction path for the
+        # same reason a multi-file ROM does.
+        windows_archive = not has_multiple and is_pc_archive(rom_detail.get("platform_slug", ""), file_name)
+        unpack = has_multiple or windows_archive
         # Name the extract dir from the ROM's identity, not files[0] (which may be
         # an arbitrary inner asset for a nested-single folder game). Computed once
         # here and threaded to both the extraction and the cleanup so the dir a
-        # failure tears down matches the dir extraction created. Only multi-file
-        # ROMs own a dedicated dir, so single-file skips the derivation.
-        extract_dir_name = self._resolve_safe_extract_dir_name(rom_detail) if has_multiple else ""
+        # failure tears down matches the dir extraction created. Only downloads that
+        # own a dedicated dir derive a name, so a plain single file skips it.
+        extract_dir_name = self._resolve_safe_extract_dir_name(rom_detail) if unpack else ""
         progress_callback = self._make_progress_callback(rom_id, rom_name, platform_name, file_name, control)
         on_meta = self._make_on_meta(rom_id, rom_name, platform_name, file_name)
         # Tracks the resolved launch path once extraction returns it, so a
@@ -973,8 +989,11 @@ class DownloadService:
             async with self._download_semaphore:
                 self._download_queue[rom_id]["status"] = "downloading"
 
-                if has_multiple:
-                    # Multi-file ROM: API returns ZIP, download to temp then extract
+                if unpack:
+                    # Multi-file ROM, or a PC game shipped as one archive: the bytes are
+                    # a container, so download to temp then extract. `extract_archive`
+                    # sniffs the container, and `_post_download_multi_io` reads the exe
+                    # back out for a Windows game.
                     tmp_zip = target_path + _ZIP_TMP_EXT
                     await self._loop.run_in_executor(
                         None,
@@ -1075,7 +1094,7 @@ class DownloadService:
             else:
                 entry = self._download_queue[rom_id]
                 entry["status"] = "cancelled"
-                self._cleanup_partial_download(target_path, has_multiple, extract_dir_name, final_path)
+                self._cleanup_partial_download(target_path, unpack, extract_dir_name, final_path)
                 # #1017: emit a terminal frame so the frontend resets the button
                 # out of its downloading state (the global cancel path was silent).
                 await self._emit(

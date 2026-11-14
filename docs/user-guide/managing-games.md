@@ -409,7 +409,13 @@ game's own `.exe`, under Proton, exactly as it does for a Windows program you ad
 builds a Windows game's shortcut around that executable — the shortcut's target **is** the game's `.exe`, and its start
 folder is the game's own folder — instead of pointing at the plugin's launcher the way every console shortcut does.
 
-**The executable is found for you.** When the download finishes, the plugin picks the file that starts the game out of
+**The archive is opened for you.** PC games are almost always uploaded as one archive — a folder zipped, or a `.7z`
+exactly as it was published — and RomM hands that over as a single file. The plugin unpacks it into its own folder under
+the Windows platform's roms folder (`.zip`, `.7z` and `.rar` are all handled), then throws the archive away. A game the
+archive cannot be read from — a damaged file, or a container this build has no tool for — fails the download with the
+reason instead of being installed as an unopenable file.
+
+**The executable is found for you.** When the unpacking finishes, the plugin picks the file that starts the game out of
 what was extracted: the shallowest executable that isn't an obvious installer or uninstaller (`setup.exe`,
 `unins000.exe`, a Visual C++ redistributable, a crash reporter), preferring one named after the game and, failing
 that, the largest.

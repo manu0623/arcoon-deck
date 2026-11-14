@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from domain.windows_launch import pick_game_exe
+from domain.windows_launch import is_windows_platform, pick_game_exe
 
 
 def is_multi_file_download(rom_detail: dict[str, Any]) -> bool:
@@ -39,6 +39,31 @@ def is_multi_file_download(rom_detail: dict[str, Any]) -> bool:
     """
     files = rom_detail.get("files") or []
     return len(files) > 1 or bool(rom_detail.get("has_multiple_files", False))
+
+
+#: The archives a Windows game is shipped as when RomM serves it as ONE file.
+#: ``.zip`` is read by the standard library; ``.7z`` and ``.rar`` by tools SteamOS
+#: carries (measured on the reference Deck: ``/usr/bin/7z``, ``/usr/bin/unrar``).
+PC_ARCHIVE_EXTENSIONS: tuple[str, ...] = (".zip", ".7z", ".rar")
+
+
+def is_pc_archive(platform_slug: str | None, file_name: str | None) -> bool:
+    """Whether the single file RomM serves for this entry is a PC game's archive.
+
+    A Windows game is uploaded as an archive — a folder zipped, or a ``.7z`` as it
+    was published — so RomM serves it as that ONE file, :func:`is_multi_file_download`
+    is ``False``, and the single-file path would install the *archive* as the game.
+    Measured on the reference Deck before this rule: ``Need for Speed: Carbon`` sat
+    in ``roms/win/`` as one unopened 4.15 GB ``.zip`` with a Steam shortcut pointing
+    at it, and a ``.7z`` had been adopted as a folder of its own.
+
+    The extension is all there is to ask at this point in the download: the bytes are
+    not here yet. What container they actually are is decided by sniffing them in
+    ``extract_archive``, which refuses anything it cannot open.
+    """
+    if not is_windows_platform(platform_slug):
+        return False
+    return os.path.splitext(file_name or "")[1].lower() in PC_ARCHIVE_EXTENSIONS
 
 
 def needs_m3u(disc_files: list[str], m3u_supported: bool) -> bool:

@@ -14,6 +14,7 @@ import hashlib
 import os
 import shutil
 import stat
+import subprocess
 import urllib.parse
 import zipfile
 import zlib
@@ -30,6 +31,20 @@ if TYPE_CHECKING:
 
 _EXTRACT_CHUNK = 1024 * 1024
 _HASH_CHUNK = 1024 * 1024
+
+#: What an archive's own first bytes say it is. Sniffed, not read off the name: the
+#: download path stages every archive under the multi-file path's ``.zip.tmp`` name,
+#: so an extension is not there to be asked.
+_ARCHIVE_MAGIC: tuple[tuple[bytes, str], ...] = (
+    (b"PK\x03\x04", "zip"),
+    (b"7z\xbc\xaf\x27\x1c", "7z"),
+    (b"Rar!\x1a\x07", "rar"),
+)
+
+#: The system tools for the containers the standard library cannot read, measured
+#: present on the reference Deck. A tool that is missing is a refusal, not a fallback:
+#: writing nothing is better than a folder of half a game.
+_UNPACK_TOOLS: dict[str, str] = {"7z": "7z", "rar": "unrar"}
 
 
 def _kind_of(*, is_link: bool, is_dir: bool, is_file: bool) -> Kind | None:
@@ -380,6 +395,92 @@ class DownloadFileAdapter:
                         extracted += len(chunk)
                         if progress_callback is not None:
                             progress_callback(extracted, total)
+
+    def extract_archive(
+        self,
+        archive_path: str,
+        dest_dir: str,
+        safe_root: str,
+        progress_callback: Callable[[int, int], None] | None = None,
+    ) -> None:
+        """Extract *archive_path* into *dest_dir*, whichever container it is.
+
+        A ``.zip`` takes :meth:`extract_zip` unchanged — the standard library,
+        member-by-member path checks and byte progress. ``.7z`` and ``.rar`` go to the
+        system tools SteamOS carries and then through the same guarantees, applied to
+        the result instead of to a member list: nothing outside *dest_dir*, no links,
+        and something actually extracted. A container this build cannot read raises
+        ``ValueError`` — the caller removes the directory, so a refused archive never
+        leaves half a game behind for the launch to find.
+
+        The container is decided by its first bytes rather than by its name, because
+        the download path stages every archive under the same temporary suffix.
+        """
+        kind = self._archive_kind(archive_path)
+        if kind == "zip":
+            self.extract_zip(archive_path, dest_dir, safe_root, progress_callback)
+            return
+        tool = _UNPACK_TOOLS[kind]
+        if kind == "7z":
+            argv = [tool, "x", "-y", f"-o{dest_dir}", "--", archive_path]
+        else:
+            argv = [tool, "x", "-o+", "-idq", archive_path, dest_dir + os.sep]
+        self._run_unpacker(argv)
+        self._verify_extraction(dest_dir, safe_root)
+
+    @staticmethod
+    def _archive_kind(archive_path: str) -> str:
+        """``"zip"``, ``"7z"`` or ``"rar"``, from the file's own magic bytes."""
+        try:
+            with open(archive_path, "rb") as handle:
+                head = handle.read(8)
+        except OSError as exc:
+            raise ValueError(f"cannot read archive {archive_path}: {exc}") from exc
+        for magic, kind in _ARCHIVE_MAGIC:
+            if head.startswith(magic):
+                return kind
+        raise ValueError(f"{os.path.basename(archive_path)} is not an archive this app can open")
+
+    @staticmethod
+    def _run_unpacker(argv: list[str]) -> None:
+        """Run one system unpacker, turning both failures into a readable refusal."""
+        tool = argv[0]
+        try:
+            result = subprocess.run(argv, capture_output=True, text=True, check=False)
+        except FileNotFoundError as exc:
+            raise ValueError(f"{tool} is not installed, so this archive cannot be opened") from exc
+        except OSError as exc:
+            raise ValueError(f"{tool} could not be started: {exc}") from exc
+        if result.returncode != 0:
+            lines = (result.stderr or result.stdout or "").strip().splitlines()
+            detail = lines[-1] if lines else "no output"
+            raise ValueError(f"{tool} could not open the archive: {detail}")
+
+    @staticmethod
+    def _verify_extraction(dest_dir: str, safe_root: str) -> None:
+        """The zip path's guarantees, applied to whatever an unpacker produced.
+
+        ``extract_zip`` can refuse a member before writing it; a system unpacker writes
+        first and reports afterwards, so the same rules are checked on the tree it
+        left. Links are refused outright: an archive can carry one and nothing this app
+        launches follows a link out of a game's folder.
+        """
+        real_dest = os.path.realpath(dest_dir)
+        real_safe = os.path.realpath(safe_root)
+        if not (real_dest == real_safe or real_dest.startswith(real_safe + os.sep)):
+            raise ValueError(f"Extract directory would be outside safe root: {dest_dir}")
+        entries = 0
+        for root, dirs, files in os.walk(real_dest):
+            for name in (*dirs, *files):
+                path = os.path.join(root, name)
+                entries += 1
+                if os.path.islink(path):
+                    raise ValueError(f"archive member {name} is a link, which is never extracted")
+                resolved = os.path.realpath(path)
+                if not (resolved == real_dest or resolved.startswith(real_dest + os.sep)):
+                    raise ValueError(f"archive member {name} would extract outside {dest_dir}")
+        if entries == 0:
+            raise ValueError("the archive held nothing to extract")
 
     def decode_url_encoded_names(self, directory: str) -> None:
         """Rename URL-encoded files and directories under *directory* in place.
