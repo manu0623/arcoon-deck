@@ -27,12 +27,17 @@ interface GameInfoTabProps {
   installedRom: InstalledRom | null;
 }
 
-/** Format a Unix timestamp (seconds) as a release date string (e.g. "15 Mar 2003") */
+/** Format a Unix timestamp (seconds) as a release date string (e.g. "15 Mar 2003")
+ *
+ * Read in UTC, not local time: RomM states a release date, not an instant, and
+ * its timestamps sit at midnight UTC. Formatted with the local getters, a game
+ * released 2003-01-01 rendered as "31 Dec 2002" on every device west of UTC.
+ */
 function formatReleaseDate(timestamp: number | null): string | null {
   if (!timestamp || timestamp <= 0) return null;
   const date = new Date(timestamp * 1000);
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  return `${date.getDate()} ${months[date.getMonth()]} ${date.getFullYear()}`;
+  return `${date.getUTCDate()} ${months[date.getUTCMonth()]} ${date.getUTCFullYear()}`;
 }
 
 /** The rows a RomM metadata record contributes, in display order. */

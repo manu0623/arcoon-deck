@@ -3083,10 +3083,11 @@ describe("RomMGameInfoPanel", () => {
   // ------------------------------------------------------------------
 
   describe("formatReleaseDate (rendered via Game Info)", () => {
-    it("renders 'D MMM YYYY' when first_release_date > 0", async () => {
-      // 2003-01-01 00:00:00 UTC = 1041379200 → date.getDate() / getMonth() use
-      // local time; just assert the year + month-name format is applied
-      // (the day may vary by TZ).
+    it("renders 'D MMM YYYY' in UTC, not local time", async () => {
+      // 2003-01-01 00:00:00 UTC = 1041379200. The date is stated in UTC, so the
+      // assertion can name the whole string and the test passes in any device
+      // timezone: rendered with local getters this read "31 Dec 2002" anywhere
+      // west of UTC.
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 1,
@@ -3096,9 +3097,21 @@ describe("RomMGameInfoPanel", () => {
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
       expect(container.textContent).toContain("Release Date");
-      // Format: "D MMM YYYY" — assert the month abbreviation + year reach
-      // the DOM. (Day depends on TZ; "2003" pins the year.)
-      expect(container.textContent).toMatch(/\d+\s(Jan|Dec)\s2003/);
+      expect(container.textContent).toContain("1 Jan 2003");
+    });
+
+    it("keeps a late-evening UTC timestamp on its own date", async () => {
+      // 2003-03-15 23:30:00 UTC = 1047771000 — the hour a local-time render
+      // would roll forward to the 16th anywhere east of UTC.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 1,
+        metadata: makeMetadata({ first_release_date: 1047771000 }),
+        stale_fields: [],
+      });
+      const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      expect(container.textContent).toContain("15 Mar 2003");
     });
 
     it("skips Release Date row when first_release_date is null or 0", async () => {
