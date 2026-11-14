@@ -54,6 +54,17 @@ first sync of a game the user had never played is exactly the case a fresh insta
 `Burnout Legends.iso` answers `ULUS10025`, and its extracted folder `ULUS10025SAVE000` lands
 beside the redirected memory stick.
 
+### A folder save hashes as the archive it uploads as
+
+The session inventory hashes every local save with `SaveFileStore.content_hash`, which
+reads a path as a file. A PSP save is a folder, so opening a session over one failed with
+`[Errno 21] Is a directory: …/SAVEDATA/ULES00151S0` and the sync fell back to running
+without a session envelope (rom 5395, measured). The folder is uploaded packed as one zip
+whose members are `<serial>/<file>`, so its digest is now that archive's digest: each file
+hashed by its member name and combined with `combine_zip_entry_hashes`, the same rule a
+zip's entries follow. Size and mtime answer for the files inside the folder, since the
+directory inode's mtime only tracks entries being added or removed.
+
 ## Consequences
 
 - PSP syncs both ways on a built-in-runtime Deck: the server's `<title> [timestamp].zip` is

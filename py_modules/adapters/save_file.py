@@ -199,12 +199,33 @@ class SaveFileAdapter:
         return rename_claimed(src, dst, safe_root, claim)
 
     def get_mtime(self, path: str) -> float:
-        """Return the mtime of *path* as a Unix timestamp."""
+        """Return the mtime of *path* as a Unix timestamp.
+
+        A save that is a folder (a PSP ``SAVEDATA/<serial>``) answers with its newest
+        file's mtime: the directory's own mtime only tracks entries being added or
+        removed, so a save written in place would look untouched.
+        """
+        if os.path.isdir(path):
+            times = [os.path.getmtime(whole) for _, whole in self._folder_files(path)]
+            return max(times) if times else os.path.getmtime(path)
         return os.path.getmtime(path)
 
     def get_size(self, path: str) -> int:
-        """Return the size of *path* in bytes."""
+        """Return the size of *path* in bytes; a folder save is the sum of its files."""
+        if os.path.isdir(path):
+            return sum(os.path.getsize(whole) for _, whole in self._folder_files(path))
         return os.path.getsize(path)
+
+    @staticmethod
+    def _folder_files(path: str) -> list[tuple[str, str]]:
+        """Every file under *path*, as ``(name relative to its parent, full path)``."""
+        root = os.path.dirname(path.rstrip(os.sep))
+        found: list[tuple[str, str]] = []
+        for base, _folders, files in os.walk(path):
+            for name in files:
+                whole = os.path.join(base, name)
+                found.append((os.path.relpath(whole, root).replace(os.sep, "/"), whole))
+        return found
 
     def checksum_md5(self, path: str) -> str:
         """Return the hex-encoded MD5 digest of *path*'s contents.
@@ -234,6 +255,10 @@ class SaveFileAdapter:
         archive are skipped. A positive sniff over a file that cannot be read as
         a zip falls back to the plain MD5 rather than raising (see
         :meth:`_compute_content_hash`). Non-security use, like ``checksum_md5``.
+
+        A save that is a folder (a PSP ``SAVEDATA/<serial>``) is hashed file by file under
+        its zip member names and combined by :func:`domain.save_hash.combine_zip_entry_hashes`,
+        which is the digest RomM holds for the archive this plugin uploads for it.
 
         Inside a :meth:`hash_memo_scope` the digest is memoized by the file's
         ``(path, mtime_ns, size)`` so one sync run's repeated hashings of the
@@ -265,6 +290,8 @@ class SaveFileAdapter:
         :meth:`content_hash` memoizes whatever this method returns under the
         file's stat key.
         """
+        if os.path.isdir(path):
+            return self._folder_content_hash(path)
         if not zipfile.is_zipfile(path):
             return self.checksum_md5(path)
         try:
@@ -278,6 +305,20 @@ class SaveFileAdapter:
             self._logger.debug("content_hash: %s sniffed as zip but unreadable (%s); MD5 fallback", path, exc)
             return self.checksum_md5(path)
         return combine_zip_entry_hashes(entries)
+
+    def _folder_content_hash(self, path: str) -> str:
+        """RomM's content hash for a save that is a folder, not an archive.
+
+        A PSP save is ``SAVEDATA/<serial>/``, and this plugin uploads it packed as one zip
+        whose members are exactly ``<serial>/<file>`` — the names measured in the server's
+        copy. Hashing the folder's files by those same names and combining them the way a
+        zip's entries are combined is therefore the same digest the server holds, rather
+        than a hash of the directory inode. Without this, opening a sync session over a
+        folder save failed outright: ``[Errno 21] Is a directory`` (rom 5395).
+        """
+        return combine_zip_entry_hashes(
+            [(name, self.checksum_md5(whole)) for name, whole in self._folder_files(path)]
+        )
 
     @contextlib.contextmanager
     def hash_memo_scope(self) -> Iterator[None]:

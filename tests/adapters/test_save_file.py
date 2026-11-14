@@ -571,3 +571,46 @@ class TestExtractArchivePlacements:
         target.mkdir()
         assert save_files.extract_archive(str(archive), str(target)) == ("savedata1.bin",)
         assert (target / "savedata1.bin").read_bytes() == b"server save"
+
+
+class TestFolderSave:
+    """A PSP save is a folder (``SAVEDATA/<serial>/``), and the session inventory hashes it.
+
+    Measured on the reference Deck: opening a negotiate session over rom 5395 failed with
+    ``[Errno 21] Is a directory: …/SAVEDATA/ULES00151S0``, so the sync ran without a
+    session. The folder is uploaded packed as one zip whose members are ``<serial>/<file>``,
+    so the folder's digest must be that archive's digest, not the directory inode's.
+    """
+
+    @staticmethod
+    def _folder(tmp_path):
+        folder = tmp_path / "SAVEDATA" / "ULES00151S0"
+        folder.mkdir(parents=True)
+        (folder / "DATA.BIN").write_bytes(b"progress")
+        (folder / "PARAM.SFO").write_bytes(b"title")
+        return folder
+
+    def test_the_digest_is_the_archive_this_folder_uploads_as(self, save_files, tmp_path):
+        folder = self._folder(tmp_path)
+        archive = tmp_path / "upload.zip"
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("ULES00151S0/DATA.BIN", b"progress")
+            zf.writestr("ULES00151S0/PARAM.SFO", b"title")
+
+        assert save_files.content_hash(str(folder)) == save_files.content_hash(str(archive))
+
+    def test_the_digest_does_not_depend_on_directory_order(self, save_files, tmp_path):
+        first = self._folder(tmp_path / "one")
+        second = tmp_path / "two" / "SAVEDATA" / "ULES00151S0"
+        second.mkdir(parents=True)
+        (second / "PARAM.SFO").write_bytes(b"title")
+        (second / "DATA.BIN").write_bytes(b"progress")
+
+        assert save_files.content_hash(str(first)) == save_files.content_hash(str(second))
+
+    def test_size_and_mtime_describe_the_saves_own_files(self, save_files, tmp_path):
+        folder = self._folder(tmp_path)
+
+        assert save_files.get_size(str(folder)) == len(b"progress") + len(b"title")
+        newest = max((folder / "DATA.BIN").stat().st_mtime, (folder / "PARAM.SFO").stat().st_mtime)
+        assert save_files.get_mtime(str(folder)) == pytest.approx(newest)
