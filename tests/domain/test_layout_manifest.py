@@ -9,6 +9,8 @@ half-applied launch, and never an error a caller has to catch.
 from __future__ import annotations
 
 import json
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -203,6 +205,9 @@ def _provision_layout():
     spec = importlib.util.spec_from_file_location("provision_layout", path)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
+    # Registered before exec: a module loaded from a path is absent from `sys.modules`, and
+    # `@dataclass(slots=True)` needs its own module entry to resolve the fields' annotations.
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -215,23 +220,94 @@ class TestTheProvisionedDolphinLaunch:
     a Wii title refuse to start. The host-spawn form bakes bare argv instead.
     """
 
-    def _manifest(self, platform: str, directory: str) -> dict:
+    def _manifest(self, platform: str, directory: str, hosts=None) -> dict:
         module = _provision_layout()
-        return module.build_manifest(__import__("pathlib").Path("/tmp/layout"), {platform: directory})
+        return module.build_manifest(Path("/tmp/layout"), {platform: directory}, hosts=hosts or _hosts())
 
     @pytest.mark.parametrize("platform", ["gc", "wii"])
-    def test_the_stated_argv_bakes_to_the_host_flatpak(self, platform: str) -> None:
+    def test_the_stated_argv_bakes_to_the_flatpak_the_device_has(self, platform: str) -> None:
         entry = self._manifest(platform, "/saves/root")["platforms"][platform]
         invocation = EmulatorInvocation.standalone(" ".join(entry["launch"]))
-        assert (
-            resolve_emulator_invocation({}, invocation)
-            == "/usr/bin/flatpak run org.DolphinEmu.dolphin-emu -b -e"
-        )
+        assert resolve_emulator_invocation({}, invocation) == "/usr/bin/flatpak run org.DolphinEmu.dolphin-emu -b -e"
+
+    @pytest.mark.parametrize("flatpak", ["/usr/local/bin/flatpak", "/home/someone/.local/bin/flatpak"])
+    def test_the_argv_names_wherever_flatpak_was_found(self, flatpak: str) -> None:
+        entry = self._manifest("wii", "/saves/root", hosts=_hosts(flatpak=flatpak))["platforms"]["wii"]
+        invocation = EmulatorInvocation.standalone(" ".join(entry["launch"]))
+        assert resolve_emulator_invocation({}, invocation) == f"{flatpak} run org.DolphinEmu.dolphin-emu -b -e"
 
     def test_no_argv_carries_a_placeholder_nothing_resolves(self) -> None:
         for platform in ("gc", "wii"):
             entry = self._manifest(platform, "/saves/root")["platforms"][platform]
             assert "%EMULATOR_DOLPHIN%" not in entry["launch"]
+
+
+def _hosts(*, flatpak: str | None = "/usr/bin/flatpak", eden: str | None = None, searched: tuple[str, ...] = ()):
+    """What a device states it has, spelled here so no test depends on the host running it."""
+    module = _provision_layout()
+    return module.HostBinaries(flatpak=flatpak, eden=eden, searched=searched)
+
+
+class TestTheProvisionerFindsThisDevicesPrograms:
+    """Measured in the audit that preceded this: a managed entry named
+    `~/Applications/Eden.AppImage` and `/usr/bin/flatpak` outright, so a device whose home or
+    Eden install is anywhere else got a launch line that cannot exec."""
+
+    def test_flatpak_is_named_absolutely_when_it_is_there(self) -> None:
+        module = _provision_layout()
+        found = module.discover_flatpak(isfile=lambda path: path == "/usr/bin/flatpak", which=lambda name: "/x")
+        assert found == "/usr/bin/flatpak"
+
+    def test_flatpak_falls_back_to_whatever_path_answers(self) -> None:
+        module = _provision_layout()
+        found = module.discover_flatpak(isfile=lambda path: False, which=lambda name: "/usr/local/bin/flatpak")
+        assert found == "/usr/local/bin/flatpak"
+
+    def test_a_device_with_no_flatpak_states_none(self) -> None:
+        module = _provision_layout()
+        assert module.discover_flatpak(isfile=lambda path: False, which=lambda name: None) is None
+
+    def test_edens_candidates_are_the_inventorys_own(self) -> None:
+        module = _provision_layout()
+        home = Path("/home/someone")
+        assert module.eden_candidates(home=home)[0] == str(home / "Applications" / "Eden.AppImage")
+
+    def test_eden_resolves_under_the_home_it_was_pointed_at(self, tmp_path) -> None:
+        module = _provision_layout()
+        (tmp_path / "Applications").mkdir()
+        binary = tmp_path / "Applications" / "Eden.AppImage"
+        binary.write_text("", encoding="utf-8")
+        assert module.discover_eden(home=tmp_path) == str(binary)
+
+    def test_edens_second_candidate_resolves_too(self, tmp_path) -> None:
+        module = _provision_layout()
+        # Injected rather than written to disk: a case-insensitive filesystem would make the
+        # first candidate match the second one's file and hide which candidate answered.
+        found = module.discover_eden(home=tmp_path, isfile=lambda path: path.endswith("eden.AppImage"))
+        assert found == str(tmp_path / "Applications" / "eden.AppImage")
+
+    def test_a_device_with_no_eden_states_none(self, tmp_path) -> None:
+        module = _provision_layout()
+        assert module.discover_eden(home=tmp_path) is None
+
+    def test_a_platform_whose_program_is_missing_is_refused(self, tmp_path) -> None:
+        module = _provision_layout()
+        with pytest.raises(module.ProvisionError):
+            module.build_manifest(tmp_path, {"wii": "/dolphin"}, hosts=_hosts(flatpak=None))
+
+    def test_the_refusal_names_what_was_searched(self, tmp_path) -> None:
+        module = _provision_layout()
+        hosts = _hosts(eden=None, searched=("/home/someone/Applications/Eden.AppImage",))
+        with pytest.raises(module.ProvisionError, match=r"Eden\.AppImage"):
+            module.build_manifest(tmp_path, {"switch": "/nand/slot"}, hosts=hosts)
+
+    def test_the_switch_argv_names_the_eden_that_was_found(self) -> None:
+        module = _provision_layout()
+        entry = module.build_manifest(
+            Path("/tmp/layout"), {"switch": "/nand/slot"}, hosts=_hosts(eden="/opt/Eden.AppImage")
+        )["platforms"]["switch"]
+        invocation = EmulatorInvocation.standalone(" ".join(entry["launch"]))
+        assert resolve_emulator_invocation({}, invocation) == "/opt/Eden.AppImage -f -g"
 
 
 class TestProvisioningKeepsWhatItDidNotName:
@@ -253,7 +329,7 @@ class TestProvisioningKeepsWhatItDidNotName:
         )
 
         document = module.build_manifest(
-            tmp_path, {"wii": "/dolphin/Wii/title/00010000"}, kept=module.existing_entries(tmp_path)
+            tmp_path, {"wii": "/dolphin/Wii/title/00010000"}, kept=module.existing_entries(tmp_path), hosts=_hosts()
         )
 
         assert document["platforms"]["switch"] == switch_entry

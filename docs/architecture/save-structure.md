@@ -195,6 +195,11 @@ look in `saves/gc` while the game wrote the card folder. The provisioner writes 
 has been checked, so a run that fails part-way leaves the plugin on the behaviour it had before the run; and the reader
 treats an unusable file as "nothing managed" rather than as an error, for the same reason.
 
+The program a managed entry names is the one **this** device has (ADR-0067): the flatpak executable and the Eden binary
+are discovered from the plugin's own inventory of candidate paths (`~/Applications/…`, expanded against `--home`),
+never written from one machine's home directory. A platform whose program cannot be found is refused — the run exits 2
+and names the paths it searched — so no manifest is ever written with a launch line that cannot exec.
+
 ```sh
 python3 scripts/provision_layout.py --check
 python3 scripts/provision_layout.py --adopt gc=/home/deck/retrodeck/saves/gc/User/GC/<region>/Card A
