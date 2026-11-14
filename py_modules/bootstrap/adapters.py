@@ -23,7 +23,11 @@ from models.shortcut_launcher import ShortcutLauncher
 from adapters.adoption_move import AdoptionMoveAdapter
 from adapters.asyncio_sleeper import AsyncioSleeper
 from adapters.atlas_catalogue import AtlasCatalogueAdapter, first_detected_installation
-from adapters.atlas_firmware import AtlasFirmwareAdapter, AtlasPlatformFirmwareAdapter
+from adapters.atlas_firmware import (
+    AtlasFirmwareAdapter,
+    AtlasPlatformFirmwareAdapter,
+    installation_for_runtime,
+)
 from adapters.atlas_host import grant_core_probe_interpreter
 from adapters.atlas_saves import AtlasSaveLocationAdapter
 from adapters.content_identity import ContentIdentityAdapter
@@ -565,11 +569,28 @@ def bootstrap(
         if retrodeck_paths.runtime_mode() is not RuntimeMode.BUILTIN:
             return None
         return retrodeck_paths.bios_path()
+
+    # And which arrangement answers at all. RetroDECK's marker is its flatpak's config file
+    # and outlives the flatpak: on the reference Deck it is present with no RetroDECK
+    # installed, and the handle it yields answers zero cores and zero requirements for
+    # every system while naming `~/retrodeck/bios`. Skipping it under the app's own runtime
+    # lets the arrangement that can answer — there the RetroArch flatpak — state the
+    # declarations, whose destinations are then read at the root above (ADR-0064).
+    def firmware_installation(home: str) -> Any | None:
+        """The arrangement a firmware question is put to, per the runtime being driven."""
+        return installation_for_runtime(home, builtin=retrodeck_paths.runtime_mode() is RuntimeMode.BUILTIN)
+
     firmware_resolver = AtlasFirmwareAdapter(
-        user_home=user_home, log_debug=debug_logger, reads_root=owned_bios_root
+        user_home=user_home,
+        log_debug=debug_logger,
+        reads_root=owned_bios_root,
+        choose_installation=firmware_installation,
     )
     platform_firmware_resolver = AtlasPlatformFirmwareAdapter(
-        user_home=user_home, log_debug=debug_logger, reads_root=owned_bios_root
+        user_home=user_home,
+        log_debug=debug_logger,
+        reads_root=owned_bios_root,
+        choose_installation=firmware_installation,
     )
     # Detection never picks a winner, so the choice is made here rather than in
     # the adapter: the highest-priority arrangement, which is RetroDECK wherever
