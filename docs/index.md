@@ -1,13 +1,18 @@
 # Arcoon Deck { .hero-title }
 
 A [Decky Loader](https://decky.xyz/) plugin that syncs your self-hosted [RomM](https://github.com/rommapp/romm) ROM
-library into Steam as Non-Steam shortcuts. Games launch through [RetroDECK](https://retrodeck.net/).
+library into Steam as Non-Steam shortcuts, and runs the emulators itself. The plugin keeps its own roots under your
+home directory — ROMs, BIOS files, saves, RetroArch, libretro cores and standalone emulators — so it downloads the
+core a platform needs and installs the standalone emulator a game needs. A shortcut it creates launches with no
+[RetroDECK](https://retrodeck.net/) installed; RetroDECK is supported as an opt-in runtime.
 
 **Arcoon Deck is a modification of [Tender](https://github.com/danielcopper/romm-tender)** — the plugin by
 [Daniel Copper](https://github.com/danielcopper) this one is built on. The library sync, artwork, BIOS management, ROM
 downloads and save-sync engine are his design and his code; what this fork changes is which platforms' saves travel,
 described in [Origin & Attribution](attribution.md).
 
+- **Install nothing first**: the plugin downloads the libretro core a platform needs and installs the standalone
+  emulator a game names — RetroDECK is optional, not required
 - Browse your entire RomM library directly from Steam's Gaming Mode
 - Download ROMs on-demand with cover art, hero banners, logos, and metadata
 - Manage BIOS files for systems that require them

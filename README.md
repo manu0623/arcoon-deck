@@ -1,11 +1,8 @@
 <div align="center">
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/lockup-animated-dark.gif">
-  <img src="assets/lockup-animated.gif" alt="Arcoon Deck" width="300">
-</picture>
-
 <h3>Your RomM library, running native in Steam</h3>
+
+<p><em>Games, cores and emulators — the plugin installs what a game needs, so RetroDECK is optional.</em></p>
 
 [Getting Started](docs/user-guide/getting-started.md) ·
 [Configuration](docs/user-guide/configuration.md) ·
@@ -25,8 +22,14 @@
 </div>
 
 A [Decky Loader](https://decky.xyz/) plugin that syncs your self-hosted [RomM](https://github.com/rommapp/romm) library
-into Steam as non-steam shortcuts. Games appear directly in your Steam library, launch through
-[RetroDECK](https://retrodeck.net/), and can keep their saves in sync across devices through your RomM server.
+into Steam as non-steam shortcuts, and runs the emulators itself. Games appear directly in your Steam library, launch
+through an emulator tree the plugin owns, and keep their saves in sync across devices through your RomM server.
+
+It is not a front-end for somebody else's installation. The plugin keeps its own roots under your home directory —
+ROMs, BIOS files, saves, RetroArch, libretro cores and the standalone emulators — so it can **download the core a
+platform needs and install the standalone emulator a game needs** (as a per-user flatpak or a published build), and a
+shortcut it creates launches with no [RetroDECK](https://retrodeck.net/) installed at all. RetroDECK remains
+supported as an opt-in runtime for libraries and saves that already live in its tree.
 
 **Arcoon Deck is a modification of [Tender](https://github.com/danielcopper/romm-tender)**, the plugin by
 [Daniel Copper](https://github.com/danielcopper) that this one is built on and unreservedly credits. The library sync,
@@ -51,6 +54,10 @@ _(Tender is named after the railway car behind a steam locomotive, or the boat t
 
 - **Library sync** — Pulls the platforms and collections you pick from your RomM server into Steam as non-steam
   shortcuts with RomM cover art; later runs are incremental and preview what will change before touching anything
+- **Cores and emulators, installed for you** — Download RetroArch and the libretro core a platform needs, or install
+  the standalone emulator a game names (PCSX2, DuckStation, PPSSPP, Dolphin, RPCS3, Azahar and more) into the
+  plugin's own tree, per-user flatpak or published build. Nothing has to be set up beforehand, and RetroDECK is
+  optional rather than required
 - **SteamGridDB artwork** — Add a free [SteamGridDB](https://www.steamgriddb.com/) key to get hero banners, logos, wide
   capsules and custom icons, with a manual picker for games that don't match automatically
 - **Save sync** — Opt-in save syncing across devices through your RomM server, automatically before launch and after you
@@ -87,7 +94,8 @@ _(Tender is named after the railway car behind a steam locomotive, or the boat t
   works in the Deck's Game Mode **or** in Big Picture Mode on any Linux PC
 - A running [RomM](https://github.com/rommapp/romm) server, **version 4.9.0 or newer** (the plugin stays inert against
   older servers)
-- [RetroDECK](https://retrodeck.net/) for launching games
+- Nothing else to launch games: the plugin downloads the cores and installs the standalone emulators it needs.
+  [RetroDECK](https://retrodeck.net/) is supported as an opt-in runtime, not a prerequisite
 
 ## Installation
 
@@ -149,8 +157,9 @@ This plugin stands on the shoulders of some great projects:
   [Origin & Attribution](docs/attribution.md) is his work, released under the GPL-3.0
 - [RomM](https://github.com/rommapp/romm) — the self-hosted ROM manager at the heart of this plugin. RomM provides the
   library, metadata, cover art, and save file storage that makes the entire sync experience possible
-- [RetroDECK](https://retrodeck.net/) — the all-in-one emulation solution for Steam Deck that bundles ES-DE, RetroArch,
-  and standalone emulators into a single flatpak. Our entire launch chain runs through RetroDECK
+- [RetroDECK](https://retrodeck.net/) — the all-in-one emulation solution for Steam Deck that bundles ES-DE, RetroArch
+  and standalone emulators into a single flatpak. It is the shape this plugin's opt-in runtime mode follows, and
+  where the platform layouts and launch conventions used here were first learned
 - [Decky Loader](https://decky.xyz/) — the plugin framework that makes all of this possible
 - [Valve](https://www.valvesoftware.com/) — for the Steam Deck, SteamOS, and an open enough platform to build on
 - [Unifideck](https://github.com/ma3ke/unifideck) — inspiration for game detail page injection techniques and gamepad

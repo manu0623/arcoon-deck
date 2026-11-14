@@ -4,8 +4,10 @@
 
 Arcoon Deck is a [Decky Loader](https://decky.xyz/) plugin that connects your self-hosted
 [RomM](https://github.com/rommapp/romm) ROM library to Steam. Every game in your RomM library appears as a Non-Steam
-shortcut in the Steam Library, complete with cover art, metadata, and collections. Games launch through
-[RetroDECK](https://retrodeck.net/).
+shortcut in the Steam Library, complete with cover art, metadata, and collections. The plugin also installs what the
+games need: it downloads the libretro core a platform requires and the standalone emulator a game names, into its own
+tree under your home directory. No emulator has to be installed beforehand, and
+[RetroDECK](https://retrodeck.net/) is optional — supported as an opt-in runtime, not a prerequisite.
 
 ## Prerequisites
 
@@ -16,8 +18,9 @@ Before installing the plugin, you need:
    only the token — your password is never saved. Each user should have their own RomM account (see
    [Save Sync](save-sync.md) for why this matters).
 
-2. **RetroDECK** — installed on your Steam Deck or Linux PC. RetroDECK handles the actual emulation. The plugin creates
-   shortcuts that launch games through RetroDECK.
+2. **Nothing else for emulation** — the plugin downloads RetroArch and the libretro cores it launches with, and
+   installs the standalone emulators a game needs. If you already keep a library in
+   [RetroDECK](https://retrodeck.net/), that is supported too, as an opt-in runtime.
 
 3. **Decky Loader** — the plugin framework. Install it from [decky.xyz](https://decky.xyz/) if you haven't already.
    Decky renders inside Steam's gamepad UI, and the plugin works wherever that UI runs: Gaming Mode on the Steam Deck,
