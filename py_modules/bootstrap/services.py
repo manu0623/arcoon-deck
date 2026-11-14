@@ -263,6 +263,9 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         detect_sort_change=migration_service.detect_save_sort_change,
         is_retrodeck_migration_pending=migration_service.is_retrodeck_migration_pending,
         uow_factory=cfg.callbacks.uow_factory,
+        # A PS2 save that arrives as a card image is opened and written into the folder card
+        # the launch reads (ADR-0072); the same adapter owns the bank's card shapes.
+        ps2_memcard=Ps2MemcardAdapter(logger=cfg.runtime.logger),
     )
     save_sync_service = SaveService(config=save_service_config)
 

@@ -33,7 +33,13 @@ import os
 import shutil
 from typing import TYPE_CHECKING, Any
 
-from domain.ps2_file_card import Ps2CardError, Ps2CardFile, Ps2CardFolder, read_file_card
+from domain.ps2_file_card import (
+    Ps2CardError,
+    Ps2CardFile,
+    Ps2CardFolder,
+    read_file_card,
+    select_folder,
+)
 from domain.save_bank import PS2_SUPERBLOCK_FILE, ps2_card_superblock
 
 if TYPE_CHECKING:
@@ -74,9 +80,7 @@ class Ps2MemcardAdapter:
         is converted, and the answer names each one so a caller can report them apart.
         """
         try:
-            names = sorted(
-                name for name in os.listdir(bank_dir) if name.lower().endswith(CARD_SUFFIX)
-            )
+            names = sorted(name for name in os.listdir(bank_dir) if name.lower().endswith(CARD_SUFFIX))
         except OSError:
             names = []
         if not names:
@@ -109,6 +113,46 @@ class Ps2MemcardAdapter:
             return "failed"
         self._logger.info(f"ps2 memcard: created the folder card {card}")
         return "created"
+
+    def read_folder(self, image: bytes, *, folder_name: str | None = None) -> Ps2CardFolder | None:
+        """One game's save folder out of a card image, or ``None`` when it does not say which.
+
+        The image is another client's card (an Android PS2 emulator uploads the whole
+        ``.ps2`` file), so nothing here depends on who wrote it: the folder the game's
+        saves live in is the folder the card itself names.
+        """
+        try:
+            folders = read_file_card(image)
+        except Ps2CardError as exc:
+            self._logger.info(f"ps2 card import: the image is not a card this plugin reads: {exc}")
+            return None
+        return select_folder(folders, folder_name)
+
+    def write_folder(self, image: bytes, folder: Ps2CardFolder, target: str) -> dict[str, Any]:
+        """Write *folder*'s files out of *image* into *target*; answer what was written.
+
+        The files are written into a staging directory beside *target* and moved in one at a
+        time, so a write that fails halfway leaves every file the emulator reads untouched.
+        A folder that holds subdirectories is refused rather than flattened: no measured PS2
+        save nests, and a nested one is not worth writing blind.
+        """
+        names = [item.name for item in folder.files]
+        if folder.folders:
+            self._logger.warning(f"ps2 card import: {folder.name} holds subdirectories; writing no part of it")
+            return {"status": "nested", "folder": folder.name, "files": []}
+        staged = f"{target}.importing"
+        try:
+            self._discard(staged)
+            self._write_folder(image, staged, folder)
+            os.makedirs(target, exist_ok=True)
+            for item in folder.files:
+                os.replace(os.path.join(staged, item.name), os.path.join(target, item.name))
+        except OSError as exc:
+            self._logger.warning(f"ps2 card import: cannot write {folder.name} into {target}: {exc}")
+            self._discard(staged)
+            return {"status": "failed", "folder": folder.name, "files": []}
+        self._discard(staged)
+        return {"status": "imported", "folder": folder.name, "files": names}
 
     def _convert(self, card: str, bank_dir: str, *, name: str = FOLDER_CARD_NAME) -> str:
         """Extract a file card's saves into a folder card, keeping the image.
@@ -179,7 +223,7 @@ class Ps2MemcardAdapter:
     def _write_file(image: bytes, path: str, item: Ps2CardFile) -> None:
         with open(path, "wb") as handle:
             for offset, length in item.spans:
-                handle.write(image[offset:offset + length])
+                handle.write(image[offset : offset + length])
 
     @staticmethod
     def _keep_image(card: str, bank_dir: str, *, name: str = FOLDER_CARD_NAME) -> str:

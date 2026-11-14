@@ -26,6 +26,7 @@ from services.saves._settings import (
 )
 from services.saves.copies import SaveCopyService, SaveCopyServiceConfig
 from services.saves.prune_support import PruneSaveSupport, PruneSaveSupportConfig
+from services.saves.ps2_card_import import Ps2CardImportService
 from services.saves.rom_info import RomInfoService, RomInfoServiceConfig
 from services.saves.slots import SlotsService, SlotsServiceConfig
 from services.saves.status import StatusService, StatusServiceConfig
@@ -74,6 +75,18 @@ class SaveService:
         # stages a card or where its settings live (ADR-0071).
         self._stage_card = config.stage_emulator_card
         self._adopt_card = config.adopt_emulator_card
+        # A PS2 save the server holds as a card image (another client's upload) is applied to
+        # the bank's folder card before the launch reads it; without the adapter there is
+        # nothing to write with, and the sync keeps skipping that shape as it always did.
+        self._ps2_card_import: Ps2CardImportService | None = None
+        if config.ps2_memcard is not None:
+            self._ps2_card_import = Ps2CardImportService(
+                rom_info=self._rom_info,
+                romm_api=config.romm_api,
+                memcard=config.ps2_memcard,
+                quarantine=self._sync_engine.quarantine_local_file,
+                logger=config.logger,
+            )
         # Resolve plugin version once at construction; the DeviceRegistry and
         # any other consumer receive the resolved string, not the Protocol.
         plugin_version = config.plugin_metadata.read_version(config.plugin_dir)
@@ -321,6 +334,7 @@ class SaveService:
         file, so the game's card has to be there before the launch resolves the save (ADR-0071).
         """
         self._stage_emulator_card(int(rom_id))
+        await self._import_ps2_card(int(rom_id))
         return await self._sync_engine.pre_launch_sync(rom_id)
 
     async def post_exit_sync(self, rom_id: int) -> dict[str, Any]:
@@ -344,6 +358,20 @@ class SaveService:
             self._stage_card(rom_id)
         except Exception as exc:  # a card that could not move is not a failed sync
             self._logger.warning(f"Emulator cards: staging before launch failed: {exc}")
+
+    async def _import_ps2_card(self, rom_id: int) -> None:
+        """Apply a PS2 save that arrived as a card image; never fail the launch.
+
+        The download is HTTP and the write is filesystem, so it runs off the event loop. A
+        card that cannot be read, downloaded or backed up logs and leaves the sync to
+        decide as it did before — a launch is never blocked by this.
+        """
+        if self._ps2_card_import is None:
+            return
+        try:
+            await self._loop.run_in_executor(None, self._ps2_card_import.import_newest, rom_id)
+        except Exception as exc:  # a card import is best-effort by design
+            self._logger.warning(f"PS2 card import: failed for rom {rom_id}: {exc}")
 
     def _adopt_emulator_card(self, rom_id: int) -> None:
         """Take the card the emulator wrote back into the bank; never fail the exit."""

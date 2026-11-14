@@ -110,6 +110,26 @@ def read_file_card(data: bytes) -> tuple[Ps2CardFolder, ...]:
     return tuple(folders)
 
 
+def select_folder(folders: tuple[Ps2CardFolder, ...], name: str | None) -> Ps2CardFolder | None:
+    """The save folder on a card that belongs to *name*, or ``None`` when it cannot be said.
+
+    A card holds one folder per game, named after the disc's serial and the game's own
+    title (``BASLUS-20307Burn``), so the folder the emulator reads here and the folder the
+    card carries are the same name — measured on the reference Deck, where the handheld's
+    card for rom 5338 held ``BASLUS-20307Burn`` and the bank's folder card already had it.
+    A card holding exactly one folder is that game's save whatever it was named; a card
+    with several folders and none of them *name* is ambiguous, and guessing would write one
+    game's progress over another's.
+    """
+    if name:
+        for folder in folders:
+            if folder.name == name:
+                return folder
+    if len(folders) == 1:
+        return folders[0]
+    return None
+
+
 def _geometry(data: bytes) -> _Geometry:
     if len(data) < 0x200:
         raise Ps2CardError("the image is shorter than one card page")
@@ -174,7 +194,7 @@ class _Reader:
         page_len = self._geometry.page_len
         stride = self._geometry.page_stride
         chunks = [
-            self._data[start + page * stride:start + page * stride + page_len]
+            self._data[start + page * stride : start + page * stride + page_len]
             for page in range(self._geometry.pages_per_cluster)
         ]
         return b"".join(chunks)
@@ -207,14 +227,8 @@ class _Reader:
                 if fat_cluster in (0, 0xFFFFFFFF):
                     continue
                 entries = self._cluster_bytes_absolute_or_relative(fat_cluster)
-                table.extend(
-                    struct.unpack_from("<I", entries, offset)[0] for offset in range(0, len(entries), 4)
-                )
-        return {
-            index: value & FAT_END
-            for index, value in enumerate(table)
-            if value not in (0, 0xFFFFFFFF)
-        }
+                table.extend(struct.unpack_from("<I", entries, offset)[0] for offset in range(0, len(entries), 4))
+        return {index: value & FAT_END for index, value in enumerate(table) if value not in (0, 0xFFFFFFFF)}
 
     # -- directories ------------------------------------------------------
     def root_entries(self) -> tuple[_Entry, ...]:
@@ -251,7 +265,7 @@ class _Reader:
         raw = b"".join(self.cluster_bytes(c) for c in self.chain(cluster, count=needed))
         entries: list[_Entry] = []
         for offset in range(0, min(len(raw), count * ENTRY_SIZE), ENTRY_SIZE):
-            entry = self._parse_entry(raw[offset:offset + ENTRY_SIZE])
+            entry = self._parse_entry(raw[offset : offset + ENTRY_SIZE])
             if entry is not None:
                 entries.append(entry)
         return tuple(entries)
@@ -263,7 +277,7 @@ class _Reader:
         (mode,) = struct.unpack_from("<H", raw, 0)
         (length,) = struct.unpack_from("<I", raw, 4)
         (cluster,) = struct.unpack_from("<I", raw, 0x10)
-        name = raw[NAME_OFFSET:NAME_OFFSET + NAME_LENGTH].split(b"\x00")[0].decode("latin-1").strip()
+        name = raw[NAME_OFFSET : NAME_OFFSET + NAME_LENGTH].split(b"\x00")[0].decode("latin-1").strip()
         # An unused slot is 0xff-filled, which decodes to a name nobody could write and
         # sets the same bits a real entry does — so it is refused by name, not by mode.
         if not name or name == "\ufffd" or any(not ch.isprintable() for ch in name):

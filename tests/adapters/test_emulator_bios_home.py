@@ -10,8 +10,8 @@ from __future__ import annotations
 import logging
 
 from adapters.emulator_bios_home import EmulatorBiosHomeAdapter
-from lib.ini_lines import rewrite_value as _rewrite
 from domain.emulator_bios_home import BiosHome
+from lib.ini_lines import rewrite_value as _rewrite
 
 MEASURED = """[BIOS]
 PatchFastBoot = false

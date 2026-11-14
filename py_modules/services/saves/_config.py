@@ -195,3 +195,8 @@ class SaveServiceConfig:
     # the emulator's card exactly where its own settings put it.
     stage_emulator_card: Callable[[int], Any] | None = None
     adopt_emulator_card: Callable[[int], Any] | None = None
+    # The adapter that reads and writes PS2 memory cards. A PS2 save on the server may be a
+    # card *image* (what an Android PS2 emulator uploads) while this plugin launches from a
+    # *folder* card, so the card has to be opened and its game's folder written out before a
+    # launch. ``None`` leaves that shape skipped, which is the behaviour before it existed.
+    ps2_memcard: Any | None = None
