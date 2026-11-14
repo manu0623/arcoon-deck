@@ -38,6 +38,7 @@ export function buildTabContent({ appId, binding, state }: TabContentContext): R
     return (
       <GameInfoTab
         key="tab-info"
+        appId={appId}
         romName={state.romName}
         regions={state.regions}
         languages={state.languages}

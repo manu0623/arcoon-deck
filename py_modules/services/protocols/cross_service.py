@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from domain.rom_install import RomInstall
     from domain.save_answer import SaveAnswer
     from domain.save_layout import InSaveDir, SaveLayout
-    from domain.shortcut_data import EmulatorInvocation
+    from domain.shortcut_data import EmulatorInvocation, LaunchBake
 
 
 class SessionCrashProbe(Protocol):
@@ -70,11 +70,13 @@ class RomInstallRecorder(Protocol):
         """
         ...
 
-    def do_resolve_launch_bake(self, rom_id: int, rom_detail: dict[str, Any], file_path: str) -> tuple[int | None, str]:
-        """Return the ``(shortcut_app_id, launch_options)`` the frontend must write.
+    def do_resolve_launch_bake(self, rom_id: int, rom_detail: dict[str, Any], file_path: str) -> LaunchBake:
+        """Return what the frontend must write onto this ROM's shortcut.
 
         ``app_id`` is ``None`` when the ROM has no Steam shortcut yet — the
-        frontend no-ops and the next sync writes the launch command.
+        frontend no-ops and the next sync creates the shortcut with the same
+        shape. ``exe`` / ``start_dir`` are set only on the Windows platform, where
+        the shortcut names the game itself rather than the plugin's launcher.
         """
         ...
 

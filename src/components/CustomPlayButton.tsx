@@ -78,7 +78,7 @@ import type {
 } from "../types";
 import { BENIGN_SYNC_SKIP_REASONS } from "../types";
 import { detach } from "../utils/detach";
-import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
+import { setLaunchOptionsConfirmed, setShortcutTarget } from "../utils/steamShortcuts";
 import {
   capturePruneLeaseAdmission,
   isPruneLeaseAdmissionCurrent,
@@ -1228,6 +1228,12 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
           "ROM adopt",
           async (signal) => {
             if (signal.aborted) return;
+            // A Windows game's shortcut names the game's own executable; an
+            // adopted install is an install (ADR-0028), so it takes the same
+            // shape here as it does on the download path.
+            if (result.exe && result.start_dir != null) {
+              setShortcutTarget(adoptedAppId, result.exe, result.start_dir);
+            }
             await setLaunchOptionsConfirmed(adoptedAppId, launchOptions).catch(() => false);
           },
           leaseOwner,

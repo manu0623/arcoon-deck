@@ -87,7 +87,9 @@ function IconBase(props) {
 }
 
 // THIS FILE IS AUTO GENERATED
-function FaTrash (props) {
+function FaWindows (props) {
+  return GenIcon({"attr":{"viewBox":"0 0 448 512"},"child":[{"tag":"path","attr":{"d":"M0 93.7l183.6-25.3v177.4H0V93.7zm0 324.6l183.6 25.3V268.4H0v149.9zm203.8 28L448 480V268.4H203.8v177.9zm0-380.6v180.1H448V32L203.8 65.7z"},"child":[]}]})(props);
+}function FaTrash (props) {
   return GenIcon({"attr":{"viewBox":"0 0 448 512"},"child":[{"tag":"path","attr":{"d":"M432 32H312l-9.4-18.7A24 24 0 0 0 281.1 0H166.8a23.72 23.72 0 0 0-21.4 13.3L136 32H16A16 16 0 0 0 0 48v32a16 16 0 0 0 16 16h416a16 16 0 0 0 16-16V48a16 16 0 0 0-16-16zM53.2 467a48 48 0 0 0 47.9 45h245.8a48 48 0 0 0 47.9-45L416 128H32z"},"child":[]}]})(props);
 }function FaTimesCircle (props) {
   return GenIcon({"attr":{"viewBox":"0 0 512 512"},"child":[{"tag":"path","attr":{"d":"M256 8C119 8 8 119 8 256s111 248 248 248 248-111 248-248S393 8 256 8zm121.6 313.1c4.7 4.7 4.7 12.3 0 17L338 377.6c-4.7 4.7-12.3 4.7-17 0L256 312l-65.1 65.6c-4.7 4.7-12.3 4.7-17 0L134.4 338c-4.7-4.7-4.7-12.3 0-17l65.6-65-65.6-65.1c-4.7-4.7-4.7-12.3 0-17l39.6-39.6c4.7-4.7 12.3-4.7 17 0l65 65.7 65.1-65.6c4.7-4.7 12.3-4.7 17 0l39.6 39.6c4.7 4.7 4.7 12.3 0 17L312 256l65.6 65.1z"},"child":[]}]})(props);
@@ -246,6 +248,8 @@ const getSystemCoreInfo = callable("get_system_core_info");
 const ensurePlatformCores = callable("ensure_platform_cores");
 const getDiscSelection = callable("get_disc_selection");
 const selectDisc = callable("select_disc");
+const getLaunchExe = callable("get_launch_exe");
+const setLaunchExe = callable("set_launch_exe");
 const getVersionList = callable("get_version_list");
 const switchVersion = callable("switch_version");
 const getPrunePreview = callable("get_prune_preview");
@@ -1220,9 +1224,24 @@ async function pacedForEach(items, fn, options = {}) {
 }
 
 const ROM_LAUNCHER_SUFFIX = "/bin/rom-launcher";
+const WINDOWS_LAUNCH_RE = /\.(exe|bat|cmd)$/i;
+function isOwnedShortcutExe(exe) {
+    if (typeof exe !== "string")
+        return false;
+    const bare = exe.replace(/^"|"$/g, "");
+    return bare.endsWith(ROM_LAUNCHER_SUFFIX) || WINDOWS_LAUNCH_RE.test(bare);
+}
 function isRomMShortcutDetails(details) {
-    return (typeof details?.strShortcutExe === "string" &&
-        details.strShortcutExe.replace(/^"|"$/g, "").endsWith(ROM_LAUNCHER_SUFFIX));
+    return isOwnedShortcutExe(details?.strShortcutExe);
+}
+function setShortcutTarget(appId, exe, startDir) {
+    try {
+        SteamClient.Apps.SetShortcutExe(appId, exe);
+        SteamClient.Apps.SetShortcutStartDir(appId, startDir);
+    }
+    catch (e) {
+        logError(`Failed to retarget shortcut ${appId}: ${e}`);
+    }
 }
 const HEARTBEAT_INTERVAL_MS = 10000;
 function getAppDetails(appId, timeoutMs = 2000) {
@@ -1279,7 +1298,7 @@ async function getLiveRomMShortcutAppIds() {
         const batch = appIds.slice(i, i + CONCURRENCY);
         const entries = await Promise.all(batch.map((appId) => getAppDetails(appId).then((details) => ({ appId, exe: details?.strShortcutExe ?? "" }))));
         for (const { appId, exe } of entries) {
-            if (exe.endsWith(ROM_LAUNCHER_SUFFIX))
+            if (isOwnedShortcutExe(exe))
                 ourAppIds.push(appId);
         }
         if (Date.now() - lastHeartbeat > HEARTBEAT_INTERVAL_MS) {
@@ -4546,6 +4565,9 @@ const CustomPlayButton = ({ appId }) => {
                 await withPruneLease(result.prune_lease_token, "ROM adopt", async (signal) => {
                     if (signal.aborted)
                         return;
+                    if (result.exe && result.start_dir != null) {
+                        setShortcutTarget(adoptedAppId, result.exe, result.start_dir);
+                    }
                     await setLaunchOptionsConfirmed(adoptedAppId, launchOptions).catch(() => false);
                 }, leaseOwner, admission);
             }
@@ -8412,6 +8434,80 @@ function useSaveSlotsLoad(state, slotsLoadedRef, readSeqs, setState) {
     }, [activeTab, saveSyncEnabled, romId, isOffline, slotsLoadedRef, readSeqs, setState]);
 }
 
+const EXE_GREY = "#dcdedf";
+const EXE_ACCENT = "#59b6ff";
+function labelFor(path) {
+    const parts = path.split("/");
+    return parts.length > 1 ? `${parts[parts.length - 1]}  ·  ${parts.slice(0, -1).join("/")}` : path;
+}
+const ExePicker = ({ appId, romId, current }) => {
+    const leaseOwner = `exe-picker:${appId}`;
+    const [selected, setSelected] = SP_REACT.useState(null);
+    const choose = async (path) => {
+        const admission = capturePruneLeaseAdmission(leaseOwner);
+        try {
+            const result = await setLaunchExe(romId, path);
+            await withPruneLease(result.prune_lease_token, "Launch exe", async (signal) => {
+                if (!result.success) {
+                    showToast(result.message || "Couldn't use that executable");
+                    return;
+                }
+                if (signal.aborted)
+                    return;
+                if (result.exe && result.start_dir != null) {
+                    setShortcutTarget(appId, result.exe, result.start_dir);
+                }
+                setSelected(path);
+            }, leaseOwner, admission);
+        }
+        catch (e) {
+            if (isPruneLeaseCancellation(e, admission)) {
+                logWarn(`ExePicker: launch target continuation was cancelled: ${e}`);
+                return;
+            }
+            logError(`ExePicker: setLaunchExe failed: ${e}`);
+            showToast("Couldn't use that executable");
+        }
+    };
+    const openMenu = (e) => {
+        detach((async () => {
+            let selection;
+            try {
+                selection = await getLaunchExe(romId);
+            }
+            catch (err) {
+                logError(`ExePicker: getLaunchExe failed: ${err}`);
+                showToast("Couldn't read this game's files");
+                return;
+            }
+            if (!selection.windows)
+                return;
+            const candidates = selection.candidates ?? [];
+            if (candidates.length === 0) {
+                showToast("This game installs as a single executable");
+                return;
+            }
+            const activePath = selected ?? selection.current;
+            DFL.showContextMenu(SP_JSX.jsxs(DFL.Menu, { label: "Launches", children: [candidates.map((candidate) => {
+                        const active = candidate.path === activePath;
+                        return (SP_JSX.jsx(DFL.MenuItem, { onClick: () => detach(choose(candidate.path)), children: SP_JSX.jsxs("span", { style: {
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: "10px",
+                                    color: active ? EXE_ACCENT : undefined,
+                                }, children: [SP_JSX.jsx(FaWindows, { size: 14 }), SP_JSX.jsx("span", { children: labelFor(candidate.path) }), active ? SP_JSX.jsx("span", { style: { marginLeft: "6px", fontWeight: 700 }, children: "\u2713" }) : null] }) }, candidate.path));
+                    }), selection.truncated ? SP_JSX.jsx(DFL.MenuItem, { disabled: true, children: "The list was cut to 60 files" }) : null] }), getEventTarget(e));
+        })());
+    };
+    SP_REACT.useEffect(() => {
+        mountPruneLeaseOwner(leaseOwner);
+        return () => {
+            detach(releasePruneLeasesByOwner(leaseOwner));
+        };
+    }, [leaseOwner]);
+    return (SP_JSX.jsxs("div", { className: "romm-panel-info-row", children: [SP_JSX.jsx("span", { className: "romm-panel-label", children: "Launches" }), SP_JSX.jsxs("span", { style: { display: "inline-flex", alignItems: "center", gap: "8px", color: EXE_GREY }, children: [SP_JSX.jsx(FaWindows, { size: 14 }), SP_JSX.jsx("span", { children: labelFor(selected ?? current) }), SP_JSX.jsx(DFL.DialogButton, { className: "romm-disc-btn", onClick: openMenu, children: SP_JSX.jsxs("span", { style: { display: "inline-flex", alignItems: "center", gap: "4px" }, children: ["Change", SP_JSX.jsx(FaChevronDown, { size: 10, color: "#cfd3d8" })] }) })] })] }));
+};
+
 function formatReleaseDate(timestamp) {
     if (!timestamp || timestamp <= 0)
         return null;
@@ -8470,19 +8566,26 @@ function gameInfoRows(props) {
     }
     return rows;
 }
-function romFileSection(installed, installedRom) {
+function isWindowsInstall(installedRom) {
+    return installedRom.platform_slug === "windows" || installedRom.platform_slug === "win";
+}
+function romFileSection(appId, installed, installedRom) {
     if (!installed || !installedRom)
         return null;
-    const noLaunchTargetNote = installedRom.launchable ? null : (SP_JSX.jsx("div", { className: "romm-panel-muted", style: { marginTop: "4px" }, children: `Downloaded, but nothing here is a format ${installedRom.system} can launch — no launch ` +
-            `command was set. The files are on disk; install them in the emulator to play.` }, "no-launch-target"));
-    return section("rom-file", "ROM File", infoRow$1("filename", "Filename", installedRom.file_name), noLaunchTargetNote);
+    const noLaunchTargetNote = installedRom.launchable ? null : (SP_JSX.jsx("div", { className: "romm-panel-muted", style: { marginTop: "4px" }, children: isWindowsInstall(installedRom)
+            ? `Downloaded, but no executable was found in it — no launch file was set. Pick the ` +
+                `file that starts this game below.`
+            : `Downloaded, but nothing here is a format ${installedRom.system} can launch — no launch ` +
+                `command was set. The files are on disk; install them in the emulator to play.` }, "no-launch-target"));
+    const exePicker = isWindowsInstall(installedRom) ? (SP_JSX.jsx(ExePicker, { appId: appId, romId: installedRom.rom_id, current: installedRom.file_name }, "exe-picker")) : null;
+    return section("rom-file", "ROM File", infoRow$1("filename", "Filename", installedRom.file_name), exePicker, noLaunchTargetNote);
 }
 const GameInfoTab = (props) => {
     const rows = gameInfoRows(props);
     const gameInfoSection = props.coverBase64
         ? section("game-info", null, SP_JSX.jsxs("div", { style: { display: "flex", gap: "16px", alignItems: "flex-start" }, children: [SP_JSX.jsx("img", { alt: "", src: `data:image/png;base64,${props.coverBase64}`, style: { width: "120px", borderRadius: "4px", flexShrink: 0, objectFit: "cover" } }, "cover"), SP_JSX.jsx("div", { style: { flex: 1 }, children: rows }, "details")] }, "game-info-row"))
         : section("game-info", null, ...rows);
-    return (SP_JSX.jsxs("div", { children: [gameInfoSection, romFileSection(props.installed, props.installedRom)] }));
+    return (SP_JSX.jsxs("div", { children: [gameInfoSection, romFileSection(props.appId, props.installed, props.installedRom)] }));
 };
 
 const STALE_NOTE = "Slots as RomM last reported them — counts and times are from that answer, not from now.";
@@ -9535,7 +9638,7 @@ function announceSaveSyncChange(romId) {
 function buildTabContent({ appId, binding, state }) {
     const romId = binding.romId;
     if (state.activeTab === "info") {
-        return (SP_JSX.jsx(GameInfoTab, { romName: state.romName, regions: state.regions, languages: state.languages, metadata: state.metadata, platformName: state.platformName, coverBase64: state.coverBase64, installed: state.installed, installedRom: state.installedRom }, "tab-info"));
+        return (SP_JSX.jsx(GameInfoTab, { appId: appId, romName: state.romName, regions: state.regions, languages: state.languages, metadata: state.metadata, platformName: state.platformName, coverBase64: state.coverBase64, installed: state.installed, installedRom: state.installedRom }, "tab-info"));
     }
     if (state.activeTab !== "saves")
         return null;
@@ -15640,6 +15743,9 @@ var index = definePlugin(() => {
                     const ok = await withPruneLease(data.prune_lease_token, "Download completion", async (signal) => {
                         if (isPruneLeaseCancelled(signal))
                             return false;
+                        if (data.exe && data.start_dir != null) {
+                            setShortcutTarget(appId, data.exe, data.start_dir);
+                        }
                         return setLaunchOptionsConfirmed(appId, data.launch_options);
                     });
                     if (!ok) {

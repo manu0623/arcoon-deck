@@ -402,6 +402,33 @@ no playlist either way.
     loose files — or, on cartridge systems, as a stray `.m3u`. The fix only affects new downloads; re-download the game
     to get the single clean ES-DE entry.
 
+### Windows (PC) Games
+
+RomM's **Windows** platform holds PC games rather than console ROMs, and nothing emulates them: Steam starts the
+game's own `.exe`, under Proton, exactly as it does for a Windows program you added by hand. Arcoon Deck therefore
+builds a Windows game's shortcut around that executable — the shortcut's target **is** the game's `.exe`, and its start
+folder is the game's own folder — instead of pointing at the plugin's launcher the way every console shortcut does.
+
+**The executable is found for you.** When the download finishes, the plugin picks the file that starts the game out of
+what was extracted: the shallowest executable that isn't an obvious installer or uninstaller (`setup.exe`,
+`unins000.exe`, a Visual C++ redistributable, a crash reporter), preferring one named after the game and, failing
+that, the largest.
+
+**If it guesses wrong, change it.** The game's **ROM File** section carries a **Launches** row naming the current
+executable, with **Change** beside it. That lists every executable in the game's folder — in the same order, so the
+plugin's own guess is the first row — and picking one repoints the installed game and its Steam shortcut in one step.
+The choice is remembered across restarts and re-syncs, and survives the game being uninstalled and downloaded again.
+
+The row appears only for a downloaded Windows game. A game that installs as a single executable has nothing to choose,
+and says so rather than opening an empty list.
+
+!!! note
+
+    A Windows game is not managed by an emulator, so the core picker, BIOS checks and save sync do not apply to it.
+    Games that ship as an installer (an `.msi` or a setup wizard that unpacks into the Proton prefix) still need to be
+    installed before the shortcut can start them — pick the installer, run it once, then use **Change** to point the
+    shortcut at the installed game.
+
 ### When a download has nothing launchable
 
 A few titles are distributed as an **installer** rather than as playable content — most commonly a PS3 game shipped as a

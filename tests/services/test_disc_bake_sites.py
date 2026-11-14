@@ -169,7 +169,8 @@ class TestInstallRecorderBakeSite:
         uow = FakeUnitOfWork()
         _seed_multi_disc(uow, rom_id=1, selected_disc=_DISC2, app_id=1234)
         recorder = self._recorder(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
-        app_id, launch_options = recorder.do_resolve_launch_bake(1, {}, _DISC1_PATH)
+        bake = recorder.do_resolve_launch_bake(1, {}, _DISC1_PATH)
+        app_id, launch_options = bake.app_id, bake.launch_options
         assert app_id == 1234
         assert launch_options.endswith(f'"{_DISC2_PATH}"')
 
@@ -177,7 +178,8 @@ class TestInstallRecorderBakeSite:
         uow = FakeUnitOfWork()
         _seed_multi_disc(uow, rom_id=1, selected_disc=None, app_id=1234)
         recorder = self._recorder(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
-        _app_id, launch_options = recorder.do_resolve_launch_bake(1, {}, _DISC1_PATH)
+        bake = recorder.do_resolve_launch_bake(1, {}, _DISC1_PATH)
+        launch_options = bake.launch_options
         assert launch_options.endswith(f'"{_DISC1_PATH}"')
 
     def test_resolve_launch_bake_returns_the_empty_command_for_an_unlaunchable_install(self, disc_resolver):
@@ -186,6 +188,7 @@ class TestInstallRecorderBakeSite:
         uow = FakeUnitOfWork()
         _seed_multi_disc(uow, rom_id=1, selected_disc=_DISC2, app_id=1234, launchable=False)
         recorder = self._recorder(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
-        app_id, launch_options = recorder.do_resolve_launch_bake(1, {}, _DISC1_PATH)
+        bake = recorder.do_resolve_launch_bake(1, {}, _DISC1_PATH)
+        app_id, launch_options = bake.app_id, bake.launch_options
         assert app_id == 1234
         assert launch_options == ""

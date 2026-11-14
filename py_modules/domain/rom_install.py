@@ -65,6 +65,23 @@ class RomInstall:
             launchable=launchable,
         )
 
+    def retarget_launch_file(self, new_file_path: str, *, launchable: bool | None = None) -> None:
+        """Point this install at another file inside it (the Windows exe picker).
+
+        The whole record moves: the launch file *is* what a shortcut starts, so a
+        user-chosen executable replaces it rather than sitting beside it. Only the
+        file changes — ``rom_dir`` still names the folder the install owns, which
+        is what an uninstall and a re-install operate on.
+
+        *launchable* is the caller's verdict on the new target, or ``None`` to
+        keep the recorded one. A user who picked an executable by hand has
+        answered the question the automatic guess could not, so the caller passes
+        ``True``; passing ``None`` is what every other retarget does.
+        """
+        self.file_path = new_file_path
+        if launchable is not None:
+            self.launchable = launchable
+
     def relocate(self, new_rom_dir: str | None, new_file_path: str) -> None:
         """Move the install to a new launch file and per-ROM directory (RetroDECK home migration).
 

@@ -84,7 +84,7 @@ import type {
   NavTarget,
   SettingsSection,
 } from "./types";
-import { setLaunchOptionsConfirmed } from "./utils/steamShortcuts";
+import { setLaunchOptionsConfirmed, setShortcutTarget } from "./utils/steamShortcuts";
 import { removeShortcutsPaced } from "./utils/shortcutRemoval";
 import { batchConfirmLaunchOptions } from "./utils/launchOptionsReconcile";
 import {
@@ -957,6 +957,12 @@ export default definePlugin(() => {
             try {
               const ok = await withPruneLease(data.prune_lease_token, "Download completion", async (signal) => {
                 if (isPruneLeaseCancelled(signal)) return false;
+                // A Windows game's shortcut IS the game — its exe and folder are
+                // what make Steam start it (under Proton). Repoint before the
+                // (empty) launch-command write so both land in one continuation.
+                if (data.exe && data.start_dir != null) {
+                  setShortcutTarget(appId, data.exe, data.start_dir);
+                }
                 return setLaunchOptionsConfirmed(appId, data.launch_options);
               });
               if (!ok) {

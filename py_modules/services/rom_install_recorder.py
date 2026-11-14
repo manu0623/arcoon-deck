@@ -21,7 +21,8 @@ from typing import TYPE_CHECKING, Any
 
 from domain.rom_files import is_launchable_target
 from domain.rom_install import RomInstall
-from domain.shortcut_data import build_launch_options, resolve_emulator_invocation
+from domain.shortcut_data import LaunchBake, build_launch_options, resolve_emulator_invocation
+from domain.windows_launch import is_windows_launch_file, is_windows_platform, shortcut_for_exe
 
 if TYPE_CHECKING:
     import logging
@@ -94,6 +95,14 @@ class RomInstallRecorder:
         # the install instead would delete a package the user's remaining option
         # is to install by hand in the emulator (#1582, #1652).
         launchable = is_launchable_target(file_path, rom_dir, self._system_extensions(system))
+        # A Windows game is launched by Steam as a Windows program, so its
+        # executable is a launch target whatever the catalogue says (there is no
+        # ES-DE ``windows`` accept-list on a device that never installed that
+        # system). Without this a downloaded PC game would be recorded
+        # unlaunchable — files kept, no launch target, and no shortcut able to
+        # start it.
+        if not launchable and is_windows_platform(rom_detail.get("platform_slug", "")):
+            launchable = is_windows_launch_file(file_path)
         if not launchable:
             self._logger.warning(f"No launch target for rom_id={rom_id}: {system} cannot launch '{file_path}'")
         try:
@@ -121,8 +130,8 @@ class RomInstallRecorder:
                 uow.roms.set_fs_size_bytes(int(rom_id), size)
         return file_path, None
 
-    def do_resolve_launch_bake(self, rom_id: int, rom_detail: dict[str, Any], file_path: str) -> tuple[int | None, str]:
-        """Return the ``(shortcut_app_id, launch_options)`` the frontend must write.
+    def do_resolve_launch_bake(self, rom_id: int, rom_detail: dict[str, Any], file_path: str) -> LaunchBake:
+        """Return the shortcut shape the frontend must write for a fresh install.
 
         Reads the ROM + its fresh install record in a short read UoW, then
         resolves the ROM's FULL active emulator through the shared ``active_core``
@@ -131,6 +140,13 @@ class RomInstallRecorder:
         shortcut yet (not synced) — the frontend no-ops and the next sync writes
         the launch command. The resolver already warns + degrades on a stale
         label/pin, so no bogus invocation or missing-disc path reaches the bake.
+
+        A **Windows** platform install answers with the game's own ``exe`` and
+        ``start_dir`` and no launch command: Steam starts a shortcut under Proton
+        from what its exe is, so the exe is the whole launch (see
+        :func:`domain.windows_launch.shortcut_for_exe`). An install with no launch
+        target takes the ordinary shape — its shortcut keeps the launcher and the
+        empty placeholder.
 
         This is the load-bearing site: the per-game core override and the disc
         pin both live on ``roms`` so they survive uninstall → reinstall, and
@@ -141,7 +157,8 @@ class RomInstallRecorder:
             install = uow.rom_installs.get(int(rom_id))
             selected_disc = rom.selected_disc if rom is not None else None
         if rom is None:
-            return (None, build_launch_options(resolve_emulator_invocation(rom_detail, None), file_path))
+            launch_options = build_launch_options(resolve_emulator_invocation(rom_detail, None), file_path)
+            return LaunchBake(app_id=None, launch_options=launch_options)
         emulator = self._active_core.active_emulator_for_rom(int(rom_id))
         # The install record was committed just before this read, so it is
         # present in the normal flow; guard for the rare race where it is not and
@@ -149,8 +166,11 @@ class RomInstallRecorder:
         bake_path = (
             self._disc_resolver.resolve_for_install(install, selected_disc) if install is not None else file_path
         )
+        if bake_path and is_windows_platform(rom_detail.get("platform_slug") or rom.platform_slug):
+            exe, start_dir = shortcut_for_exe(bake_path)
+            return LaunchBake(app_id=rom.shortcut_app_id, launch_options="", exe=exe, start_dir=start_dir)
         launch_options = build_launch_options(resolve_emulator_invocation(rom_detail, emulator), bake_path)
-        return (rom.shortcut_app_id, launch_options)
+        return LaunchBake(app_id=rom.shortcut_app_id, launch_options=launch_options)
 
     def do_record_applied_launch_options(self, rom_id: int, launch_options: str) -> None:
         """Record *launch_options* as ``rom_id``'s applied shortcut state in a short write UoW.

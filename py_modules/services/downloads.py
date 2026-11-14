@@ -29,6 +29,7 @@ from domain.rom_files import (
     resolve_local_file_name,
     synthetic_rom_name,
 )
+from domain.windows_launch import is_windows_platform
 from lib.errors import error_response
 from lib.list_result import ErrorCode
 from lib.path_safety import PathTraversalError, coerce_safe_component, safe_join
@@ -579,8 +580,12 @@ class DownloadService:
         m3u_supported = self._m3u_support(system)
         # Auto-generate M3U if missing and multiple disc files exist
         self._maybe_generate_m3u_io(extract_dir, rom_detail, m3u_supported)
-        # Detect launch file: prefer M3U > CUE > largest file
-        launch_file = self._collect_and_detect_launch_file(extract_dir, m3u_supported)
+        # Detect launch file: a Windows game's own executable, else M3U > CUE >
+        # largest file. The Windows branch is what makes a downloaded PC game
+        # reachable at all — nothing else in the priority list would name an .exe.
+        launch_file = self._collect_and_detect_launch_file(
+            extract_dir, m3u_supported, is_windows_platform(rom_detail.get("platform_slug", ""))
+        )
         # ES-DE collapses a multi-file dir into one game entry only when the
         # dir is named after the launch file *including* the extension. The
         # launch file is only known after extraction (the M3U may be
@@ -819,9 +824,10 @@ class DownloadService:
         entry = self._download_queue[rom_id]
         entry["status"] = "completed"
         entry["progress"] = 1.0
-        app_id, launch_options = await self._loop.run_in_executor(
+        bake = await self._loop.run_in_executor(
             None, self._install_recorder.do_resolve_launch_bake, rom_id, rom_detail, final_path
         )
+        app_id, launch_options = bake.app_id, bake.launch_options
         await self._emit(
             "download_complete",
             {
@@ -831,6 +837,14 @@ class DownloadService:
                 "file_path": final_path,
                 "app_id": app_id,
                 "launch_options": launch_options,
+                # A Windows game's shortcut is the game's own exe, and the
+                # frontend writes it here: the frame is the one place that knows
+                # this ROM just became launchable, so a shortcut created while it
+                # was uninstalled is repointed in the same breath rather than on
+                # the next sync (which cannot see the change — its delta compares
+                # launch commands, and both are empty on this platform).
+                "exe": bake.exe,
+                "start_dir": bake.start_dir,
                 "resumable": entry.get("resumable", False),
             },
         )
@@ -1170,14 +1184,15 @@ class DownloadService:
         self._download_file_store.write_text_atomic(m3u_path, build_m3u_content(disc_files))
         self._logger.info(f"Auto-generated M3U playlist: {m3u_path}")
 
-    def _collect_and_detect_launch_file(self, extract_dir: str, m3u_supported: bool) -> str:
+    def _collect_and_detect_launch_file(self, extract_dir: str, m3u_supported: bool, windows: bool = False) -> str:
         """Find the best launch file in an extracted multi-file ROM directory.
 
         *m3u_supported* gates whether a ``.m3u`` (including a RomM-bundled one)
-        may be chosen as the launch file — see ``detect_launch_file``.
+        may be chosen as the launch file, and *windows* selects the executable
+        ranking a PC game needs — see ``detect_launch_file``.
         """
         all_files = self._download_file_store.scan_files_with_sizes(extract_dir)
-        result = detect_launch_file(all_files, m3u_supported)
+        result = detect_launch_file(all_files, m3u_supported, windows=windows)
         return result if result is not None else extract_dir
 
     def _cleanup_partial_download(self, target_path, has_multiple, extract_dir_name, final_path=None):

@@ -19,6 +19,7 @@ from domain.owned_dolphin import command_with_user_dir
 from domain.retroarch_runner import RetroArchRunner, retroarch_command
 from domain.sibling_group import compute_sibling_group_key
 from domain.user_data_location import LAUNCHER_EXE_SUFFIX
+from domain.windows_launch import is_windows_platform, shortcut_for_exe
 
 # RetroDECK's flatpak application id — the single source of the string across the
 # plugin. Its plain ``flatpak run <app>`` form is the emulator invocation prefix
@@ -350,6 +351,26 @@ def select_shortcuts_to_relocate(exes: Mapping[int, str], launcher_exe: str) -> 
     return sorted(selected)
 
 
+@dataclass(frozen=True, slots=True)
+class LaunchBake:
+    """What a freshly installed ROM's shortcut has to carry, in one answer.
+
+    ``app_id`` is ``None`` when the ROM has no Steam shortcut yet. ``exe`` and
+    ``start_dir`` are set **only** for a Windows-platform install, whose shortcut
+    names the game itself rather than the plugin's launcher; every other platform
+    leaves them ``None`` and the caller writes ``launch_options`` alone.
+
+    The pair exists because a Windows game's launch command is empty by
+    construction — the exe *is* the command — so a caller that only knew how to
+    write ``launch_options`` would have nothing to write.
+    """
+
+    app_id: int | None
+    launch_options: str
+    exe: str | None = None
+    start_dir: str | None = None
+
+
 def build_shortcuts_data(
     roms: list[dict[str, Any]],
     launcher_exe: str,
@@ -387,44 +408,58 @@ def build_shortcuts_data(
     lookup is guarded so a missing or ``null`` ``rom_user`` degrades to ``False``.
     """
     start_dir = os.path.dirname(launcher_exe)
-    return [
-        {
-            "rom_id": rom["id"],
-            "name": rom["name"],
-            "fs_name": rom.get("fs_name", ""),
-            # Alphabetical tie-break key for sibling-group representative
-            # resolution (ADR-0021): RomM ships it on the list endpoint; fall
-            # back to the filename stem when absent. No DB column — carried only
-            # through the sync pipeline, never persisted.
-            "fs_name_no_ext": rom.get("fs_name_no_ext") or os.path.splitext(rom.get("fs_name", ""))[0],
-            "exe": launcher_exe,
-            "start_dir": start_dir,
-            "launch_options": (
-                build_launch_options(
-                    resolve_emulator_invocation(rom, core_overrides.get(rom["id"])),
-                    installed_paths[rom["id"]],
-                )
-                if rom["id"] in installed_paths
-                else ""
-            ),
-            "platform_name": rom.get("platform_name", "Unknown"),
-            "platform_slug": rom.get("platform_slug", ""),
-            "igdb_id": rom.get("igdb_id"),
-            "sgdb_id": rom.get("sgdb_id"),
-            "ra_id": rom.get("ra_id"),
-            # Server-reported ROM size in bytes (#1395), carried through so the
-            # commit persists it on the Rom aggregate (it rides the sync UPSERT
-            # like the version dimensions). Absent/None → "size unknown".
-            "fs_size_bytes": rom.get("fs_size_bytes"),
-            "cover_path": "",
-            # The sibling-group key + version dimensions (ADR-0021), extracted by
-            # the shared helper so the sync build and the version-switch persist
-            # path derive them identically. The incremental-skip path reconstructs
-            # ROM dicts from persisted rows carrying the authoritative key (real
-            # platform_id baked in) but no ``platform_id`` field, so the helper
-            # prefers that key over recomputing (which would yield ``…:None`` and
-            # split the group's bucket, #1296).
-            **extract_version_metadata(rom),
-        }
-        for rom in roms
-    ]
+    rows: list[dict[str, Any]] = []
+    for rom in roms:
+        path = installed_paths.get(rom["id"], "")
+        # A Windows game's shortcut IS the game: Steam starts a shortcut under
+        # Proton from what its exe is, so a shortcut pointing at the plugin's
+        # launcher would run natively and the game would never start. The launch
+        # command stays empty for the same reason — there is nothing to append to
+        # an exe that is already the program. Only an installed ROM with a launch
+        # target takes this shape; an uninstalled one keeps the launcher and the
+        # empty placeholder, so it still becomes ours once it is downloaded.
+        windows = bool(path) and is_windows_platform(rom.get("platform_slug", ""))
+        exe, row_start_dir = shortcut_for_exe(path) if windows else (launcher_exe, start_dir)
+        rows.append(
+            {
+                "rom_id": rom["id"],
+                "name": rom["name"],
+                "fs_name": rom.get("fs_name", ""),
+                # Alphabetical tie-break key for sibling-group representative
+                # resolution (ADR-0021): RomM ships it on the list endpoint; fall
+                # back to the filename stem when absent. No DB column — carried only
+                # through the sync pipeline, never persisted.
+                "fs_name_no_ext": rom.get("fs_name_no_ext") or os.path.splitext(rom.get("fs_name", ""))[0],
+                "exe": exe,
+                "start_dir": row_start_dir,
+                "launch_options": (
+                    ""
+                    if windows
+                    else build_launch_options(
+                        resolve_emulator_invocation(rom, core_overrides.get(rom["id"])),
+                        path,
+                    )
+                    if rom["id"] in installed_paths
+                    else ""
+                ),
+                "platform_name": rom.get("platform_name", "Unknown"),
+                "platform_slug": rom.get("platform_slug", ""),
+                "igdb_id": rom.get("igdb_id"),
+                "sgdb_id": rom.get("sgdb_id"),
+                "ra_id": rom.get("ra_id"),
+                # Server-reported ROM size in bytes (#1395), carried through so the
+                # commit persists it on the Rom aggregate (it rides the sync UPSERT
+                # like the version dimensions). Absent/None → "size unknown".
+                "fs_size_bytes": rom.get("fs_size_bytes"),
+                "cover_path": "",
+                # The sibling-group key + version dimensions (ADR-0021), extracted by
+                # the shared helper so the sync build and the version-switch persist
+                # path derive them identically. The incremental-skip path reconstructs
+                # ROM dicts from persisted rows carrying the authoritative key (real
+                # platform_id baked in) but no ``platform_id`` field, so the helper
+                # prefers that key over recomputing (which would yield ``…:None`` and
+                # split the group's bucket, #1296).
+                **extract_version_metadata(rom),
+            }
+        )
+    return rows

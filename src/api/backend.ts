@@ -801,6 +801,50 @@ export const getDiscSelection = callable<[number], DiscSelection>("get_disc_sele
 export const selectDisc = callable<[number, string | null], SelectDiscResult>("select_disc");
 
 /**
+ * One executable a Windows game's install folder holds — the manual picker's
+ * rows. `path` is relative to the install directory, which is also what
+ * `setLaunchExe` takes back, so neither side has to reconstruct an absolute path.
+ */
+export interface LaunchExeCandidate {
+  path: string;
+  size_bytes: number;
+}
+
+/**
+ * The Windows executable picker's state. `windows` is false for every ROM that is
+ * not an installed Windows game (the ordinary answer, not a failure); otherwise
+ * `current` names the recorded launch file and `candidates` is ranked best-first
+ * by the same rule that made the automatic pick — with `truncated` stating
+ * whether the list was cut rather than implying it holds everything.
+ */
+export interface LaunchExeSelection {
+  windows: boolean;
+  current?: string;
+  candidates?: LaunchExeCandidate[];
+  truncated?: boolean;
+}
+
+/** Outcome of `set_launch_exe`: the shortcut fields the frontend must write. */
+export interface SetLaunchExeResult {
+  success: boolean;
+  message?: string;
+  reason?: string;
+  /** Bound Steam `app_id`, or null/absent when the ROM has no shortcut yet. */
+  app_id?: number | null;
+  exe?: string;
+  start_dir?: string;
+  launch_options?: string;
+  prune_lease_token?: string;
+}
+
+// The Windows game's own executable (#windows). `get_launch_exe` reports what the
+// install launches and what else it could; `set_launch_exe` records the pick and
+// answers with the shortcut's new exe/start_dir. Keyed by rom_id — the choice
+// lives on the install record, so it survives a plugin reload.
+export const getLaunchExe = callable<[number], LaunchExeSelection>("get_launch_exe");
+export const setLaunchExe = callable<[number, string], SetLaunchExeResult>("set_launch_exe");
+
+/**
  * One version (RomM sibling) of a game in the version picker (#1297, ADR-0021).
  * `label` is the fs_name_no_ext-derived display text; the dimensions are the
  * version's own region/language/revision/tag attributes. `synced` is false for a

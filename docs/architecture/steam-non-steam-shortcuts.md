@@ -281,6 +281,54 @@ reconciliation of the `rom_installs` (on-disk install) view: a different aggrega
 unlike installs — one the backend physically cannot reconcile lazily, since no per-game backend seam observes Steam's
 shortcut store.
 
+## Windows games: the shortcut is the game
+
+RomM's `windows` platform is the one platform whose shortcut does **not** point at `bin/rom-launcher`. Nothing emulates a
+PC game: Steam starts the game's own `.exe`, and since the October 2026 client a Windows binary registered as a non-Steam
+shortcut is started under Proton by default. Steam decides that from what the shortcut's `exe` **is**, so a shortcut
+wrapping the game in our launcher script would run natively and never start — the exe is the launch, and the launch is
+the exe.
+
+So a Windows install's shortcut carries the game's executable and its folder:
+
+```text
+exe       = /roms/windows/Skyrim/Skyrim.exe
+startDir  = /roms/windows/Skyrim
+launchOptions = ""          # nothing to append — there is no wrapper and no emulator
+```
+
+`domain/windows_launch.py` owns both halves of the decision and nothing else does:
+
+- **Which file** — `pick_game_exe` ranks the extracted executables (shallowest, then named after the game, then largest,
+  with installers/redistributables/crash reporters excluded outright). The download path calls it through
+  `detect_launch_file(..., windows=True)`; the manual picker (`services/launch_exe.py`) lists its ordering, so the guess
+  is always the list's first row. A picker that re-ordered independently would make the automatic choice unexplainable.
+- **What shape** — `shortcut_for_exe` answers the `(exe, start_dir)` pair, which `build_shortcuts_data` bakes per ROM and
+  `RomInstallRecorder.do_resolve_launch_bake` returns as a `LaunchBake` for the download/adoption paths.
+
+**Ownership is two exe shapes, not one.** `isOwnedShortcutExe` (frontend) and `_is_owned_exe`
+(`services/prune/requests.py`) accept the `/bin/rom-launcher` suffix **or** a Windows launch extension. Everything that
+filters by ownership — the reconcile scan, orphan adoption, removal, cleanup — reads one of those two predicates, so a
+Windows shortcut is neither invisible (which would unbind and duplicate it on every sync) nor a way to adopt a foreign
+`.exe` shortcut by name unless that name matches a RomM game exactly.
+
+Three consequences worth stating, because each is silent:
+
+- **The delta apply cannot see the change.** `applied_launch_options` compares launch _commands_, and a Windows
+  shortcut's command is `""` both before and after a game becomes launchable. The `download_complete` frame therefore
+  carries the `exe`/`start_dir` alongside the command and the frontend writes both; a sync alone would skip the
+  shortcut as unchanged. A **Force Full Sync** still re-touches everything (`applied_launch_options` is reset to NULL).
+- **The launcher relocation leaves them alone.** `select_shortcuts_to_relocate` only selects exes ending in the launcher
+  suffix, which is exactly right: a Windows shortcut's exe is not ours to move, and repointing it at the launcher would
+  stop it launching.
+- **Nothing emulator-shaped applies.** `ActiveCoreResolver` returns no invocation for a Windows platform, so no core,
+  BIOS answer, appendconfig or save-bank path is baked — asking would answer about an emulator that is not in the
+  process tree.
+
+**Not measured on hardware.** The launch itself rests on two facts read rather than run: Steam's default Proton
+assignment for Windows binaries, and `SetShortcutExe` being appId-safe (the launcher-relocation measurement). No
+Windows game has been launched through a real shortcut by this build.
+
 ## BIsModOrShortcut
 
 Non-Steam shortcuts return `BIsModOrShortcut() = true` by default. This is their natural state — Steam uses this flag to

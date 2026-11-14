@@ -12,9 +12,12 @@
 
 import { FC, type ReactElement } from "react";
 import type { InstalledRom, RomMetadata } from "../types";
+import { ExePicker } from "./ExePicker";
 import { infoRow, section } from "./panelSection";
 
 interface GameInfoTabProps {
+  /** The Steam app id, so a row that owns a Steam write (the exe picker) can make it. */
+  appId: number;
   /** The RomM game name (distinct from the Steam shortcut hero title, which can differ). */
   romName: string;
   /** Region / Languages of the active version (ADR-0021) — an empty list hides its row. */
@@ -134,8 +137,13 @@ function gameInfoRows(props: GameInfoTabProps): ReactElement[] {
   return rows;
 }
 
+/** Whether this install is a PC game, whose shortcut names its own executable. */
+function isWindowsInstall(installedRom: InstalledRom): boolean {
+  return installedRom.platform_slug === "windows" || installedRom.platform_slug === "win";
+}
+
 /** The ROM File section — present only once the ROM is on disk. */
-function romFileSection(installed: boolean, installedRom: InstalledRom | null): ReactElement | null {
+function romFileSection(appId: number, installed: boolean, installedRom: InstalledRom | null): ReactElement | null {
   if (!installed || !installedRom) return null;
 
   // A downloaded ROM the system cannot launch keeps its files and its row; only
@@ -143,12 +151,27 @@ function romFileSection(installed: boolean, installedRom: InstalledRom | null): 
   // so — without it the game simply never starts and nothing explains why.
   const noLaunchTargetNote = installedRom.launchable ? null : (
     <div key="no-launch-target" className="romm-panel-muted" style={{ marginTop: "4px" }}>
-      {`Downloaded, but nothing here is a format ${installedRom.system} can launch — no launch ` +
-        `command was set. The files are on disk; install them in the emulator to play.`}
+      {isWindowsInstall(installedRom)
+        ? `Downloaded, but no executable was found in it — no launch file was set. Pick the ` +
+          `file that starts this game below.`
+        : `Downloaded, but nothing here is a format ${installedRom.system} can launch — no launch ` +
+          `command was set. The files are on disk; install them in the emulator to play.`}
     </div>
   );
 
-  return section("rom-file", "ROM File", infoRow("filename", "Filename", installedRom.file_name), noLaunchTargetNote);
+  // A PC game's executable is a decision, not a format: the download guesses it
+  // and this row lets the user overrule the guess.
+  const exePicker = isWindowsInstall(installedRom) ? (
+    <ExePicker key="exe-picker" appId={appId} romId={installedRom.rom_id} current={installedRom.file_name} />
+  ) : null;
+
+  return section(
+    "rom-file",
+    "ROM File",
+    infoRow("filename", "Filename", installedRom.file_name),
+    exePicker,
+    noLaunchTargetNote,
+  );
 }
 
 export const GameInfoTab: FC<GameInfoTabProps> = (props) => {
@@ -175,7 +198,7 @@ export const GameInfoTab: FC<GameInfoTabProps> = (props) => {
   return (
     <div>
       {gameInfoSection}
-      {romFileSection(props.installed, props.installedRom)}
+      {romFileSection(props.appId, props.installed, props.installedRom)}
     </div>
   );
 };

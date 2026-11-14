@@ -33,6 +33,7 @@ from services.crash_detection import CrashDetectionService, CrashDetectionServic
 from services.data_location import DataLocationService, DataLocationServiceConfig
 from services.disc import DiscService, DiscServiceConfig
 from services.disc_launch_resolver import DiscLaunchResolver, DiscLaunchResolverConfig
+from services.launch_exe import LaunchExeService, LaunchExeServiceConfig
 from services.downloads import DownloadService, DownloadServiceConfig
 from services.emulator_bios_homes import EmulatorBiosHomeConfig, EmulatorBiosHomeService
 from services.emulator_card_stages import EmulatorCardStageConfig, EmulatorCardStageService
@@ -624,6 +625,18 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         ),
     )
 
+    # The Windows game's executable: the manual half of the automatic pick a
+    # download makes. It reads the install directory through the same file store
+    # the download path detects its launch file with.
+    launch_exe_service = LaunchExeService(
+        config=LaunchExeServiceConfig(
+            loop=cfg.runtime.loop,
+            logger=cfg.runtime.logger,
+            uow_factory=cfg.callbacks.uow_factory,
+            file_store=cfg.adapters.download_file_store,
+        ),
+    )
+
     connection_service = ConnectionService(
         config=ConnectionServiceConfig(
             settings=cfg.stores.settings,
@@ -808,6 +821,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         "emulator_card_stage_service": emulator_card_stage_service,
         "rom_install_discovery_service": rom_install_discovery_service,
         "disc_service": disc_service,
+        "launch_exe_service": launch_exe_service,
         "version_switch_service": version_switch_service,
         "connection_service": connection_service,
         "startup_healing_service": startup_healing_service,

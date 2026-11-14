@@ -29,6 +29,7 @@ from domain.retroarch_appendconfig import with_appendconfig
 from domain.retroarch_runner import resolve_backend
 from domain.rom_files import folder_boot_root
 from domain.shortcut_data import EmulatorInvocation
+from domain.windows_launch import is_windows_platform
 
 if TYPE_CHECKING:
     import logging
@@ -157,6 +158,14 @@ class ActiveCoreResolver:
         rom, install = self._read_rom_and_install(rom_id)
         if rom is None:
             self._logger.warning("active_core_resolver: no ROM for rom_id=%s; resolving to plain launch", rom_id)
+            return None
+
+        # A Windows game is not played by anything we resolve. Steam starts the
+        # game's own executable under Proton, so there is no core to pick and no
+        # emulator command to bake — and answering one would point the launch
+        # chain at a wine/emulator row that has nothing to do with this game.
+        # ``None`` here is the honest answer: "this platform has no emulator".
+        if is_windows_platform(rom.platform_slug):
             return None
 
         managed = self._managed_entry(rom)

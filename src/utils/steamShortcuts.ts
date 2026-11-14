@@ -10,11 +10,46 @@ import { delay } from "./pacedOps";
  */
 const ROM_LAUNCHER_SUFFIX = "/bin/rom-launcher";
 
+/**
+ * The second ownership shape: a Windows-platform game's shortcut names the game
+ * itself, because Steam decides whether to start a shortcut under Proton from
+ * what its exe is — a wrapper script would run natively and the game would never
+ * start. So "ours" is two exe shapes, and nothing else is either of them.
+ */
+const WINDOWS_LAUNCH_RE = /\.(exe|bat|cmd)$/i;
+
+/**
+ * Whether a shortcut's exe is one this plugin writes — the launcher wrapper, or
+ * a Windows game's own executable. Quotes are stripped first: `AddShortcut`
+ * stores ours unquoted, a hand-added shortcut can be quoted, and reading one as
+ * foreign would leave it behind while counting the run complete.
+ */
+export function isOwnedShortcutExe(exe: string | null | undefined): boolean {
+  if (typeof exe !== "string") return false;
+  const bare = exe.replace(/^"|"$/g, "");
+  return bare.endsWith(ROM_LAUNCHER_SUFFIX) || WINDOWS_LAUNCH_RE.test(bare);
+}
+
 export function isRomMShortcutDetails(details: SteamAppDetails | null): details is SteamAppDetails {
-  return (
-    typeof details?.strShortcutExe === "string" &&
-    details.strShortcutExe.replace(/^"|"$/g, "").endsWith(ROM_LAUNCHER_SUFFIX)
-  );
+  return isOwnedShortcutExe(details?.strShortcutExe);
+}
+
+/**
+ * Point an existing shortcut at another target: a Windows game's own exe and its
+ * folder. Two `Set*` calls on an existing shortcut, which are appId-safe — the
+ * same measurement that covers the launcher relocation covers this.
+ *
+ * There is no confirm poll here: Steam gives `SetShortcutExe` no read-back the
+ * way `strLaunchOptions` gives `SetAppLaunchOptions` one, so the write is
+ * fire-and-forget and the backend's next re-bake is the repair path.
+ */
+export function setShortcutTarget(appId: number, exe: string, startDir: string): void {
+  try {
+    SteamClient.Apps.SetShortcutExe(appId, exe);
+    SteamClient.Apps.SetShortcutStartDir(appId, startDir);
+  } catch (e) {
+    logError(`Failed to retarget shortcut ${appId}: ${e}`);
+  }
 }
 
 const HEARTBEAT_INTERVAL_MS = 10_000;
@@ -86,8 +121,9 @@ export function setLaunchOptionsConfirmed(appId: number, value: string, timeoutM
 
 /**
  * Scan Steam's live shortcut store and return the appIds of every RomM-owned
- * shortcut — those whose `strShortcutExe` ends with `/bin/rom-launcher` (the
- * live-in-Steam ownership marker), regardless of any backend binding.
+ * shortcut — those whose exe is one this plugin writes (the `/bin/rom-launcher`
+ * wrapper, or a Windows game's own executable), regardless of any backend
+ * binding.
  *
  * Returns the raw live appId list, or `null` when the scan could **not** run
  * because Steam's shortcut store was unreadable (`collectionStore` /
@@ -118,7 +154,7 @@ export async function getLiveRomMShortcutAppIds(): Promise<number[] | null> {
       batch.map((appId) => getAppDetails(appId).then((details) => ({ appId, exe: details?.strShortcutExe ?? "" }))),
     );
     for (const { appId, exe } of entries) {
-      if (exe.endsWith(ROM_LAUNCHER_SUFFIX)) ourAppIds.push(appId);
+      if (isOwnedShortcutExe(exe)) ourAppIds.push(appId);
     }
     if (Date.now() - lastHeartbeat > HEARTBEAT_INTERVAL_MS) {
       syncHeartbeat().catch(() => {});
@@ -153,8 +189,8 @@ export function getAllNonSteamShortcutAppIds(): number[] | null {
 /**
  * Scan all non-Steam shortcuts and return those managed by RomM.
  *
- * A shortcut is RomM-owned when BOTH hold: its `strShortcutExe` ends with
- * `/bin/rom-launcher` (live-in-Steam ownership marker) AND its appId is bound
+ * A shortcut is RomM-owned when BOTH hold: its exe is one this plugin writes
+ * (`isOwnedShortcutExe`) AND its appId is bound
  * to a rom_id in the backend's `get_app_id_rom_id_map()` (the authoritative
  * rom_id↔appId binding now that launch options no longer carry the id). After
  * a DB reset the backend map is empty, so our shortcuts are detected by exe but

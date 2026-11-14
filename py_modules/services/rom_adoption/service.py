@@ -50,6 +50,7 @@ from domain.rom_files import (
     resolve_local_file_name,
     synthetic_rom_name,
 )
+from domain.windows_launch import is_windows_platform
 from lib.errors import error_response
 from lib.path_safety import PathTraversalError, coerce_safe_component, is_safe_rom_path, safe_join
 from services.rom_adoption._target import Target as _Target
@@ -658,7 +659,8 @@ class RomAdoptionService:
         )
         if error is not None or recorded is None:
             return {"success": False, "reason": "invalid_install", "message": error or "Could not record the install"}
-        app_id, launch_options = self._install_recorder.do_resolve_launch_bake(rom_id, rom_detail, recorded)
+        bake = self._install_recorder.do_resolve_launch_bake(rom_id, rom_detail, recorded)
+        app_id, launch_options = bake.app_id, bake.launch_options
         # Record the freshly baked command as this ROM's applied state (the value
         # the frontend writes onto the shortcut on this result), so the next sync
         # skips the now-correct shortcut instead of re-touching it (delta apply,
@@ -676,6 +678,10 @@ class RomAdoptionService:
             "rom_dir": rom_dir,
             "app_id": app_id,
             "launch_options": launch_options,
+            # A Windows install's shortcut is the game's own exe; ``None`` on
+            # every other platform, where the launch command says it all.
+            "exe": bake.exe,
+            "start_dir": bake.start_dir,
         }
 
     def _adopted_launch_file(self, target: _Target) -> str:
@@ -688,7 +694,9 @@ class RomAdoptionService:
         or unlaunchable target.
         """
         files = self._download_file_store.scan_files_with_sizes(target.path)
-        detected = detect_launch_file(files, self._m3u_support(target.system))
+        detected = detect_launch_file(
+            files, self._m3u_support(target.system), windows=is_windows_platform(target.system)
+        )
         return detected if detected is not None else target.path
 
     # ── Verify ──────────────────────────────────────────────────────

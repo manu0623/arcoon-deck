@@ -31,6 +31,7 @@ from domain.adoption_rename import (
 )
 from domain.rom_files import detect_launch_file
 from domain.save_layout import ContentDir, InSaveDir
+from domain.windows_launch import is_windows_platform
 from domain.save_path import resolve_save_dir
 
 if TYPE_CHECKING:
@@ -319,7 +320,7 @@ class AdoptionRenamer:
         if not target.is_multi:
             return (source_path, target.path)
         files = self._download_file_store.scan_files_with_sizes(source_path)
-        detected = detect_launch_file(files, self._m3u_support(target.system))
+        detected = detect_launch_file(files, self._m3u_support(target.system), windows=is_windows_platform(target.system))
         if detected is None:
             return ("", "")
         return (detected, os.path.join(target.path, os.path.relpath(detected, source_path)))

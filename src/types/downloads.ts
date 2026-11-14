@@ -48,6 +48,14 @@ export interface DownloadCompleteEvent {
   app_id: number | null;
   /** Full launch command for the just-downloaded ROM (now installed/launchable). */
   launch_options: string;
+  /**
+   * A Windows-platform install's executable and its folder. Present only on that
+   * platform, where the shortcut names the game itself instead of the plugin's
+   * launcher — the frontend writes these onto the bound shortcut, because the
+   * launch command is empty by construction and carries nothing to write.
+   */
+  exe?: string | null;
+  start_dir?: string | null;
   /** Whether the just-finished transfer was resumable (carried for store parity). */
   resumable?: boolean;
   prune_lease_token?: string;
@@ -211,6 +219,9 @@ export interface AdoptResult {
   /** Bound Steam `app_id`, or `null` when the ROM has no shortcut yet. */
   app_id?: number | null;
   launch_options?: string;
+  /** A Windows install's executable and folder — see `DownloadCompleteEvent`. */
+  exe?: string | null;
+  start_dir?: string | null;
   prune_lease_token?: string;
   /** Present only on a `rename_collisions` refusal. */
   collisions?: RenameCollision[];

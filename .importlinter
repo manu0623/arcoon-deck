@@ -126,6 +126,7 @@ modules =
     services.firmware
     services.game_detail
     services.game_process
+    services.launch_exe
     services.launch_gate
     services.legacy_install
     services.library

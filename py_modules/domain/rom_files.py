@@ -10,6 +10,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from domain.windows_launch import pick_game_exe
+
 
 def is_multi_file_download(rom_detail: dict[str, Any]) -> bool:
     """Decide whether RomM will serve this ROM as a ZIP that must be extracted.
@@ -85,10 +87,13 @@ def build_m3u_content(disc_files: list[str]) -> str:
     return "\n".join(sorted_files) + "\n"
 
 
-def detect_launch_file(files: list[tuple[str, int]], m3u_supported: bool) -> str | None:
+def detect_launch_file(files: list[tuple[str, int]], m3u_supported: bool, *, windows: bool = False) -> str | None:
     """Pick the best launch file from a list of (path, size) tuples.
 
     Priority order:
+    0. Windows: the game's own executable — only when *windows* (see
+       :func:`domain.windows_launch.pick_game_exe`), because a PC game's launch
+       target is a fact about its tree rather than about a disc or a playlist
     1. M3U playlist — only when *m3u_supported* (platform-gated; otherwise a
        RomM-bundled ``.m3u`` is skipped so selection falls through to the real
        game file)
@@ -108,6 +113,13 @@ def detect_launch_file(files: list[tuple[str, int]], m3u_supported: bool) -> str
         Whether the target platform supports ``.m3u`` (ES-DE lists it as a
         supported extension for the system). When ``False``, a ``.m3u`` is never
         chosen as the launch file.
+    windows:
+        Whether the target is RomM's Windows platform. Its games are started by
+        Steam as Windows programs, so an executable the ranking can name always
+        wins over every rule below — a Windows repack can carry a ``.cue`` for
+        its soundtrack, and the largest-file fallback would pick the game's data
+        blob. When the ranking names nothing, selection falls through unchanged
+        and the recorder records the install as having no launch target.
 
     Returns
     -------
@@ -116,6 +128,11 @@ def detect_launch_file(files: list[tuple[str, int]], m3u_supported: bool) -> str
     """
     if not files:
         return None
+
+    if windows:
+        exe = pick_game_exe(files)
+        if exe is not None:
+            return exe
 
     paths = [path for path, _size in files]
 

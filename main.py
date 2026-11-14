@@ -216,6 +216,7 @@ class Plugin:
         self._emulator_card_stage_service = services["emulator_card_stage_service"]
         self._rom_install_discovery_service = services["rom_install_discovery_service"]
         self._disc_service = services["disc_service"]
+        self._launch_exe_service = services["launch_exe_service"]
         self._version_switch_service = services["version_switch_service"]
         self._prune_service = services["prune_service"]
         self._connection_service = services["connection_service"]
@@ -635,6 +636,30 @@ class Plugin:
         result = await self._disc_service.select_disc(rom_id, filename)
         if result.get("success") and result.get("launch_options") is not None:
             result["prune_lease_token"] = await acquire_prune_conflict_lease(self, "disc_selection")
+        return result
+
+    # ── Windows executable picker delegation to LaunchExeService ──────────────
+
+    async def get_launch_exe(self, rom_id):
+        """Report the Windows game's executable and the ones it could be instead.
+
+        ``{"windows": False}`` for every ROM that is not an installed Windows
+        game, which is the answer for most pages and not a failure.
+        """
+        return await self._launch_exe_service.get_launch_exe(rom_id)
+
+    @migration_blocked
+    @prune_active_blocked
+    async def set_launch_exe(self, rom_id, relative_path):
+        """Point an installed Windows game's shortcut at the executable the user chose.
+
+        The pick is persisted on the install record; the returned ``exe`` /
+        ``start_dir`` are what the frontend writes onto the live shortcut, and a
+        lease is taken because that write races the removed-game cleanup.
+        """
+        result = await self._launch_exe_service.set_launch_exe(rom_id, relative_path)
+        if result.get("success") and result.get("app_id") is not None:
+            result["prune_lease_token"] = await acquire_prune_conflict_lease(self, "launch_exe_selection")
         return result
 
     # ── Version picker delegation to VersionSwitchService ──────────────

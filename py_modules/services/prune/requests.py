@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any, Literal
 
+from domain.user_data_location import LAUNCHER_EXE_SUFFIX
+from domain.windows_launch import is_windows_launch_file
 from services.prune._models import PruneOptions
 
 _MAX_PREVIEW_PAGE = 100
@@ -78,6 +80,19 @@ def parse_selection_page(request: object) -> tuple[str, str | None, list[int], b
     return preview_id, selection_id, rom_ids, final
 
 
+def _is_owned_exe(exe: str) -> bool:
+    """Whether *exe* is one this plugin writes — the two shapes a shortcut may have.
+
+    A shortcut of ours starts through the plugin's ``rom-launcher`` wrapper, or —
+    on the Windows platform — names the game's own executable, which is how Steam
+    knows to run it under Proton (:mod:`domain.windows_launch`). Both are ours and
+    nothing else is: a foreign shortcut named like a removed RomM game must never
+    be deleted by this cleanup.
+    """
+    bare = exe.rstrip('"')
+    return bare.endswith(LAUNCHER_EXE_SUFFIX) or is_windows_launch_file(bare)
+
+
 def valid_snapshot(snapshot: object, expected_app_id: int | None) -> bool:
     """Accept only a bounded complete Steam snapshot for the pending appId."""
     if not isinstance(snapshot, dict) or type(snapshot.get("app_id")) is not int:
@@ -86,7 +101,7 @@ def valid_snapshot(snapshot: object, expected_app_id: int | None) -> bool:
         return False
     if any(not isinstance(snapshot.get(key), str) for key in ("name", "exe", "start_dir", "launch_options")):
         return False
-    if not snapshot["name"] or not snapshot["exe"].rstrip('"').endswith("/bin/rom-launcher"):
+    if not snapshot["name"] or not _is_owned_exe(snapshot["exe"]):
         return False
     if any(
         key not in snapshot for key in ("minutes_playtime_forever", "minutes_playtime_last_two_weeks", "last_played")
