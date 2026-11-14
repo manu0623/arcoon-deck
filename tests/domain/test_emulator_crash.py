@@ -43,11 +43,11 @@ MEASURED_JSON = json.dumps(
 )
 
 PCSX2_LAUNCH = (
-    'flatpak run net.pcsx2.PCSX2 -fullscreen -batch -- '
+    "flatpak run net.pcsx2.PCSX2 -fullscreen -batch -- "
     '"/home/deck/.local/share/romm-tender/roms/ps2/Sly Cooper and the Thievius Raccoonus (USA).iso"'
 )
 RETROARCH_LAUNCH = (
-    'flatpak run org.libretro.RetroArch -L '
+    "flatpak run org.libretro.RetroArch -L "
     "/home/deck/.var/app/org.libretro.RetroArch/config/retroarch/cores/pcsx2_libretro.so "
     "--appendconfig=/home/deck/.local/share/romm-tender/retroarch/retroarch-ps2.cfg "
     '"/home/deck/.local/share/romm-tender/roms/ps2/Sly Cooper and the Thievius Raccoonus (USA).iso"'

@@ -36,6 +36,7 @@ if TYPE_CHECKING:
 
 DOCUMENT_NAME = "emulator_inventory.json"
 
+
 #: The picker's "emulator list unavailable" answer, built fresh so no caller can mutate
 #: another's list.
 def _unavailable() -> dict[str, Any]:

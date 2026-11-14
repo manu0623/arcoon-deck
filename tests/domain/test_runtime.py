@@ -10,8 +10,12 @@ from domain.runtime import (
     resolve_roots,
 )
 
-_RD = {"roms": "/home/deck/retrodeck/roms", "saves": "/home/deck/retrodeck/saves",
-       "bios": "/home/deck/retrodeck/bios", "states": "/home/deck/retrodeck/states"}
+_RD = {
+    "roms": "/home/deck/retrodeck/roms",
+    "saves": "/home/deck/retrodeck/saves",
+    "bios": "/home/deck/retrodeck/bios",
+    "states": "/home/deck/retrodeck/states",
+}
 
 
 class TestWhichRuntimeIsDriven:

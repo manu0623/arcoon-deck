@@ -37,7 +37,7 @@ def _entry(mode: int, length: int, cluster: int, name: str) -> bytes:
     struct.pack_into("<I", raw, 4, length)
     struct.pack_into("<I", raw, 0x10, cluster)
     encoded = name.encode("latin-1")[:32]
-    raw[0x40:0x40 + len(encoded)] = encoded
+    raw[0x40 : 0x40 + len(encoded)] = encoded
     return bytes(raw)
 
 
@@ -46,9 +46,7 @@ def _superblock() -> bytes:
     data[0:28] = b"Sony PS2 Memory Card Format "
     data[28:40] = b"1.2.0.0".ljust(12, b"\x00")
     struct.pack_into("<HHHH", data, 40, PAGE_LEN, PAGES_PER_CLUSTER, 16, 0xFF00)
-    struct.pack_into(
-        "<iiiii", data, 48, CLUSTERS_PER_CARD, ALLOC_OFFSET, CLUSTERS_PER_CARD - 57, 0, 1023
-    )
+    struct.pack_into("<iiiii", data, 48, CLUSTERS_PER_CARD, ALLOC_OFFSET, CLUSTERS_PER_CARD - 57, 0, 1023)
     struct.pack_into("<i", data, 68, 1022)
     struct.pack_into("<I", data, 80, IFT_CLUSTER)
     return bytes(data)
@@ -58,9 +56,9 @@ def _place(image: bytearray, cluster: int, payload: bytes) -> None:
     """Write a cluster's data bytes, skipping each page's spare area."""
     start = cluster * PAGES_PER_CLUSTER * STRIDE
     for page in range(PAGES_PER_CLUSTER):
-        chunk = payload[page * PAGE_LEN:(page + 1) * PAGE_LEN]
+        chunk = payload[page * PAGE_LEN : (page + 1) * PAGE_LEN]
         offset = start + page * STRIDE
-        image[offset:offset + len(chunk)] = chunk
+        image[offset : offset + len(chunk)] = chunk
 
 
 def build_file_card(folders: dict[str, dict[str, bytes]]) -> bytes:
@@ -100,7 +98,7 @@ def build_file_card(folders: dict[str, dict[str, bytes]]) -> bytes:
         for file_name, payload in files.items():
             data_clusters = allocate(-(-len(payload) // CLUSTER))
             for index, cluster in enumerate(data_clusters):
-                _place(image, ALLOC_OFFSET + cluster, payload[index * CLUSTER:(index + 1) * CLUSTER])
+                _place(image, ALLOC_OFFSET + cluster, payload[index * CLUSTER : (index + 1) * CLUSTER])
             entries.append(_entry(MODE_FILE, len(payload), data_clusters[0], file_name))
         root_entries.append(_entry(MODE_DIRECTORY, count, clusters[0], name))
         folder_entries.append((clusters, entries))
@@ -125,6 +123,6 @@ def _write_entries(image: bytearray, clusters: list[int], entries: list[bytes], 
     payload = entries + [VACANT] * (count - len(entries))
     payload = payload[:count]
     for index, cluster in enumerate(clusters):
-        chunk = b"".join(payload[index * ENTRIES_PER_CLUSTER:(index + 1) * ENTRIES_PER_CLUSTER])
+        chunk = b"".join(payload[index * ENTRIES_PER_CLUSTER : (index + 1) * ENTRIES_PER_CLUSTER])
         chunk = chunk.ljust(CLUSTER, b"\xff")
         _place(image, ALLOC_OFFSET + cluster, chunk)

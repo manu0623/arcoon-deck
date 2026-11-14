@@ -325,12 +325,8 @@ class TestReconsiderLaunchability:
 
     def test_promotes_an_install_the_corrected_list_accepts(self, logger):
         uow = FakeUnitOfWork()
-        _seed_install(
-            uow, 1, file_path="/roms/gba/zelda.gba", system="gba", launchable=False
-        )
-        service = _make_service(
-            logger=logger, uow=uow, system_extensions=lambda system: frozenset({".gba"})
-        )
+        _seed_install(uow, 1, file_path="/roms/gba/zelda.gba", system="gba", launchable=False)
+        service = _make_service(logger=logger, uow=uow, system_extensions=lambda system: frozenset({".gba"}))
 
         service.reconsider_launchability()
 
@@ -341,12 +337,8 @@ class TestReconsiderLaunchability:
     def test_leaves_a_genuine_unlaunchable_verdict_alone(self, logger):
         """A ``.pkg`` is absent from ps3's list, so the withhold stands."""
         uow = FakeUnitOfWork()
-        _seed_install(
-            uow, 2, file_path="/roms/ps3/game.pkg", system="ps3", launchable=False
-        )
-        service = _make_service(
-            logger=logger, uow=uow, system_extensions=lambda system: frozenset({".iso"})
-        )
+        _seed_install(uow, 2, file_path="/roms/ps3/game.pkg", system="ps3", launchable=False)
+        service = _make_service(logger=logger, uow=uow, system_extensions=lambda system: frozenset({".iso"}))
 
         service.reconsider_launchability()
 
@@ -358,9 +350,7 @@ class TestReconsiderLaunchability:
         """Promotion only: a working install keeps its verdict whatever the list says."""
         uow = FakeUnitOfWork()
         _seed_install(uow, 3, file_path="/roms/n64/game.z64", launchable=True)
-        service = _make_service(
-            logger=logger, uow=uow, system_extensions=lambda system: frozenset({".gba"})
-        )
+        service = _make_service(logger=logger, uow=uow, system_extensions=lambda system: frozenset({".gba"}))
 
         service.reconsider_launchability()
 

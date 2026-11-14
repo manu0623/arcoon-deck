@@ -505,9 +505,7 @@ class Test3dsSaveAnswer:
         assert answer.directory == _BANK_3DS
         # The member is named by its path inside the answer's directory, which is what
         # packing and restoring both walk from (see ``domain.save_bank._n3ds_title``).
-        assert [component.name for component in answer.components] == [
-            f"{_ID0}/{_ID1}/title/00040000/000ec300/data"
-        ]
+        assert [component.name for component in answer.components] == [f"{_ID0}/{_ID1}/title/00040000/000ec300/data"]
         assert answer.components[0].directory == os.path.join(_TITLE_ROOT, "title", "00040000", "000ec300")
         assert catalogue.calls == []
 
@@ -531,13 +529,9 @@ class Test3dsSaveAnswer:
 def test_a_fresh_3ds_title_still_has_a_download_target() -> None:
     """Nothing local yet, so the answer is the place a server save unpacks into — the
     restore would otherwise refuse for a game the plugin can identify perfectly well."""
-    service, _catalogue = _n3ds_service(
-        emulator=EmulatorInvocation.standalone("azahar %ROM%", emulator="azahar")
-    )
+    service, _catalogue = _n3ds_service(emulator=EmulatorInvocation.standalone("azahar %ROM%", emulator="azahar"))
     empty = {
-        key: value
-        for key, value in _N3dsStore._TREE.items()
-        if "000ec300" not in key or key.endswith("/00040000")
+        key: value for key, value in _N3dsStore._TREE.items() if "000ec300" not in key or key.endswith("/00040000")
     }
     service._save_file_store = type("_EmptyStore", (_N3dsStore,), {"_TREE": empty})()
 

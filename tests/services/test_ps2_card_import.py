@@ -121,3 +121,24 @@ def test_no_folder_name_falls_back_to_a_single_game_card(tmp_path, name):
     outcome = service.import_card(str(card), str(card_dir), name)
 
     assert outcome is not None and outcome["status"] == "imported"
+
+
+def test_a_card_entry_is_written_under_pcsx2s_own_host_name(tmp_path):
+    """Measured on the reference Deck: PCSX2 keeps ``1: Home Sweet Home`` as ``1_ Home Sweet Home``.
+
+    Writing the card's own name left the indexed old file beside an unindexed new one, and
+    the game loaded the old progress.
+    """
+    service, card_dir, _, _ = _service(tmp_path)
+    card = build_file_card({_GTA: {_GTA: b"profile", "1: Home Sweet Home": b"new-progress"}})
+    image = tmp_path / "downloaded2.ps2"
+    image.write_bytes(card)
+    folder = card_dir / _GTA
+    folder.mkdir(parents=True)
+    (folder / "1_ Home Sweet Home").write_bytes(b"old-progress")
+
+    outcome = service.import_card(str(image), str(card_dir), _GTA)
+
+    assert outcome is not None and outcome["status"] == "imported"
+    assert (folder / "1_ Home Sweet Home").read_bytes() == b"new-progress"
+    assert not (folder / "1: Home Sweet Home").exists()

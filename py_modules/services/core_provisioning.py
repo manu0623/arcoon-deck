@@ -103,9 +103,7 @@ class CoreProvisioningService:
         unknown = {result.get("system") for result in results if result.get("reason") in uncovered_reasons}
         skipped = sorted({slug for slug in platform_slugs if self._resolve_system(slug) in unknown})
         broken = [
-            result
-            for result in results
-            if not result.get("success") and result.get("reason") != "unknown_system"
+            result for result in results if not result.get("success") and result.get("reason") != "unknown_system"
         ]
         return {
             "success": not failed and not broken and bool(runtime.get("success")),
@@ -143,9 +141,7 @@ class CoreProvisioningService:
                 "cores": [],
             }
         wanted = [
-            emulator.core_so
-            for emulator in platform.emulators
-            if emulator.kind == "libretro" and emulator.core_so
+            emulator.core_so for emulator in platform.emulators if emulator.kind == "libretro" and emulator.core_so
         ]
         if not wanted:
             return {

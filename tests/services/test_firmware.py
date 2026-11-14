@@ -653,9 +653,7 @@ class TestPresenceComesFromTheReading:
         assert result["files"][0]["downloaded"] is True
 
     @pytest.mark.asyncio
-    async def test_a_reading_taken_at_another_root_still_reads_absent_when_our_root_lacks_it(
-        self, plugin, tmp_path
-    ):
+    async def test_a_reading_taken_at_another_root_still_reads_absent_when_our_root_lacks_it(self, plugin, tmp_path):
         """The other direction: the flag hands the question over, it does not answer it."""
         resolver = FakeFirmwareResolver()
         resolver.declare("dc_boot.bin", required_by=[_id(self._CORE)], present=True, read_elsewhere=True)

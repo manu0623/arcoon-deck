@@ -29,6 +29,8 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING, Any
 
+from domain.ps2_file_card import host_file_name
+
 if TYPE_CHECKING:
     import logging
     from collections.abc import Callable
@@ -80,14 +82,16 @@ class Ps2CardImportService:
             )
             return None
         target = os.path.join(card_dir, folder.name)
-        names = [item.name for item in folder.files]
+        names = [host_file_name(item.name) for item in folder.files]
         if self._already_there(image, folder, target):
             return {"status": "unchanged", "folder": folder.name, "files": names}
         for item in folder.files:
             try:
-                self._quarantine(target, item.name)
+                self._quarantine(target, host_file_name(item.name))
             except Exception as exc:  # no backup, no write
-                self._logger.warning(f"PS2 card import: cannot back up {item.name} in {target}, writing nothing: {exc}")
+                self._logger.warning(
+                    f"PS2 card import: cannot back up {host_file_name(item.name)} in {target}, writing nothing: {exc}"
+                )
                 return {"status": "backup_failed", "folder": folder.name, "files": []}
         return self._memcard.write_folder(image, folder, target)
 
@@ -96,7 +100,7 @@ class Ps2CardImportService:
         """Whether every file the card holds for this game is already what is on disk."""
         for item in folder.files:
             try:
-                with open(os.path.join(target, item.name), "rb") as handle:
+                with open(os.path.join(target, host_file_name(item.name)), "rb") as handle:
                     current = handle.read()
             except OSError:
                 return False

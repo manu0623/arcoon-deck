@@ -37,9 +37,7 @@ class TestWhichCoresAreMissing:
         ]
 
     def test_one_core_backing_two_platforms_is_fetched_once(self) -> None:
-        assert missing_cores(["mgba_libretro", "mgba_libretro"], installed=lambda _core: False) == [
-            "mgba_libretro"
-        ]
+        assert missing_cores(["mgba_libretro", "mgba_libretro"], installed=lambda _core: False) == ["mgba_libretro"]
 
     def test_an_empty_core_name_is_not_a_download(self) -> None:
         assert missing_cores(["", None], installed=lambda _core: False) == []  # type: ignore[list-item]

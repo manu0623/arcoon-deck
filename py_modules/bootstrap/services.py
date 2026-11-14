@@ -609,9 +609,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             installer=cfg.adapters.core_install.install,
             runtime_installed=cfg.adapters.runtime_install.installed,
             runtime_installer=cfg.adapters.runtime_install.install,
-            runtime_is_builtin=lambda: (
-                cfg.callbacks.retrodeck_paths.runtime_mode() is RuntimeMode.BUILTIN
-            ),
+            runtime_is_builtin=lambda: cfg.callbacks.retrodeck_paths.runtime_mode() is RuntimeMode.BUILTIN,
             resolve_system=cfg.adapters.http_adapter.resolve_system,
         ),
     )

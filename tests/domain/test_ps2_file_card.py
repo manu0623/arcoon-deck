@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 from fakes.ps2_card import build_file_card
 
-from domain.ps2_file_card import Ps2CardError, read_file_card
+from domain.ps2_file_card import Ps2CardError, host_file_name, read_file_card
 
 FOLDER = "BASCUS-97198YAOTWTD!"
 
@@ -22,7 +22,7 @@ def _payload(size: int, seed: int) -> bytes:
 
 
 def _contents(image: bytes, spans: tuple[tuple[int, int], ...]) -> bytes:
-    return b"".join(image[start:start + length] for start, length in spans)
+    return b"".join(image[start : start + length] for start, length in spans)
 
 
 class TestReadFileCard:
@@ -85,3 +85,19 @@ class TestReadFileCard:
     def test_a_short_image_is_refused(self) -> None:
         with pytest.raises(Ps2CardError):
             read_file_card(b"Sony PS2 Memory Card Format " + b"\x00" * 10)
+
+
+class TestHostFileName:
+    """PCSX2's own host names, from ``FileAccessHelper::CleanMemcardFilename``."""
+
+    def test_the_characters_a_host_refuses_become_underscores(self):
+        assert host_file_name("1: Home Sweet Home") == "1_ Home Sweet Home"
+        assert host_file_name("a" + chr(92) + 'b%c:d|e"f<g>h') == "a_b_c_d_e_f_g_h"
+
+    def test_trailing_dots_and_spaces_are_replaced(self):
+        assert host_file_name("save. ") == "save__"
+        assert host_file_name("save...") == "save___"
+
+    def test_a_name_a_host_accepts_is_unchanged(self):
+        assert host_file_name("BASLUS-21423GTA30001") == "BASLUS-21423GTA30001"
+        assert host_file_name("icon.sys") == "icon.sys"

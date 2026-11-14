@@ -100,9 +100,7 @@ class StartupHealingService:
                 uow.rom_installs.save(replace(install, launchable=True))
                 promoted.append(install.rom_id)
         if promoted:
-            self._logger.info(
-                f"Reconsidered {len(promoted)} install(s) as launchable: {promoted[:10]}"
-            )
+            self._logger.info(f"Reconsidered {len(promoted)} install(s) as launchable: {promoted[:10]}")
 
     def prune_stale_installed_roms(self) -> None:
         """Remove ``rom_installs`` rows whose files no longer exist on disk.

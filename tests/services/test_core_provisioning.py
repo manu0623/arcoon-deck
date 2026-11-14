@@ -24,9 +24,7 @@ def _platform(system: str, *cores: str) -> InventoryPlatform:
         platform=system,
         names=(system,),
         extensions=(f".{system}",),
-        emulators=tuple(
-            InventoryEmulator(label=core, emulator=core, kind="libretro", core_so=core) for core in cores
-        ),
+        emulators=tuple(InventoryEmulator(label=core, emulator=core, kind="libretro", core_so=core) for core in cores),
     )
 
 

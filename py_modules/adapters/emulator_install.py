@@ -219,9 +219,7 @@ class EmulatorInstallAdapter:
         for release in releases:
             assets = release.get("assets") if isinstance(release.get("assets"), list) else []
             names = [
-                asset.get("name")
-                for asset in assets
-                if isinstance(asset, dict) and isinstance(asset.get("name"), str)
+                asset.get("name") for asset in assets if isinstance(asset, dict) and isinstance(asset.get("name"), str)
             ]
             asset_name = matching_asset(names, plan.asset_pattern)
             if asset_name is None:
@@ -279,9 +277,10 @@ class EmulatorInstallAdapter:
         try:
             os.makedirs(os.path.dirname(target), exist_ok=True)
             request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(request, timeout=_DOWNLOAD_TIMEOUT_SECONDS) as response, open(
-                partial, "wb"
-            ) as handle:
+            with (
+                urllib.request.urlopen(request, timeout=_DOWNLOAD_TIMEOUT_SECONDS) as response,
+                open(partial, "wb") as handle,
+            ):
                 while chunk := response.read(_CHUNK):
                     written += len(chunk)
                     if written > _MAX_DOWNLOAD_BYTES:

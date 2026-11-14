@@ -100,9 +100,7 @@ class TestReadingTheDocument:
 
 class TestTheCommandsAnEntryBecomes:
     def test_a_libretro_entry_takes_the_es_de_shape(self) -> None:
-        assert libretro_command("mgba_libretro") == (
-            "%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/mgba_libretro.so %ROM%"
-        )
+        assert libretro_command("mgba_libretro") == ("%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/mgba_libretro.so %ROM%")
 
     def test_a_standalone_entry_runs_the_binary_on_the_host(self) -> None:
         assert host_command("/apps/Eden.AppImage", ["-f", "-g"]) == (

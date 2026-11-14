@@ -548,6 +548,7 @@ def bootstrap(
     # green.
     core_probe_report = grant_core_probe_interpreter()
     logger.info(core_probe_report)
+
     # Built after the debug logger because the resolver never logs on its own:
     # its caveats are the whole degradation channel and reach the log through
     # this seam or not at all. That holds for both firmware questions and for
@@ -626,6 +627,7 @@ def bootstrap(
     # Reads one install's own settings file, which is what says where *that* provider
     # keeps the emulator's config — the answer the save link needs (ADR-0051).
     emulator_config = EmulatorConfigReader(user_home=user_home)
+
     # Points a libretro launch's saves at the bank. RetroDECK's flatpak carries
     # ``filesystems=…;host;``, so the data directory is visible inside its sandbox
     # (verified on a Deck) and the baked ``--appendconfig`` path resolves there.
@@ -638,6 +640,7 @@ def bootstrap(
     # no sync looks, which is a save that silently never reaches the server.
     def save_bank_enabled() -> bool:
         return bool(settings.get("save_bank")) or retrodeck_paths.runtime_mode() is RuntimeMode.BUILTIN
+
     retroarch_appendconfig = RetroArchAppendConfigAdapter(
         data_dir=locations.data_dir, logger=logger, enabled=save_bank_enabled
     )

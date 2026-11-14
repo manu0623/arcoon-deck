@@ -109,6 +109,7 @@ def resolve_structure(setting: object) -> Structure:
             return structure
     return Structure.APP
 
+
 #: Settings keys that override a standalone root, per root name.
 OVERRIDE_KEYS = {
     "roms": "roms_dir",

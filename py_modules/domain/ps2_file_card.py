@@ -110,6 +110,27 @@ def read_file_card(data: bytes) -> tuple[Ps2CardFolder, ...]:
     return tuple(folders)
 
 
+#: Characters PCSX2 replaces in a card entry's name, because the host filesystem refuses
+#: them (`FileAccessHelper::CleanMemcardFilename`). ``/ ? *`` are illegal on the card itself,
+#: so they cannot arrive here; these are the ones valid on a PS2 card but not on the host.
+HOST_ILLEGAL_CHARACTERS = r'\%:|"<>'
+
+
+def host_file_name(name: str) -> str:
+    """The host file name PCSX2 gives a card entry, so a write lands where it reads.
+
+    Measured on the reference Deck: PCSX2 wrote the card entry ``1: Home Sweet Home`` as
+    ``1_ Home Sweet Home``. Writing the entry under its card name instead left the indexed
+    old file in place beside an unindexed new one, and the game loaded the old progress.
+    """
+    cleaned = "".join("_" if character in HOST_ILLEGAL_CHARACTERS else character for character in name)
+    # Windows drops trailing dots and spaces, so PCSX2 replaces every one of them.
+    end = len(cleaned)
+    while end and cleaned[end - 1] in " .":
+        end -= 1
+    return cleaned[:end] + "_" * (len(cleaned) - end)
+
+
 def select_folder(folders: tuple[Ps2CardFolder, ...], name: str | None) -> Ps2CardFolder | None:
     """The save folder on a card that belongs to *name*, or ``None`` when it cannot be said.
 

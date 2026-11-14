@@ -32,6 +32,7 @@ def _link_or_skip(adapter: Ps2MemcardAdapter, ra, bank) -> str:
         pytest.skip(_SYMLINK_SKIP)
     return status
 
+
 _LOGGER = logging.getLogger("test_ps2_memcard")
 
 

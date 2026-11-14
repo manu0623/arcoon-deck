@@ -56,6 +56,18 @@ The folder is chosen by name (`read_file_card` → `select_folder`): a card hold
 one folder is that game's save; a card holding several and none of them the expected name
 is ambiguous and refused, since guessing writes one game's progress over another's.
 
+### The card folder's own names, not the card's
+
+A folder card is not a flat copy of the card: PCSX2 gives each entry a host file name,
+replacing `\ % : | " < >` and any trailing dot or space with `_`
+(`FileAccessHelper::CleanMemcardFilename`), and records the entries it knows in a per-folder
+`_pcsx2_index`. Measured on the reference Deck: the game's progress was `1_ Home Sweet Home`
+in the index, and writing the card's own `1: Home Sweet Home` created a second, unindexed
+save beside it — PCSX2 loads unindexed files, so the game offered the old progress and the
+new one under a name it did not have. Writes therefore use PCSX2's host name, replace that
+file in place (quarantining it first), and remove any raw-named leftover from an earlier
+build.
+
 ### The sync decides, not a hook before it
 
 The first version applied the newest card in the plugin's own pre-launch hook, before the

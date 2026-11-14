@@ -118,9 +118,7 @@ class TestTheFilesItAdopts:
         assert [entry["rom_id"] for entry in answer["adopted"]] == [11]
         install = uow.rom_installs.get(11)
         assert install is not None
-        assert install.file_path == os.path.join(
-            EMUDECK_ROOT, "3ds", "Legend of Zelda A Link Between Worlds.3ds"
-        )
+        assert install.file_path == os.path.join(EMUDECK_ROOT, "3ds", "Legend of Zelda A Link Between Worlds.3ds")
         assert (install.platform_slug, install.system, install.rom_dir) == ("3ds", "3ds", None)
         assert install.installed_at == NOW
 
@@ -164,9 +162,7 @@ class TestWhatItRefusesToAdopt:
         """Adopting the wrong one names another game's save — worse than not adopting."""
         service, uow = _service(
             roms=[_rom(1, fs_name="Kirby")],
-            store=_tree(
-                {os.path.join(EMUDECK_ROOT, "3ds"): ("Kirby.3ds", "Kirby.cia")}
-            ),
+            store=_tree({os.path.join(EMUDECK_ROOT, "3ds"): ("Kirby.3ds", "Kirby.cia")}),
             roots=(EMUDECK_ROOT,),
         )
 

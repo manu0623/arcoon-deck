@@ -142,8 +142,7 @@ class TestTheAmbiguityRule:
         url = download_url("hrydgard/ppsspp", "v1.20.4", "PPSSPP-v1.20.4-anylinux-x86_64.AppImage")
 
         assert url == (
-            "https://github.com/hrydgard/ppsspp/releases/download/v1.20.4/"
-            "PPSSPP-v1.20.4-anylinux-x86_64.AppImage"
+            "https://github.com/hrydgard/ppsspp/releases/download/v1.20.4/PPSSPP-v1.20.4-anylinux-x86_64.AppImage"
         )
 
 

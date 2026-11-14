@@ -86,9 +86,7 @@ def parse_coredumps(text: str) -> tuple[Coredump, ...]:
         if not isinstance(timestamp, int) or not isinstance(signal, int) or not isinstance(exe, str):
             continue
         pid = row.get("pid")
-        dumps.append(
-            Coredump(timestamp_us=timestamp, pid=pid if isinstance(pid, int) else 0, signal=signal, exe=exe)
-        )
+        dumps.append(Coredump(timestamp_us=timestamp, pid=pid if isinstance(pid, int) else 0, signal=signal, exe=exe))
     return tuple(dumps)
 
 

@@ -60,7 +60,7 @@ def _volume_descriptor(root_extent: int, root_size: int) -> bytes:
     pvd[0] = 1
     pvd[1:6] = b"CD001"
     pvd[6] = 1
-    pvd[156:156 + 34] = _record("\x00", root_extent, root_size)
+    pvd[156 : 156 + 34] = _record("\x00", root_extent, root_size)
     return bytes(pvd)
 
 

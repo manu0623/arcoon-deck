@@ -29,6 +29,7 @@ status says why.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 from typing import TYPE_CHECKING, Any
@@ -37,6 +38,7 @@ from domain.ps2_file_card import (
     Ps2CardError,
     Ps2CardFile,
     Ps2CardFolder,
+    host_file_name,
     read_file_card,
     select_folder,
 )
@@ -136,7 +138,7 @@ class Ps2MemcardAdapter:
         A folder that holds subdirectories is refused rather than flattened: no measured PS2
         save nests, and a nested one is not worth writing blind.
         """
-        names = [item.name for item in folder.files]
+        names = [host_file_name(item.name) for item in folder.files]
         if folder.folders:
             self._logger.warning(f"ps2 card import: {folder.name} holds subdirectories; writing no part of it")
             return {"status": "nested", "folder": folder.name, "files": []}
@@ -146,7 +148,13 @@ class Ps2MemcardAdapter:
             self._write_folder(image, staged, folder)
             os.makedirs(target, exist_ok=True)
             for item in folder.files:
-                os.replace(os.path.join(staged, item.name), os.path.join(target, item.name))
+                host = host_file_name(item.name)
+                os.replace(os.path.join(staged, host), os.path.join(target, host))
+                if host != item.name:
+                    # An earlier build wrote the card's own name here (``1: Home Sweet
+                    # Home``); PCSX2 reads the sanitized one, so the raw one is left over.
+                    with contextlib.suppress(OSError):
+                        os.remove(os.path.join(target, item.name))
         except OSError as exc:
             self._logger.warning(f"ps2 card import: cannot write {folder.name} into {target}: {exc}")
             self._discard(staged)
@@ -213,7 +221,7 @@ class Ps2MemcardAdapter:
         os.makedirs(target, exist_ok=True)
         written = 0
         for item in folder.files:
-            self._write_file(image, os.path.join(target, item.name), item)
+            self._write_file(image, os.path.join(target, host_file_name(item.name)), item)
             written += 1
         for child in folder.folders:
             written += self._write_folder(image, os.path.join(target, child.name), child)

@@ -12,13 +12,13 @@ from domain.emulator_switches import normalise_switches
 from domain.shortcut_data import EmulatorInvocation, build_launch_options
 
 # The exact shape that failed: the flatpak form a resolved ps2 row bakes.
-PCSX2_REJECTED = '/usr/bin/flatpak run net.pcsx2.PCSX2 --fullscreen --nogui -- %ROM%'
+PCSX2_REJECTED = "/usr/bin/flatpak run net.pcsx2.PCSX2 --fullscreen --nogui -- %ROM%"
 
 
 class TestNormaliseSwitches:
     def test_pcsx2_double_dash_switches_take_the_single_dash_form(self):
         # ``--nogui`` lands on ``-batch`` rather than ``-nogui``: see the abort rule below.
-        assert normalise_switches(PCSX2_REJECTED) == '/usr/bin/flatpak run net.pcsx2.PCSX2 -fullscreen -batch -- %ROM%'
+        assert normalise_switches(PCSX2_REJECTED) == "/usr/bin/flatpak run net.pcsx2.PCSX2 -fullscreen -batch -- %ROM%"
 
     def test_nogui_becomes_batch_because_pcsx2_aborts_under_nogui(self):
         # Measured: two SIGABRT dumps whose command line carried ``-nogui``, and
@@ -61,7 +61,7 @@ class TestNormaliseAtTheBake:
             "/games/ps2/Sly Cooper and the Thievius Raccoonus (USA).iso",
         )
         assert options == (
-            'flatpak run net.pcsx2.PCSX2 -fullscreen -batch -- '
+            "flatpak run net.pcsx2.PCSX2 -fullscreen -batch -- "
             '"/games/ps2/Sly Cooper and the Thievius Raccoonus (USA).iso"'
         )
 

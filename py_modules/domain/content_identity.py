@@ -454,9 +454,7 @@ def _sfo_entries(sfo: bytes) -> list[tuple[str, bytes]] | None:
         if start >= len(sfo) or end < 0:
             return None
         value_start = data_table + data_offset
-        entries.append(
-            (sfo[start:end].decode("ascii", errors="replace"), sfo[value_start : value_start + length])
-        )
+        entries.append((sfo[start:end].decode("ascii", errors="replace"), sfo[value_start : value_start + length]))
     return entries
 
 
