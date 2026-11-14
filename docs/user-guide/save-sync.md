@@ -59,8 +59,12 @@ RAM — so it is not limited to a single file type. Exactly what syncs varies by
 breakdown of what carries across devices today and what's planned, see the
 [save sync support matrix](save-sync-support-matrix.md).
 
-Standalone emulator saves (PCSX2, DuckStation, Dolphin, PPSSPP, melonDS, etc.) are **not yet supported** and are planned
-for a future update.
+Standalone emulators take part too, for the ones whose save folder the plugin has measured and can take over: PPSSPP's
+memstick `PSP/SAVEDATA`, PCSX2's `memcards`, RPCS3's `savedata` and Azahar's `sdmc/Nintendo 3DS` are linked to the
+plugin's own folders, so a game started outside RetroDECK reads and writes the same files the sync carries. A launch the
+plugin manages covers Dolphin by pinning its user directory, so a GameCube or Wii card entry lands where the sync looks.
+Emulators the plugin does not name — DuckStation, melonDS and others — are not linked yet, and their standalone saves
+are not synced.
 
 ## Settings
 

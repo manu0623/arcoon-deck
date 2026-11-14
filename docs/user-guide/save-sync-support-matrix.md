@@ -29,14 +29,15 @@ assumption, this page reflects the audit.
 Where the plugin cannot carry a game's saves it now says so instead of quietly finding nothing. There are four reasons,
 and they mean different things:
 
-- **The emulator keeps one save card that all games share.** Standalone PCSX2 is the common case. Syncing it per game
-  would copy other games' progress onto this one's record, so the plugin leaves it alone.
+- **The emulator keeps one save card that all games share.** Syncing it per game would copy other games' progress onto
+  this one's record. PlayStation 2 no longer fits this case — the plugin gives it a folder card in its own tree, which
+  both PCSX2 and the LRPS2 core write to — but an emulator the plugin does not link still keeps its shared card to itself.
 - **The save is written inside the game file itself.** There is no separate file to carry.
 - **The emulator files saves under the game's own identity** — in the file name for Dreamcast, in the folder name for
-  GameCube. The plugin reads that identity out of the game file itself for Dreamcast, GameCube, PlayStation and
-  PlayStation 2 and Nintendo 3DS, and uses it: those saves resolve for an installed game once its header states an id.
-  Wii U, PlayStation 3, PSP and Vita ids are still unread, and 3DS saves that live in extdata are still refused — that
-  tree is keyed by an id of its own.
+  GameCube. The plugin reads that identity out of the game file itself: the disc's own code for Dreamcast, GameCube and
+  Wii, the `SYSTEM.CNF` serial for PlayStation and PlayStation 2, `PARAM.SFO` for PlayStation 3 and PlayStation Portable,
+  the title id for Nintendo 3DS and Switch. A 3DS title's `data` tree and, when it has one, its `extdata` tree are both
+  part of the save. Wii U and Vita ids are still unread, so those two answer nothing yet.
 - **What the emulator writes could not be established** — either nobody has audited that core yet, or the folder is
   known and the names inside it are not.
 
@@ -71,6 +72,26 @@ The systems whose default core has been **watched writing a save on a stock Retr
 Advance, N64, Saturn, Neo Geo Pocket (Color) and Pokémon Mini. The rest of the ✅ rows follow the same standard `.srm`
 convention and are expected to behave identically, but haven't been observed one by one.
 
+## Standalone emulators
+
+A standalone emulator keeps its saves outside RetroArch, so taking it over is a separate job from the redirect a libretro
+launch gets — and it is done for the emulators whose folder has been measured on a Deck:
+
+| Emulator | Its save folder                   | What the plugin does                                       |
+| -------- | --------------------------------- | ---------------------------------------------------------- |
+| PPSSPP   | the memstick's `PSP/SAVEDATA`     | links it to the plugin's PSP folder                        |
+| PCSX2    | `memcards`                        | links it to the plugin's PS2 card folder, which it formats |
+| RPCS3    | `dev_hdd0/home/00000001/savedata` | links it to the plugin's PS3 folder                        |
+| Azahar   | `sdmc/Nintendo 3DS`               | links it to the plugin's 3DS tree                          |
+
+The link is a symlink of the emulator's own folder rather than a setting inside the emulator, so the emulator keeps its
+configuration and the files it reads become the files the plugin syncs. Only installs the plugin can name take part — a
+native install or a flatpak. An EmuDeck launcher script is deliberately left out: it names an installation behind it that
+the plugin cannot identify, and linking the script created a sandbox nothing had ever launched.
+
+**Dolphin** is covered the other way round, because a GameCube or Wii save is a card entry rather than a folder: a launch
+the plugin manages pins Dolphin's user directory, so the card folder it writes is the one the sync reads.
+
 ## Coming soon 🔜
 
 Per-game saves for these systems fit the sync model and are planned for a future release:
@@ -101,10 +122,8 @@ release.
 | System         | Why it doesn't sync today                                                                                                                                                                                               |
 | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Dreamcast      | Flycast ships with **Per-Game VMUs off**, so every game shares `vmu_save_A1.bin` and its siblings in RetroDECK's system folder. The core _can_ write per-game VMUs; the names it uses then aren't pinned down yet.      |
-| PlayStation 2  | The LRPS2 core ships with **shared memory cards on** (`Mcd001.ps2` / `Mcd002.ps2`). With that option off it writes one `<game>.ps2` card per game — which would fit per-game sync.                                      |
 | Neo Geo CD     | Ships writing one shared save. The core has a per-content mode; which one wins when loading isn't confirmed.                                                                                                            |
 | Nintendo 3DS   | The Azahar core appears to use its own save subtree. Not confirmed on-device yet.                                                                                                                                       |
-| PSP            | Where the PPSSPP core keeps its saves, and whether they are per game, hasn't been established.                                                                                                                          |
 | Arcade (MAME)  | NVRAM is stored separately by the emulator, not as a file named after your ROM.                                                                                                                                         |
 | Amiga          | PUAE keeps an `.adf` floppy's save inside the disk image itself, so there is no separate file to carry. A `.lha` names a `WHDSaves` folder whose contents the core does not list, and an `.hdf` is not answered at all. |
 
@@ -156,8 +175,8 @@ states still work locally). See the full table for specifics.
     | `naomigd` | ❌ | Shared VMU card (Flycast default; the core has a per-game mode) |
     | `neogeocd` | ❌ | Shared save (the core has a per-content mode) |
     | `neogeocdjp` | ❌ | Shared save (the core has a per-content mode) |
-    | `ps2` | ❌ | Shared memory card by default (LRPS2); per-game `<game>.ps2` available as a core option |
-    | `psp` | ❌ | Where the PPSSPP core keeps its saves is not established |
+    | `ps2` | ✅ | A folder memory card in the plugin's own tree: a game's save is the folder it owns on that card, and a card image that arrives from another device has its folders written into the bank |
+    | `psp` | ✅ | `PSP/SAVEDATA/<disc id>*` under the memstick the launch hands the core; the disc id is read from the game's own `PARAM.SFO`, and the save is every sibling folder sharing that prefix |
     | `pv1000` | ❌ | Saves are stored separately by the emulator (MAME) |
     | `scummvm` | ❌ | Not synced |
     | `scv` | ❌ | Saves are stored separately by the emulator (MAME) |
@@ -274,6 +293,8 @@ states still work locally). See the full table for specifics.
 
 ---
 
-_Coverage is reviewed against the emulator cores RetroDECK ships. Most rows still await on-device confirmation; see
-[How reliable is this page?](#how-reliable-is-this-page) above. Last reviewed 2026-08-02, against the
-[emu-atlas](https://github.com/danielcopper/emu-atlas) core audit as of 2026-07-24._
+_Coverage is reviewed against the emulator cores RetroDECK ships. PlayStation Portable and PlayStation 2 rows are now
+watched on a Deck rather than derived: PSP on 2026-11-14, when a save made on a second handheld loaded from the plugin's
+own redirect, and PS2 against real cards and saves. The rest of the per-system list still follows the emu-atlas core
+audit. Last reviewed 2026-11-14, against the [emu-atlas](https://github.com/danielcopper/emu-atlas) core audit as of
+2026-07-24._
