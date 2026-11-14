@@ -58,7 +58,7 @@ What happens:
 
 The reload is bundle-level, not component-level hot module replacement: the plugin is unmounted and re-imported, so
 component state resets and whatever is currently on screen keeps showing the **old** render until it is mounted again.
-Concretely: after a save, leave the plugin's QAM panel and re-enter it (back out of _Tender_, open it again) — or
+Concretely: after a save, leave the plugin's QAM panel and re-enter it (back out of _Arcoon Deck_, open it again) — or
 re-navigate to a patched game-detail page — to see the change. Keyboard shortcuts in the BPM window: **Ctrl+2** opens
 the Quick Access Menu, **Ctrl+1** the main menu.
 

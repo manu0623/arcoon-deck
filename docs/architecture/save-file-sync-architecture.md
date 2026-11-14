@@ -2,7 +2,7 @@
 
 ## Overview
 
-Tender provides bidirectional save file synchronization between RetroDECK and a self-hosted RomM server. Saves are
+Arcoon Deck provides bidirectional save file synchronization between RetroDECK and a self-hosted RomM server. Saves are
 uploaded after play sessions and downloaded before game launch, enabling seamless multi-device play.
 
 The scope is **a per-game set of save files that this plugin can carry**. Which files those are is not a property of the

@@ -1,6 +1,9 @@
 site_name: Arcoon Deck
-site_description: A Decky Loader plugin that syncs your self-hosted RomM library into Steam
-site_url: https://manu0623.github.io/romm-tender/
+site_description: Arcoon Deck — a modification of Tender: a Decky Loader plugin that syncs your self-hosted RomM library into Steam
+site_url: https://manu0623.github.io/arcoon-deck/
+copyright: >-
+  Arcoon Deck — a modification of <a href="https://github.com/danielcopper/romm-tender">Tender</a> by
+  <a href="https://github.com/danielcopper">Daniel Copper</a>, distributed under the GPL-3.0.
 
 # Architectural Decision Records (`docs/adr/`) are kept in the repo for
 # contributors and AI agents — they're internal design history, not user
@@ -9,8 +12,8 @@ site_url: https://manu0623.github.io/romm-tender/
 exclude_docs: |
   adr/
 
-repo_url: https://github.com/manu0623/romm-tender
-repo_name: manu0623/romm-tender
+repo_url: https://github.com/manu0623/arcoon-deck
+repo_name: manu0623/arcoon-deck
 edit_uri: edit/main/docs/
 
 theme:
@@ -60,6 +63,7 @@ markdown_extensions:
 
 nav:
   - Home: index.md
+  - Origin &amp; Attribution: attribution.md
   - User Guide:
       - Getting Started: user-guide/getting-started.md
       - Configuration: user-guide/configuration.md

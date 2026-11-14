@@ -542,7 +542,7 @@ prevents the irreversible removal independent of any database read.
 pending RetroDECK migration; the data-location pair above reaches only the second of the two. That is not a card stacked
 on top of them — each renders it below the explanation it exists to give, after its own actions where it has any, and
 Main's two early returns are unchanged: the page is still replaced. What earns the exception is the path this warning
-exists for — the user updates across the folder rename, opens a Tender whose library looks empty, enters a server below
+exists for — the user updates across the folder rename, opens an Arcoon Deck whose library looks empty, enters a server below
 the minimum, and is told the plugin cannot work, which is when they tidy the older plugin out of Decky while every one
 of their games is still launching through it. What earns a place on BOTH is an irreversible action the user is most
 likely to take _because_ the plugin looks broken; a condition the user cannot even see until they have finished

@@ -1,8 +1,8 @@
 # Getting Started
 
-## What is Tender?
+## What is Arcoon Deck?
 
-Tender is a [Decky Loader](https://decky.xyz/) plugin that connects your self-hosted
+Arcoon Deck is a [Decky Loader](https://decky.xyz/) plugin that connects your self-hosted
 [RomM](https://github.com/rommapp/romm) ROM library to Steam. Every game in your RomM library appears as a Non-Steam
 shortcut in the Steam Library, complete with cover art, metadata, and collections. Games launch through
 [RetroDECK](https://retrodeck.net/).
@@ -27,55 +27,27 @@ Before installing the plugin, you need:
 
 ## Installation
 
-**Not on the Decky store.** The store doesn't accept plugins whose code is written with AI assistance, and Tender's is —
-see [How this is built](../index.md). Install it from the URL below.
+**Not on the Decky store.** The store doesn't accept plugins whose code is written with AI assistance, and Arcoon Deck's is —
+see [How this is built](../index.md). Install it from a zip you build, below.
 
-### From Decky's "Install Plugin from URL"
+### From a zip you build (this fork's only route today)
 
-1. Open the Quick Access Menu (QAM) in Gaming Mode by pressing the **...** button
-2. Go to the Decky Loader tab (the plug icon) and open settings (gear icon)
-3. Under **General → Other**, enable **Developer mode** — a new **Developer** tab appears in the sidebar
-4. Open the **Developer** tab and select **Install Plugin from URL**
-5. Enter the direct URL to the release zip
+**This fork has no published releases yet**, so build the plugin and install the file:
 
-   This one always points at the newest release, so it needs no version number — and pasting it again later is how you
-   update:
+1. On a machine with [Decky CLI](https://github.com/SteamDeckHomebrew/cli) — the Deck itself is fine:
+   `git clone https://github.com/manu0623/arcoon-deck.git && cd arcoon-deck && decky plugin build`
+2. Open the Quick Access Menu (QAM) in Gaming Mode, go to the Decky Loader tab (the plug icon), open settings
+   (gear icon), and under **General → Other** enable **Developer mode** — a **Developer** tab appears
+3. Open that **Developer** tab and choose **Install Plugin from ZIP File**
+4. Pick the zip Decky CLI wrote to `out/` — the plugin appears in the QAM, no restart needed
 
-   ```text
-   https://github.com/manu0623/romm-tender/releases/latest/download/Tender.zip
-   ```
+**Install from URL** works the same way once a release exists here: open this fork's
+[releases page](https://github.com/manu0623/arcoon-deck/releases), copy the zip asset's address, and paste it into
+**Install Plugin from URL**. Pasting the newest asset's URL again later is how you update.
 
-   This fork has no release published yet: until one is cut here, that URL resolves to nothing, and the zip has to be
-   built from the checkout and installed from the file instead.
-
-   Releases cut from the Arcoon Deck rename on publish the same file as `Arcoon Deck.zip`, and that is the URL to paste
-   to update an Arcoon Deck install:
-
-   ```text
-   https://github.com/manu0623/romm-tender/releases/latest/download/Arcoon Deck.zip
-   ```
-
-   To pin a version instead, name its tag and the file that tag actually carries:
-
-   ```text
-   https://github.com/manu0623/romm-tender/releases/download/tender-v{VERSION}/Arcoon Deck.zip
-   ```
-
-   The file name carries the space, and it has to: Decky reads the plugin's name from the URL's last segment and uses
-   it to decide whether this is an update of something already installed, so the asset has to be named `Arcoon Deck.zip`
-   exactly — a differently named file is treated as a different plugin rather than as an update to this one.
-
-   Which name a release uses depends on when it was cut. Releases from the Arcoon Deck rename on carry
-   `Arcoon Deck.zip`; `tender-v0.31.0` through the rename carry `Tender.zip` (and `tender-v0.31.0` itself published it
-   as `tender.zip` — GitHub matches asset names case-insensitively, so either spelling finds it). Most of the
-   `decky-romm-sync-v{VERSION}` releases before those published `decky-romm-sync.zip`; name that tag and that file for
-   those. Four have no asset at all: the three earliest and `v0.2.0`.
-
-6. Decky downloads and installs the plugin automatically — no restart needed
-
-**Tip:** You can also open the [releases page](https://github.com/manu0623/romm-tender/releases) in Steam's built-in
-browser (Gaming Mode → long-press the Steam button → Web Browser), long-press the zip download link, and copy the URL
-from there.
+Decky reads the plugin's name from the file name it installs, so the asset has to be named `Arcoon Deck.zip`
+exactly: a differently named file is treated as a different plugin rather than as an update to this one. Tender's
+releases carry `Tender.zip` because that was the name then — the file name is what Decky records either way.
 
 Any direct URL to the zip file works (GitHub releases, a self-hosted mirror, etc.) as long as it points to a valid
 `.zip` containing the plugin.
@@ -84,30 +56,31 @@ Any direct URL to the zip file works (GitHub releases, a self-hosted mirror, etc
 
 Releases up to 0.30.1 install into a folder named `decky-romm-sync`; from 0.31.0 on the folder is named `romm-tender`.
 Decky treats a differently-named folder as a different plugin, so updating across that boundary leaves you with **two**
-entries: the older one still shown as **RomM Sync**, and the new one as **Tender**.
+entries: the older one still shown as **RomM Sync**, and the new one as **Arcoon Deck**.
 
-**Wait for Tender to say the older plugin can go.** Every Steam shortcut this plugin created used to launch through a
-file inside that older plugin's folder. Tender now keeps its own copy of that file outside any plugin folder and points
+**Wait for Arcoon Deck to say the older plugin can go.** Every Steam shortcut this plugin created used to launch through a
+file inside that older plugin's folder. Arcoon Deck now keeps its own copy of that file outside any plugin folder and points
 your shortcuts at it, which it does shortly after Steam starts — but until it has, removing "RomM Sync" stops all of
-your games from starting, and nothing in Tender can put the file back.
+your games from starting, and nothing in Arcoon Deck can put the file back.
 
-While both are installed, Tender's QAM panel carries a card that tells you which of those it is — including when the
+While both are installed, Arcoon Deck's QAM panel carries a card that tells you which of those it is — including when the
 panel is showing a server-version error or a pending RetroDECK migration instead of its usual contents, the two states
 in which the older plugin looks most like something to clear away. The card says one of two things:
 
 - **"RomM Sync" is still installed, and your games need it** — the move has not happened yet on this device. Leave the
-  older plugin alone. Tender tries again every time it starts up, which is when your device does — restarting Steam
-  itself is not enough, because that reloads the panel without starting Tender's own half again.
-- **"RomM Sync" can be removed now** — nothing in Tender depends on it any more. Remove it wherever Decky lists your
+  older plugin alone. Arcoon Deck tries again every time it starts up, which is when your device does — restarting Steam
+  itself is not enough, because that reloads the panel without starting Arcoon Deck's own half again.
+- **"RomM Sync" can be removed now** — nothing in Arcoon Deck depends on it any more. Remove it wherever Decky lists your
   installed plugins, or keep it: it costs disk space and nothing else. This one has a **Dismiss**, and dismissing it is
   remembered — the card does not come back at the next start.
 
 The new install also starts with its own empty settings and library, because Decky gave each plugin folder its own data
-location — your existing settings and synced library are in the older install until Tender brings them across.
+location — your existing settings and synced library are in the older install until Arcoon Deck brings them across.
 
 ### Manual installation (alternative)
 
-1. Download the plugin's `.zip` asset from the [releases page](https://github.com/manu0623/romm-tender/releases)
+1. Build the plugin's `.zip` (`decky plugin build`) or download it from this fork's
+   [releases page](https://github.com/manu0623/arcoon-deck/releases) once one is published
 2. Extract the zip to `~/homebrew/plugins/` on your device (via SSH, file manager, or USB)
 3. Restart Decky Loader — either reboot, or run `sudo systemctl restart plugin_loader` via SSH
 4. The plugin appears in your QAM under the Decky tab
@@ -116,7 +89,7 @@ location — your existing settings and synced library are in the older install 
 
 After installation, you need to connect the plugin to your RomM server:
 
-1. Open the QAM and find **Tender**
+1. Open the QAM and find **Arcoon Deck**
 2. Tap **Settings** in the menu, then **Connections** in the section list on the left
 3. Enter your RomM server URL (e.g. `http://192.168.1.100:8080`) — this saves automatically
 4. Tap **Sign in**, enter your RomM username and password once, and confirm

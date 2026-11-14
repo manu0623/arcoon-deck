@@ -4,7 +4,7 @@ Status: **measured**. Every path and number here was read from a live Steam Deck
 SteamOS 7.2.7 with EmuDeck, RetroDECK and the RetroArch flatpak installed. Where a platform has no
 saves on that machine, the rule comes from the emulator's own layout and is marked unverified.
 
-This page answers one question: **what exactly does Tender hand to RomM, per platform?** RomM
+This page answers one question: **what exactly does Arcoon Deck hand to RomM, per platform?** RomM
 takes one file per save row (`POST /api/saves?rom_id&emulator&slot`); a directory-shaped save
 becomes a canonical zip. So every rule below reduces to "what is the unit, and does it upload raw
 or zipped".
@@ -15,7 +15,7 @@ Three RetroArch save trees, one of which is empty:
 
 | Tree | Contents |
 | --- | --- |
-| `<home>/retrodeck/saves/<platform>/<stem>.srm` | the live one — RetroDECK's platform-keyed tree, carries Tender's own `.romm-backup/` markers |
+| `<home>/retrodeck/saves/<platform>/<stem>.srm` | the live one — RetroDECK's platform-keyed tree, carries Arcoon Deck's own `.romm-backup/` markers |
 | `<home>/.var/app/org.libretro.RetroArch/config/retroarch/saves/` | 2 files: the same game twice (flat, and under `mGBA/`), **different md5s** |
 | `/run/media/deck/SR01T/Emulation/saves/retroarch/saves` | what `retroarch.cfg` currently points at — **0 files** |
 
@@ -290,7 +290,7 @@ harvest exists to close.
   exist, or exists and is empty while another tree has content, is a reportable state — not a
   silent "no saves".
 - **RetroDECK's tree is platform-keyed and flat** (`saves/<platform>/<stem>.srm`). That is the
-  normalization being lost when RetroDECK goes, and the files carrying Tender's `.romm-backup`
+  normalization being lost when RetroDECK goes, and the files carrying Arcoon Deck's `.romm-backup`
   markers are exactly the ones a migration has to adopt into the bank.
 - **EmuDeck's tree is not a structure.** Symlinks plus CloudSync markers, failing on this machine.
   Detect its launchers; do not adopt its save layer.

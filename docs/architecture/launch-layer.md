@@ -5,7 +5,7 @@ Status: **plan**. Only the save bank it depends on is built
 
 ## The three decisions this page records
 
-1. **RetroDECK stops being the host.** Tender reads its `retrodeck.json` and `es_systems.xml`
+1. **RetroDECK stops being the host.** Arcoon Deck reads its `retrodeck.json` and `es_systems.xml`
    today; both go. RetroDECK's flatpak remains a supported *last* fallback for installs that
    still use it.
 2. **No launcher and no emulator build of our own.** RetroArch is the runner for every platform
@@ -14,7 +14,7 @@ Status: **plan**. Only the save bank it depends on is built
    actively developed Switch emulator left; it runs as an external runner alongside RetroArch.
 
 EmuDeck is **optional detection**, never a dependency: if it is installed its launcher scripts are
-a usable command surface and its `romsPath` is a hint. Tender does not read its save tree, and does
+a usable command surface and its `romsPath` is a hint. Arcoon Deck does not read its save tree, and does
 not use its CloudSync.
 
 ## What this layer owns
@@ -80,7 +80,7 @@ system_directory = "<data>/bios"
 ```
 
 That works identically whether RetroArch came from flatpak, from a native install, or from EmuDeck,
-which is the point of resolving a runner instead of owning one. Keys Tender manages are therefore
+which is the point of resolving a runner instead of owning one. Keys Arcoon Deck manages are therefore
 not editable in RetroArch's menu, and the UI says so.
 
 ### Generated appendconfig: what is built, and what is measured
@@ -213,7 +213,7 @@ Two gates before a Switch game is playable, both honest refusals rather than gue
 
 - **Title id.** `.nsp`/`.xci` identification needs the user's `prod.keys`. Without them the save unit
   cannot be named, so the game shows why instead of syncing to a guessed folder.
-- **Firmware.** Eden installs firmware through its own UI from a ZIP or NCA folder. Tender does not
+- **Firmware.** Eden installs firmware through its own UI from a ZIP or NCA folder. Arcoon Deck does not
   provision it and must not ship keys.
 
 Ryujinx-line emulators (Ryujinx, kenjinx) are a *different* family — `bis/user/save/<folder id>/0/`,
@@ -238,11 +238,11 @@ Four layers, with an explicit winner:
 | Layer | Where | Edited by | Beats |
 | --- | --- | --- | --- |
 | base | `config/retroarch/retroarch.cfg` (ours) | user, in-emulator | nothing |
-| platform | generated into `run/<rom_id>.cfg` | Tender | base |
-| per-game | `rom_launch_config` rows → same file | Tender | platform |
-| emulator's own per-game override | RetroArch's `config/<Core>/<Game>.cfg` in our tree | user, in-emulator | everything above, for keys Tender does not manage |
+| platform | generated into `run/<rom_id>.cfg` | Arcoon Deck | base |
+| per-game | `rom_launch_config` rows → same file | Arcoon Deck | platform |
+| emulator's own per-game override | RetroArch's `config/<Core>/<Game>.cfg` in our tree | user, in-emulator | everything above, for keys Arcoon Deck does not manage |
 
-Two generated layers and one emulator-owned layer in separate files, because Tender rewrites the
+Two generated layers and one emulator-owned layer in separate files, because Arcoon Deck rewrites the
 generated file on every launch and would otherwise clobber the user's in-emulator edits.
 
 Storage: `rom_launch_config(rom_id, scope, key, value)` with `scope` `"game"` or `"platform"`, never
@@ -364,5 +364,5 @@ the `launch_backend` default flipped in 0.36.0 (ADR-0045). RetroDECK stays selec
 ## Explicit non-goals
 
 Shipping or updating emulators and cores, bundling anything not distributable, EmuDeck's CloudSync,
-save states (core- and version-coupled, which is why Tender already refuses them), netplay, shader
+save states (core- and version-coupled, which is why Arcoon Deck already refuses them), netplay, shader
 packs, and per-core option UIs beyond what the per-game table needs.

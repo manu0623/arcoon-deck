@@ -7,19 +7,19 @@
 
 <h3>Your RomM library, running native in Steam</h3>
 
-[Getting Started](https://danielcopper.github.io/romm-tender/user-guide/getting-started/) ·
-[Configuration](https://danielcopper.github.io/romm-tender/user-guide/configuration/) ·
-[Syncing](https://danielcopper.github.io/romm-tender/user-guide/syncing-your-library/) ·
-[Managing Games](https://danielcopper.github.io/romm-tender/user-guide/managing-games/)
+[Getting Started](docs/user-guide/getting-started.md) ·
+[Configuration](docs/user-guide/configuration.md) ·
+[Syncing](docs/user-guide/syncing-your-library.md) ·
+[Managing Games](docs/user-guide/managing-games.md)
 
-[BIOS &amp; Cores](https://danielcopper.github.io/romm-tender/user-guide/bios-management/) ·
-[Save Sync](https://danielcopper.github.io/romm-tender/user-guide/save-sync/) ·
-[Troubleshooting](https://danielcopper.github.io/romm-tender/user-guide/troubleshooting/)
+[BIOS &amp; Cores](docs/user-guide/bios-management.md) ·
+[Save Sync](docs/user-guide/save-sync.md) ·
+[Troubleshooting](docs/user-guide/troubleshooting.md)
 
-<a href="https://danielcopper.github.io/romm-tender/"><img alt="Documentation" src="https://img.shields.io/badge/user%20guide-read-4795c9?style=for-the-badge&labelColor=16202c"></a>
-<a href="https://github.com/manu0623/romm-tender/releases/latest"><img alt="Release" src="https://img.shields.io/github/package-json/v/manu0623/romm-tender?style=for-the-badge&label=release&color=4795c9&labelColor=16202c"></a>
-<a href="https://github.com/manu0623/romm-tender/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/manu0623/romm-tender?style=for-the-badge&color=4795c9&labelColor=16202c"></a>
-<a href="https://github.com/manu0623/romm-tender/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/manu0623/romm-tender/total?style=for-the-badge&color=4795c9&labelColor=16202c"></a>
+<a href="docs/index.md"><img alt="Documentation" src="https://img.shields.io/badge/user%20guide-read-4795c9?style=for-the-badge&labelColor=16202c"></a>
+<a href="https://github.com/manu0623/arcoon-deck/releases/latest"><img alt="Release" src="https://img.shields.io/github/package-json/v/manu0623/arcoon-deck?style=for-the-badge&label=release&color=4795c9&labelColor=16202c"></a>
+<a href="https://github.com/manu0623/arcoon-deck/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/manu0623/arcoon-deck?style=for-the-badge&color=4795c9&labelColor=16202c"></a>
+<a href="https://github.com/manu0623/arcoon-deck/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/manu0623/arcoon-deck/total?style=for-the-badge&color=4795c9&labelColor=16202c"></a>
 <a href="https://github.com/rommapp/romm/releases"><img alt="Requires RomM 4.9.0 or newer" src="https://img.shields.io/badge/RomM-%E2%89%A5%204.9.0-4795c9?style=for-the-badge&labelColor=16202c"></a>
 
 </div>
@@ -28,18 +28,24 @@ A [Decky Loader](https://decky.xyz/) plugin that syncs your self-hosted [RomM](h
 into Steam as non-steam shortcuts. Games appear directly in your Steam library, launch through
 [RetroDECK](https://retrodeck.net/), and can keep their saves in sync across devices through your RomM server.
 
-_Named after the railway car behind a steam locomotive, or the boat that shuttles out to a ship at anchor._
+**Arcoon Deck is a modification of [Tender](https://github.com/danielcopper/romm-tender)**, the plugin by
+[Daniel Copper](https://github.com/danielcopper) that this one is built on and unreservedly credits. The library sync,
+Steam shortcut layer, artwork, BIOS management, ROM downloads and the save-sync engine are his design and his code.
+What this fork changes is which platforms' saves travel — see [Origin & Attribution](docs/attribution.md).
+_(Tender is named after the railway car behind a steam locomotive, or the boat that shuttles out to a ship at anchor.)_
 
-> **Pre-1.0 (v0.x).** The feature set isn't complete yet. Save sync covers standard cartridge saves; the memory-card
-> systems — PlayStation, PS2, Dreamcast, GameCube, PSP, 3DS — don't sync their saves yet, and the
-> [support matrix](https://danielcopper.github.io/romm-tender/user-guide/save-sync-support-matrix/) has the per-system
-> detail.
+> **Pre-1.0 (v0.x).** The feature set isn't complete yet, but save sync is no longer cartridge-only: PS2 memory
+> cards, PSP save folders, GameCube card entries, Wii title folders and the Switch/3DS title trees carry across
+> devices now. The [support matrix](docs/user-guide/save-sync-support-matrix.md) has the per-system detail, and it is
+> the page to read before assuming a system syncs.
 
 ---
 
 > [!NOTE]
-> **How this is built.** The code is written by an AI coding agent working under my direction. The architecture, the
-> design decisions and the review are mine, and changes are smoke-tested on real hardware before they ship.
+> **How this is built.** The code is written by an AI coding agent working under the maintainer's direction. The
+> architecture, the design decisions and the review are the maintainer's, and every save-path change is verified on
+> real hardware — two Deck-class handhelds and a RomM server — by making a save on one device and watching the other
+> load it. Upstream Tender says the same of itself, which is why neither project is on the Decky store.
 
 ## Features
 
@@ -49,7 +55,7 @@ _Named after the railway car behind a steam locomotive, or the boat that shuttle
   capsules and custom icons, with a manual picker for games that don't match automatically
 - **Save sync** — Opt-in save syncing across devices through your RomM server, automatically before launch and after you
   quit; identical saves resolve silently, and if both sides genuinely changed you decide which one wins
-  ([not every system syncs yet](https://danielcopper.github.io/romm-tender/user-guide/save-sync-support-matrix/))
+  ([not every system syncs yet](docs/user-guide/save-sync-support-matrix.md))
 - **Save slots & version history** — Multiple named save profiles per game, plus per-file version history with restore
 - **ROM downloads** — Download on demand with progress, pause/resume/cancel, and a managed queue
 - **BIOS management** — Per-platform BIOS status, download all or only what your active core requires, hash-verified
@@ -85,44 +91,25 @@ _Named after the railway car behind a steam locomotive, or the boat that shuttle
 
 ## Installation
 
-**Not on the Decky store.** The store doesn't accept plugins whose code is written with AI assistance, and Arcoon Deck's is —
-see _How this is built_ above. Install it from the URL below.
+**This fork has no published releases yet.** Build the plugin from this checkout and install the zip from the file:
 
-```text
-https://github.com/manu0623/romm-tender/releases/latest/download/Tender.zip
+```bash
+git clone https://github.com/manu0623/arcoon-deck.git
+cd arcoon-deck && decky plugin build    # writes the plugin zip to out/
 ```
 
-The asset is named after the plugin, so the rename to **Arcoon Deck** changes that last segment: releases cut from this
-change on publish `Arcoon Deck.zip`, and pasting that URL is what updates an Arcoon Deck install. Releases already out
-(`tender-v0.33.0` and earlier) carry `Tender.zip` — which is also the build that still calls itself Tender.
+Then, with **Developer mode** enabled (Decky tab → gear icon → **General → Other**), open Decky's **Developer** tab
+and use **Install Plugin from ZIP File**.
 
-**This fork has no releases of its own yet.** Until one is published here, that URL resolves to nothing, and the zip
-has to be built from this checkout (Decky CLI: `decky plugin build`) and installed from the file instead.
+Once a release is cut here it will be installable by URL the same way, from
+`https://github.com/manu0623/arcoon-deck/releases/latest` — pasting that URL is then also how you update.
 
-<details open>
-<summary><b>Install from URL</b> — the recommended way</summary>
-
-Needs **Developer mode** in Decky Loader (Decky tab → gear icon → **General → Other** → toggle **Developer mode**).
-
-1. Decky settings → **Developer** tab → **Install Plugin from URL**
-2. Paste the URL above and install
-
-That URL always resolves to the newest release, so pasting it again is also how you update.
-
-</details>
-
-<details>
-<summary><b>Install from ZIP</b></summary>
-
-Also needs **Developer mode**.
-
-1. Download the plugin's `.zip` asset from the [releases page](https://github.com/manu0623/romm-tender/releases)
-2. Decky settings → **Developer** tab → **Install Plugin from ZIP File**
-
-</details>
+Looking for Tender itself, with its releases and its support? That is
+[danielcopper/romm-tender](https://github.com/danielcopper/romm-tender), documented at the
+[upstream site](https://danielcopper.github.io/romm-tender/).
 
 > Full step-by-step instructions, including first-time setup, are in
-> [Getting Started](https://danielcopper.github.io/romm-tender/user-guide/getting-started/).
+> [Getting Started](docs/user-guide/getting-started.md).
 
 ## Quick start
 
@@ -132,20 +119,21 @@ Also needs **Developer mode**.
 4. Open **Sync** and hit **Sync Library** — look over the changes it works out, then **Apply Sync**, and your ROMs
    appear as non-steam shortcuts
 
-See the [User Guide](https://danielcopper.github.io/romm-tender/user-guide/syncing-your-library/) for syncing details,
-[save sync](https://danielcopper.github.io/romm-tender/user-guide/save-sync/), and
-[BIOS management](https://danielcopper.github.io/romm-tender/user-guide/bios-management/).
+See the [User Guide](docs/user-guide/syncing-your-library.md) for syncing details,
+[save sync](docs/user-guide/save-sync.md), and
+[BIOS management](docs/user-guide/bios-management.md).
 
 ## Contributing
 
 Build from source, run the tests, and read the architecture reference on the documentation site:
 
-- [Development setup](https://danielcopper.github.io/romm-tender/contributing/development/)
-- [Frontend dev loop](https://danielcopper.github.io/romm-tender/contributing/frontend-dev-loop/) — live-reload the UI
+- [Development setup](docs/contributing/development.md)
+- [Frontend dev loop](docs/contributing/frontend-dev-loop.md) — live-reload the UI
   into a windowed Big Picture on the Deck, no Game Mode switching
-- [Backend architecture](https://danielcopper.github.io/romm-tender/architecture/backend-architecture/)
+- [Backend architecture](docs/architecture/backend-architecture.md)
+- [Origin & Attribution](docs/attribution.md) — what this fork changed, and what it owes to Tender
 
-[![CI](https://github.com/manu0623/romm-tender/actions/workflows/ci.yml/badge.svg)](https://github.com/manu0623/romm-tender/actions/workflows/ci.yml)
+[![CI](https://github.com/manu0623/arcoon-deck/actions/workflows/ci.yml/badge.svg)](https://github.com/manu0623/arcoon-deck/actions/workflows/ci.yml)
 [![Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=danielcopper_romm-tender&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=danielcopper_romm-tender)
 [![Coverage](https://img.shields.io/sonar/coverage/danielcopper_romm-tender?server=https%3A%2F%2Fsonarcloud.io)](https://sonarcloud.io/summary/new_code?id=danielcopper_romm-tender)
 [![Maintainability](https://sonarcloud.io/api/project_badges/measure?project=danielcopper_romm-tender&metric=sqale_rating)](https://sonarcloud.io/summary/new_code?id=danielcopper_romm-tender)
@@ -156,6 +144,9 @@ Build from source, run the tests, and read the architecture reference on the doc
 
 This plugin stands on the shoulders of some great projects:
 
+- **[Tender](https://github.com/danielcopper/romm-tender) by [Daniel Copper](https://github.com/danielcopper)** — the
+  plugin Arcoon Deck modifies. Every part of this project that is not listed in
+  [Origin & Attribution](docs/attribution.md) is his work, released under the GPL-3.0
 - [RomM](https://github.com/rommapp/romm) — the self-hosted ROM manager at the heart of this plugin. RomM provides the
   library, metadata, cover art, and save file storage that makes the entire sync experience possible
 - [RetroDECK](https://retrodeck.net/) — the all-in-one emulation solution for Steam Deck that bundles ES-DE, RetroArch,
@@ -175,5 +166,7 @@ This plugin stands on the shoulders of some great projects:
 
 ## License
 
-GPL-3.0. This is an independent project and is not affiliated with, endorsed by, or sponsored by the RomM project or
-Valve Corporation.
+GPL-3.0, inherited from [Tender](https://github.com/danielcopper/romm-tender): Arcoon Deck is a derivative work of
+it and is distributed under the same terms, with the original copyright notices kept. This is an independent
+project and is not affiliated with, endorsed by, or sponsored by Tender's author, the RomM project or Valve
+Corporation.

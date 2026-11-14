@@ -1,7 +1,7 @@
 # Configuration
 
 All settings are accessible from the plugin's QAM panel. Open the Quick Access Menu (**...** button), navigate to the
-Tender plugin, and pick **Settings** from the menu at the bottom of the panel.
+Arcoon Deck plugin, and pick **Settings** from the menu at the bottom of the panel.
 
 ## The Settings page
 
@@ -10,7 +10,7 @@ right. Move onto a section in the list and the right-hand side changes at once �
 
 | Section           | What is in it                                                                                                                                                                                                  |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Connections**   | the services Tender talks to: **RomM** (server URL, account, Sign out, Allow Insecure SSL) and **SteamGridDB** (the API key)                                                                                   |
+| **Connections**   | the services Arcoon Deck talks to: **RomM** (server URL, account, Sign out, Allow Insecure SSL) and **SteamGridDB** (the API key)                                                                                   |
 | **Save Sync**     | the save-sync switch and its settings (device, before launch, after exit, default slot, history limit, Sync All Saves Now), the list of registered devices, and the save-sorting migration when one is waiting |
 | **Controller**    | Steam Input Mode, Apply to All Shortcuts, and the RetroArch `input_driver` fix                                                                                                                                 |
 | **Steam Library** | preferred region, collection games in platform groups, collection types in Steam names                                                                                                                         |
@@ -201,7 +201,7 @@ carry them. `me.write` is deliberately **not** requested — a pasted token cann
 
 ## SteamGridDB API Key
 
-Under **Settings › Connections**, below the RomM group — SteamGridDB is one of the two services Tender talks to.
+Under **Settings › Connections**, below the RomM group — SteamGridDB is one of the two services Arcoon Deck talks to.
 
 The plugin uses [SteamGridDB](https://www.steamgriddb.com/) to fetch additional artwork for your games — hero banners,
 logos, and wide grid images. RomM provides cover art, but SteamGridDB fills in the rest so your games look like

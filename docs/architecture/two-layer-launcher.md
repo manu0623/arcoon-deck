@@ -1,6 +1,6 @@
 # The two-layer launcher
 
-Tender's launch chain currently ends at RetroDECK, and its save math is RetroArch's
+Arcoon Deck's launch chain currently ends at RetroDECK, and its save math is RetroArch's
 naming rule. Both are being replaced by two layers this plugin owns. The RomM connection
 layer — auth, endpoints, negotiate, slots, version history — is unchanged; only the halves
 below it move.

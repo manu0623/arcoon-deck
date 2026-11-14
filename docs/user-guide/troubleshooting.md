@@ -6,12 +6,12 @@ Common issues and how to fix them.
 
 ### Connection shows "Backend error"
 
-**Symptom**: The Tender QAM panel's **Connection** row shows a "Backend error" badge with the note "Plugin backend
+**Symptom**: The Arcoon Deck QAM panel's **Connection** row shows a "Backend error" badge with the note "Plugin backend
 failed to start — check Decky logs", and the Sync buttons are disabled. This state means the plugin's own Python backend
 process never started — it is **not** the same as an unreachable RomM server, which shows **Not connected** instead.
 
 **Fix**: The backend aborted during startup — most often a failed data migration after an update — so the UI can't reach
-it. Open the Decky plugin log to find the underlying error, then reload Tender from the Decky plugin list. If it still
+it. Open the Decky plugin log to find the underlying error, then reload Arcoon Deck from the Decky plugin list. If it still
 fails after a reload, restart Steam (or the Steam Deck); if the error persists, include the log output when you report
 it.
 
@@ -26,7 +26,7 @@ check is running, the row keeps showing the previous result rather than resettin
 never answered. Reload Decky or restart Steam, then try again."
 
 **Fix**: The dialog reached the plugin's backend process and got no reply at all, which normally means the backend is no
-longer running — the panel itself keeps working because its code is already loaded in Steam. Reload Tender from the
+longer running — the panel itself keeps working because its code is already loaded in Steam. Reload Arcoon Deck from the
 Decky plugin list, or restart Steam, then sign in again. A pairing code is single-use and expires after 60 seconds, so
 generate a fresh one for the retry.
 
@@ -37,12 +37,12 @@ answers with its own message instead — "Server unreachable", "Sign-in rejected
 
 ### "RomM Sync" is still installed
 
-**Symptom**: Decky lists two plugins — an older **RomM Sync** and **Tender** — and Tender's QAM panel shows a warning
-card about it. Tender may also look brand new, with no server configured and no synced games.
+**Symptom**: Decky lists two plugins — an older **RomM Sync** and **Arcoon Deck** — and Arcoon Deck's QAM panel shows a warning
+card about it. Arcoon Deck may also look brand new, with no server configured and no synced games.
 
 **Fix**: Nothing to fix — read the card. It says one of two things: your games still launch through a file in that older
-plugin's folder, or nothing in Tender depends on it any more and it can go. Removing it before the card says so stops
-all of your games from starting, and Tender cannot put that file back. See
+plugin's folder, or nothing in Arcoon Deck depends on it any more and it can go. Removing it before the card says so stops
+all of your games from starting, and Arcoon Deck cannot put that file back. See
 [Updating from a release before 0.31.0](getting-started.md#updating-from-a-release-before-0310).
 
 ### BIOS files missing
@@ -58,7 +58,7 @@ shows a black screen.
 
 **Symptom**: Pressing Play does nothing, or you get a toast saying the ROM needs to be downloaded.
 
-**Fix**: Open the game's detail page and tap **Download** in the Tender panel. The game will be playable once the
+**Fix**: Open the game's detail page and tap **Download** in the Arcoon Deck panel. The game will be playable once the
 download completes.
 
 ### The download has no launchable file
@@ -229,7 +229,7 @@ shortcut's tile image and does not always refresh it right away. A tile that is 
 the first time you open that game's detail page, scroll it back into view, or the next time Steam restarts — the cover
 is already on disk; Steam just hasn't re-rendered the tile yet.
 
-**Fix**: If a tile stays blank after that, open the game's detail page and tap **Refresh Metadata** in the Tender panel.
+**Fix**: If a tile stays blank after that, open the game's detail page and tap **Refresh Metadata** in the Arcoon Deck panel.
 This re-fetches all artwork and metadata. (Hero banners, logos, and wide grid images additionally need a
 [SteamGridDB API key](configuration.md#steamgriddb-api-key) — see above.)
 

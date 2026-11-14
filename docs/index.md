@@ -1,25 +1,44 @@
-# Tender { .hero-title }
+# Arcoon Deck { .hero-title }
 
 A [Decky Loader](https://decky.xyz/) plugin that syncs your self-hosted [RomM](https://github.com/rommapp/romm) ROM
 library into Steam as Non-Steam shortcuts. Games launch through [RetroDECK](https://retrodeck.net/).
 
+**Arcoon Deck is a modification of [Tender](https://github.com/danielcopper/romm-tender)** — the plugin by
+[Daniel Copper](https://github.com/danielcopper) this one is built on. The library sync, artwork, BIOS management, ROM
+downloads and save-sync engine are his design and his code; what this fork changes is which platforms' saves travel,
+described in [Origin & Attribution](attribution.md).
+
 - Browse your entire RomM library directly from Steam's Gaming Mode
 - Download ROMs on-demand with cover art, hero banners, logos, and metadata
 - Manage BIOS files for systems that require them
-- Sync save files between devices through your RomM server
+- Sync save files between devices through your RomM server — including the card and title-folder systems below
 
-![A RomM game's detail page in Steam showing the injected Tender panel](assets/screenshot-game-detail.jpg)
+![A RomM game's detail page in Steam showing the injected Arcoon Deck panel](assets/screenshot-game-detail.jpg)
 
 !!! note "Pre-1.0 (v0.x)"
 
-    The feature set isn't complete yet. Save sync covers standard cartridge saves; the memory-card systems —
-    PlayStation, PS2, Dreamcast, GameCube, PSP, 3DS — don't sync their saves yet
-    ([support matrix](user-guide/save-sync-support-matrix.md)).
+    The feature set isn't complete yet, but save sync is no longer cartridge-only: PlayStation 2 memory cards, PSP save
+    folders, GameCube card entries, Wii title folders and the Switch/3DS title trees all carry across devices now. The
+    [support matrix](user-guide/save-sync-support-matrix.md) has the per-system detail, and it is the page to read before
+    assuming a system syncs.
 
 !!! info "How this is built"
 
-    The code is written by an AI coding agent working under my direction. The architecture, the design decisions
-    and the review are mine, and changes are smoke-tested on real hardware before they ship.
+    The code is written by an AI coding agent working under the maintainer's direction. The architecture, the design
+    decisions and the review are the maintainer's, and changes are smoke-tested on real hardware — two Deck-class
+    handhelds and a RomM server — before they ship. The same statement holds for upstream Tender, which is why neither
+    project is on the Decky store.
+
+## Origin & Attribution
+
+Full credit belongs to **[Tender](https://github.com/danielcopper/romm-tender)**, by
+**[Daniel Copper](https://github.com/danielcopper)**, released under the **GNU GPL-3.0**. Arcoon Deck is an AI-assisted
+modification of that project, not a rewrite: it keeps Tender's license, its architecture and its history, and this
+repository's history contains the fork point it starts from.
+
+What this fork is responsible for — the save-sync work that made the platforms below travel — is listed on
+**[Origin & Attribution](attribution.md)**, together with what came from upstream and what to do if you are looking for
+the original project instead of this fork.
 
 ## User Guide
 

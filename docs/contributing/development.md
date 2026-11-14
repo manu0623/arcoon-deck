@@ -1,6 +1,6 @@
 # Development
 
-Guide for setting up a development environment and contributing to Tender.
+Guide for setting up a development environment and contributing to Arcoon Deck.
 
 ## Prerequisites
 
