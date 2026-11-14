@@ -11606,11 +11606,11 @@ async function syncEmulatorShortcuts() {
             catch (e) {
                 logWarn(`Emulator collection: could not bind ${row.key} to ${created}: ${e}`);
             }
-            art += await applyEmulatorArtwork(row, created);
         }
         else {
             existing++;
         }
+        art += await applyEmulatorArtwork(row, appId);
         appIds.push(appId);
     }
     if (appIds.length > 0) {
