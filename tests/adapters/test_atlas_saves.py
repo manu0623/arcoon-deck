@@ -43,6 +43,7 @@ from _vendor.atlas import (
     ROLE_UNKNOWN,
     ROLES,
     Unresolved,
+    detect,
 )
 from _vendor.atlas.placement import (
     FILE_SET_DECLARED,
@@ -54,7 +55,6 @@ from _vendor.atlas.placement import (
     SavefilePlacement,
 )
 
-from adapters.atlas_installation import first_detected_installation
 from adapters.atlas_saves import AtlasSaveLocationAdapter
 from domain.save_answer import (
     CONFIGURATION_ROLES,
@@ -663,10 +663,19 @@ _UNDECLARED_SYSTEMS = frozenset({"atarijaguarcd", "xbox360"})
 
 @pytest.fixture(scope="module")
 def machine() -> Any:
-    installation = first_detected_installation(os.path.expanduser("~"))
-    if installation is None:
-        pytest.skip("no emulator installation on this machine — the real-resolver tier cannot run")
-    return installation
+    """The installed RetroDECK arrangement, or a skip where there is none to ask.
+
+    Deliberately NOT detection's first answer. A marker outlives the flatpak that wrote it,
+    so "the first detected" can be a RetroDECK that is not installed any more — a handle
+    whose catalogue answers no systems at all. Running the pins against it measures the
+    dead tree rather than the resolver, which is what a run on the reference Deck did
+    before this fixture asked the question the pins are about (ADR-0065).
+    """
+    installations = [found for found in detect(os.path.expanduser("~")) if found.kind == "retrodeck"]
+    handle = installations[0] if installations else None
+    if handle is None or not handle.systems().systems:
+        pytest.skip("no installed RetroDECK whose catalogue can answer — the real-resolver tier cannot run")
+    return handle
 
 
 class TestTheRealMachineAnswers:
