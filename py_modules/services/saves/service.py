@@ -75,18 +75,6 @@ class SaveService:
         # stages a card or where its settings live (ADR-0071).
         self._stage_card = config.stage_emulator_card
         self._adopt_card = config.adopt_emulator_card
-        # A PS2 save the server holds as a card image (another client's upload) is applied to
-        # the bank's folder card before the launch reads it; without the adapter there is
-        # nothing to write with, and the sync keeps skipping that shape as it always did.
-        self._ps2_card_import: Ps2CardImportService | None = None
-        if config.ps2_memcard is not None:
-            self._ps2_card_import = Ps2CardImportService(
-                rom_info=self._rom_info,
-                romm_api=config.romm_api,
-                memcard=config.ps2_memcard,
-                quarantine=self._sync_engine.quarantine_local_file,
-                logger=config.logger,
-            )
         # Resolve plugin version once at construction; the DeviceRegistry and
         # any other consumer receive the resolved string, not the Protocol.
         plugin_version = config.plugin_metadata.read_version(config.plugin_dir)
@@ -216,6 +204,21 @@ class SaveService:
                 log_debug=config.log_debug,
             ),
         )
+
+        # A PS2 save the server holds as a card image (another client's upload) is applied to
+        # the bank's folder card before the launch reads it; without the adapter there is
+        # nothing to write with, and the sync keeps skipping that shape as it always did.
+        # Built last because it is the only collaborator that needs both the answered save
+        # unit (rom_info) and the sync layer's backup discipline (sync_engine).
+        self._ps2_card_import: Ps2CardImportService | None = None
+        if config.ps2_memcard is not None:
+            self._ps2_card_import = Ps2CardImportService(
+                rom_info=self._rom_info,
+                romm_api=config.romm_api,
+                memcard=config.ps2_memcard,
+                quarantine=self._sync_engine.quarantine_local_file,
+                logger=config.logger,
+            )
 
         self._prune_support = PruneSaveSupport(
             config=PruneSaveSupportConfig(
