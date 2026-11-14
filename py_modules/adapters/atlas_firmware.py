@@ -200,42 +200,6 @@ class AtlasPlatformFirmwareAdapter:
         return _catalogue(answer, own_root=_own_root(self._reads_root))
 
 
-# The arrangement a marker can leave behind after the flatpak that wrote it is gone.
-_RETRODECK_KIND = "retrodeck"
-
-
-def installation_for_runtime(
-    user_home: str,
-    *,
-    builtin: bool,
-    find: Callable[[str], list[Any]] | None = None,
-) -> Any | None:
-    """The arrangement a firmware question is put to, out of what detection found.
-
-    RetroDECK leads detection's order wherever its marker exists, and the marker
-    is the FLATPAK's config file — which outlives the flatpak. Measured on the
-    reference Deck, which runs the app's own runtime and has no RetroDECK: the
-    marker was there, the installation resolved to ``~/retrodeck``, its cores
-    were gone, and the handle answered ZERO cores and ZERO requirements for
-    every system asked while still naming ``~/retrodeck/bios`` as the BIOS root.
-    The RetroArch flatpak beside it answered 19 cores and, for one system, 7
-    requirements. So under the app's own runtime a RetroDECK handle is passed
-    over: it can state nothing, and what it does state is about a tree nobody
-    boots. With no arrangement left, no installation is the answer — which reads
-    downstream as unresolved, never as "nothing is wanted".
-
-    While RetroDECK drives, detection's own first answer stands: its catalogue
-    is the only place its own core labels exist (ADR-0045).
-
-    *find* is the detection seam, defaulted to :func:`detect` — the same seam
-    every adapter here goes through, passed in only by a test.
-    """
-    installations = (find or detect)(user_home)
-    if builtin:
-        installations = [installation for installation in installations if installation.kind != _RETRODECK_KIND]
-    return installations[0] if installations else None
-
-
 def _installation(
     user_home: str,
     log_debug: Callable[[str], None],
@@ -245,7 +209,8 @@ def _installation(
 
     Detection returns the arrangements it found highest-priority first and never
     picks a winner itself, so the choice is the caller's where it has an opinion
-    (:func:`installation_for_runtime`); otherwise the highest-priority arrangement
+    (:func:`adapters.atlas_installation.installation_for_runtime`); otherwise the
+    highest-priority arrangement
     answers, and RetroDECK leads that order where it is present.
     """
     if choose is not None:

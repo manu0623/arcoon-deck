@@ -103,6 +103,24 @@ class ActiveCoreResolver:
         self._standalone_user_dir = config.standalone_user_dir
         self._managed_layout = config.managed_layout
 
+    def standalone_emulator_identity(self, rom_id: int) -> str | None:
+        """The emulator a standalone launch of ``rom_id`` names, or ``None`` otherwise.
+
+        The upload tag's source, and a projection of :meth:`active_emulator_for_rom`
+        rather than a second resolution: only a standalone invocation has an emulator
+        of its own to stamp, because a libretro launch is RetroArch by definition and
+        its core is what distinguishes one from another.
+
+        The identity is whichever name the invocation carries — a registry id
+        (``eden``) or a picker label (``Dolphin (Standalone)``) — and
+        :func:`domain.emulator_tag.emulator_tag` normalises either to the spelling the
+        server files saves under (ADR-0063).
+        """
+        invocation = self.active_emulator_for_rom(rom_id)
+        if invocation is None or invocation.kind != "standalone":
+            return None
+        return invocation.emulator or invocation.label
+
     def active_emulator_for_rom(self, rom_id: int) -> EmulatorInvocation | None:
         """Return the :class:`EmulatorInvocation` the ROM ``rom_id`` will launch with.
 

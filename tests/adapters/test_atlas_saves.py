@@ -54,7 +54,7 @@ from _vendor.atlas.placement import (
     SavefilePlacement,
 )
 
-from adapters.atlas_catalogue import first_detected_installation
+from adapters.atlas_installation import first_detected_installation
 from adapters.atlas_saves import AtlasSaveLocationAdapter
 from domain.save_answer import (
     CONFIGURATION_ROLES,

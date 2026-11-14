@@ -15,7 +15,9 @@ Three properties of the resolver decide this module's shape.
 returns every arrangement it found and never a winner, so the choice arrives
 here as an injected callable. Nothing in ``services/`` learns which arrangement
 answered; offering more than one is #918's, and until then the wiring hands over
-"the first detected", which is atlas's own order with RetroDECK at its head.
+:func:`adapters.atlas_installation.installation_for_runtime` — atlas's own order,
+with a RetroDECK handle passed over while the app's own runtime drives, because a
+marker its removed flatpak left behind is not an installation.
 
 **Its entry order is the EFFECTIVE one, and this plugin wants the declared one.**
 A gamelist ``<altemulator>`` or a system-level ``<alternativeEmulator>`` promotes
@@ -53,7 +55,6 @@ from _vendor.atlas import (
     CAVEAT_EMULATOR_CATALOGUE_UNREADABLE,
     HEALTH_ISSUE_CATALOGUE_INVALID,
     KIND_LIBRETRO,
-    detect,
 )
 
 from adapters.atlas_identity import emulator_identity
@@ -114,19 +115,6 @@ def _unavailable() -> dict[str, Any]:
     which a caller is free to mutate.
     """
     return {"available": False, "options": []}
-
-
-def first_detected_installation(user_home: str) -> Any:
-    """The highest-priority arrangement detected under *user_home*, or ``None``.
-
-    Detection returns what it found in probe order — RetroDECK, EmuDeck, an
-    unclaimed bare RetroArch flatpak, a bare native RetroArch — and never picks a
-    winner. This plugin is a RetroDECK plugin, and RetroDECK leads that order
-    where it is present, so "the first" is the RetroDECK answer wherever there is
-    one. Offering the others is #918.
-    """
-    installations = detect(user_home)
-    return installations[0] if installations else None
 
 
 def _plugin_core_so(core_so: str) -> str:

@@ -49,11 +49,7 @@ from _vendor.atlas.firmware import DECLARED_FILE as ATLAS_DECLARED_FILE
 from _vendor.atlas.machine import KIND_DIRECTORY, KIND_FILE, KIND_INACCESSIBLE, KIND_MISSING, PathKind
 from _vendor.atlas.placement import Caveat
 
-from adapters.atlas_firmware import (
-    AtlasFirmwareAdapter,
-    AtlasPlatformFirmwareAdapter,
-    installation_for_runtime,
-)
+from adapters.atlas_firmware import AtlasFirmwareAdapter, AtlasPlatformFirmwareAdapter
 from domain.firmware_wants import (
     CAVEAT_PATH_OBSTRUCTED,
     DECLARED_DIRECTORY,
@@ -707,47 +703,16 @@ class TestDestinationReadings:
         assert catalogue.unread_emulators == frozenset()
 
 
-class TestWhichArrangementAnswers:
-    """Who is asked at all: detection labels arrangements, the runtime picks one (ADR-0064)."""
-
-    def _reading(self, file_name: str) -> FirmwareAnswer:
-        return _answer(_core(core_so="mgba_libretro.so", requirements=(_requirement(file_name=file_name),)))
-
-    def test_a_retrodeck_handle_is_passed_over_under_the_apps_own_runtime(self):
-        """Its marker outlives its flatpak, and a handle in that state states nothing.
-
-        Measured on the reference Deck: the RetroDECK marker present with no RetroDECK
-        installed, its cores gone, zero requirements for every system — and the RetrdArch
-        flatpak beside it answering 19 cores.
-        """
-        dead = _Installation(self._reading("gba_bios.bin"))
-        live = _Installation(self._reading("gba_bios.bin"), kind="bare_retroarch_flatpak")
-
-        chosen = installation_for_runtime(
-            "/home/deck", builtin=True, find=lambda home: [dead, live]
-        )
-
-        assert chosen is live
-
-    def test_retrodeck_answers_while_it_drives(self):
-        """Under RetroDECK its catalogue is the only place its own core labels exist."""
-        dead = _Installation(self._reading("gba_bios.bin"))
-        other = _Installation(self._reading("gba_bios.bin"), kind="bare_retroarch_flatpak")
-
-        chosen = installation_for_runtime("/home/deck", builtin=False, find=lambda home: [dead, other])
-
-        assert chosen is dead
-
-    def test_no_arrangement_left_answers_none(self):
-        """Nothing to ask is unresolved, never "nothing is wanted"."""
-        dead = _Installation(self._reading("gba_bios.bin"))
-
-        assert installation_for_runtime("/home/deck", builtin=True, find=lambda home: [dead]) is None
+class TestTheArrangementItWasGiven:
+    """The firmware adapters ask the handle the wiring chose, and nothing else (ADR-0064)."""
 
     def test_the_adapter_asks_the_arrangement_it_was_given(self, monkeypatch):
         """The choice reaches the reading, rather than being computed and dropped."""
         dead = _Installation(_answer())
-        live = _Installation(self._reading("gba_bios.bin"), kind="bare_retroarch_flatpak")
+        live = _Installation(
+            _answer(_core(core_so="mgba_libretro.so", requirements=(_requirement(file_name="gba_bios.bin"),))),
+            kind="bare_retroarch_flatpak",
+        )
         monkeypatch.setattr("adapters.atlas_firmware.detect", _detecting(dead, live))
         adapter = AtlasFirmwareAdapter(
             user_home="/home/deck",

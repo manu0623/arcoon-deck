@@ -22,13 +22,10 @@ from models.shortcut_launcher import ShortcutLauncher
 
 from adapters.adoption_move import AdoptionMoveAdapter
 from adapters.asyncio_sleeper import AsyncioSleeper
-from adapters.atlas_catalogue import AtlasCatalogueAdapter, first_detected_installation
-from adapters.atlas_firmware import (
-    AtlasFirmwareAdapter,
-    AtlasPlatformFirmwareAdapter,
-    installation_for_runtime,
-)
+from adapters.atlas_catalogue import AtlasCatalogueAdapter
+from adapters.atlas_firmware import AtlasFirmwareAdapter, AtlasPlatformFirmwareAdapter
 from adapters.atlas_host import grant_core_probe_interpreter
+from adapters.atlas_installation import installation_for_runtime
 from adapters.atlas_saves import AtlasSaveLocationAdapter
 from adapters.content_identity import ContentIdentityAdapter
 from adapters.core_install import CoreInstallAdapter
@@ -570,34 +567,36 @@ def bootstrap(
             return None
         return retrodeck_paths.bios_path()
 
-    # And which arrangement answers at all. RetroDECK's marker is its flatpak's config file
-    # and outlives the flatpak: on the reference Deck it is present with no RetroDECK
-    # installed, and the handle it yields answers zero cores and zero requirements for
-    # every system while naming `~/retrodeck/bios`. Skipping it under the app's own runtime
-    # lets the arrangement that can answer — there the RetroArch flatpak — state the
-    # declarations, whose destinations are then read at the root above (ADR-0064).
-    def firmware_installation(home: str) -> Any | None:
-        """The arrangement a firmware question is put to, per the runtime being driven."""
+    # And which arrangement answers at all — one chooser for every atlas question, because
+    # the answer must not differ between them. RetroDECK's marker is its flatpak's config
+    # file and outlives the flatpak: on the reference Deck it is present with no RetroDECK
+    # installed, and the handle it yields answers zero cores, zero requirements and zero
+    # systems while naming `~/retrodeck` directories. Under the app's own runtime it is
+    # passed over, so the arrangement that can answer states the declarations, whose
+    # destinations are then read at the root above (ADR-0064, ADR-0065).
+    def answers_for_runtime(home: str) -> Any | None:
+        """The arrangement every atlas question is put to, per the runtime being driven."""
         return installation_for_runtime(home, builtin=retrodeck_paths.runtime_mode() is RuntimeMode.BUILTIN)
 
     firmware_resolver = AtlasFirmwareAdapter(
         user_home=user_home,
         log_debug=debug_logger,
         reads_root=owned_bios_root,
-        choose_installation=firmware_installation,
+        choose_installation=answers_for_runtime,
     )
     platform_firmware_resolver = AtlasPlatformFirmwareAdapter(
         user_home=user_home,
         log_debug=debug_logger,
         reads_root=owned_bios_root,
-        choose_installation=firmware_installation,
+        choose_installation=answers_for_runtime,
     )
     # Detection never picks a winner, so the choice is made here rather than in
-    # the adapter: the highest-priority arrangement, which is RetroDECK wherever
-    # one is installed. Offering the others is #918; nothing in services/ learns
-    # which one answered.
+    # the adapter, and it is the same choice the firmware questions get: detection's
+    # order, with a RetroDECK handle passed over while the app's own runtime drives.
+    # Offering several arrangements is #918; nothing in services/ learns which one
+    # answered.
     es_de_catalogue = AtlasCatalogueAdapter(
-        choose_installation=functools.partial(first_detected_installation, user_home),
+        choose_installation=functools.partial(answers_for_runtime, user_home),
         emulator_installed=es_find_rules.command_emulator_installed,
         log_debug=debug_logger,
     )
@@ -653,9 +652,12 @@ def bootstrap(
     # Reads the disc/cart header's own id, which is what names an id-keyed save folder.
     content_identity = ContentIdentityAdapter(logger=logger)
     # Same chooser, its own handle: this one caches no answer at all, because a
-    # save answer has to be live on every sync path.
+    # save answer has to be live on every sync path. It matters most here — a dead
+    # RetroDECK handle answers a save location under `~/retrodeck/saves/<system>`, a
+    # directory nothing writes, while the arrangement that is installed answers
+    # `core-not-installed` for a core it does not hold (ADR-0065).
     save_locations = AtlasSaveLocationAdapter(
-        choose_installation=functools.partial(first_detected_installation, user_home),
+        choose_installation=functools.partial(answers_for_runtime, user_home),
         log_debug=debug_logger,
     )
 

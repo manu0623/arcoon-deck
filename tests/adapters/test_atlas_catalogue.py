@@ -41,7 +41,8 @@ from _vendor.atlas.esde import EmulatorSpec
 from _vendor.atlas.installations import CatalogueAnswer, EmulatorEntry, RomPlacement, SystemsAnswer
 from _vendor.atlas.placement import Caveat
 
-from adapters.atlas_catalogue import AtlasCatalogueAdapter, first_detected_installation
+from adapters.atlas_catalogue import AtlasCatalogueAdapter
+from adapters.atlas_installation import first_detected_installation
 from domain.shortcut_data import EmulatorInvocation
 
 _RETROARCH = "%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/{core}.so %ROM%"
