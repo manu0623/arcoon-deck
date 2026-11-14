@@ -24,7 +24,8 @@ from domain.emulator_tag import emulator_tag
 from domain.iso_time import parse_iso_to_epoch
 from domain.rom_save_sync_state import FileSyncState, RomSaveSyncState
 from domain.save_backup import BACKUP_DIR_NAME, backup_name, select_backups_to_prune
-from domain.save_bank import place_archive_members, restores_by_extraction
+from domain.save_bank import SaveFamily, place_archive_members, restores_by_extraction
+from domain.save_bank import layout_for as save_layout_for
 from domain.save_slot import filter_saves_to_slot
 from domain.sync_action import Conflict, Download, Skip, SyncAction, Upload
 from lib.errors import DeviceNotRegisteredError, RommApiError, RommConflictError, classify_error
@@ -76,6 +77,11 @@ def _novel_server_target(server_save: dict[str, Any], server_target_filter: Call
         return None
     target = f"{stem}.{extension}"
     return target if server_target_filter(target) else None
+
+
+def _is_ps2_card_unit(system: str) -> bool:
+    """Whether this platform's saves travel as a memory card (PS2's folder card)."""
+    return save_layout_for(system).family is SaveFamily.PS2_CARD
 
 
 def _extension(name: str) -> str:
@@ -207,6 +213,7 @@ class MatrixExecutor:
         save_file_store: SaveFileStore,
         log_debug: DebugLogger,
         emulator_identity: Callable[[int], str | None] | None = None,
+        ps2_card_import: Callable[[str, str], dict[str, Any] | None] | None = None,
     ) -> None:
         self._rom_info = rom_info
         self._romm_api = romm_api
@@ -221,6 +228,9 @@ class MatrixExecutor:
         # with it instead of a launcher's name. Optional because a test or a probe may build
         # the executor without one, and a missing answer must not fail an upload.
         self._emulator_identity = emulator_identity
+        # ``(downloaded card path, game folder) -> outcome`` for a PS2 save RomM holds as a
+        # memory-card image. Without it that shape is left where it is, as it always was.
+        self._ps2_card_import = ps2_card_import
 
     # ------------------------------------------------------------------
     # Upload Emulator Identity
@@ -500,6 +510,32 @@ class MatrixExecutor:
         name = os.path.basename(member_path)
         if name.endswith(".tmp"):
             name = name[: -len(".tmp")]
+        if self._ps2_card_import is not None and _is_ps2_card_unit(system):
+            # A PS2 save that arrives as a bare file is a whole memory-card image: renaming
+            # it into the card folder puts 8 MB of card where a save folder belongs and the
+            # emulator reads nothing. Its game's folder is what the card folder holds, so
+            # the image is opened and that folder written out instead (ADR-0072).
+            outcome = self._ps2_card_import(member_path, saves_dir)
+            if outcome is None or outcome.get("status") not in ("imported", "unchanged"):
+                self._logger.warning(
+                    f"Restore left {server_save.get('file_name') or server_save.get('id')} on the "
+                    f"server: its card named no folder for {saves_dir} ({outcome})"
+                )
+                return
+            for member in outcome.get("files") or ():
+                self.update_file_sync_state(
+                    save_state,
+                    member,
+                    server_save,
+                    os.path.join(saves_dir, member),
+                    system,
+                    default_slot=default_slot,
+                )
+            self._log_debug(
+                f"Restored {server_save.get('file_name') or server_save.get('id')} into {saves_dir} "
+                f"as the card folder {outcome.get('folder')}"
+            )
+            return
         self.quarantine_local_file(saves_dir, name)
         local_path = os.path.join(saves_dir, name)
         self._save_file_store.rename(member_path, local_path)

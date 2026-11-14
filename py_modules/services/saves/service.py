@@ -112,6 +112,21 @@ class SaveService:
             ),
         )
 
+        # A PS2 save the server holds as a card image (another client's upload) is applied to
+        # the bank's folder card before the launch reads it, and a version switch takes the
+        # same path. Built before the engine because the matrix needs it for a restore; the
+        # backup runs through the engine's quarantine, looked up when it is called, so the
+        # two can be constructed in either order.
+        self._ps2_card_import: Ps2CardImportService | None = None
+        if config.ps2_memcard is not None:
+            self._ps2_card_import = Ps2CardImportService(
+                rom_info=self._rom_info,
+                romm_api=config.romm_api,
+                memcard=config.ps2_memcard,
+                quarantine=lambda target, name: self._sync_engine.quarantine_local_file(target, name),
+                logger=config.logger,
+            )
+
         self._sync_engine = SyncEngine(
             config=SyncEngineConfig(
                 settings=config.settings,
@@ -133,6 +148,7 @@ class SaveService:
                 detect_sort_change=config.detect_sort_change,
                 is_retrodeck_migration_pending=config.is_retrodeck_migration_pending,
                 build_inventory=self.build_save_inventory,
+                ps2_card_import=(None if self._ps2_card_import is None else self._ps2_card_import.import_card),
             ),
         )
 
@@ -204,21 +220,6 @@ class SaveService:
                 log_debug=config.log_debug,
             ),
         )
-
-        # A PS2 save the server holds as a card image (another client's upload) is applied to
-        # the bank's folder card before the launch reads it; without the adapter there is
-        # nothing to write with, and the sync keeps skipping that shape as it always did.
-        # Built last because it is the only collaborator that needs both the answered save
-        # unit (rom_info) and the sync layer's backup discipline (sync_engine).
-        self._ps2_card_import: Ps2CardImportService | None = None
-        if config.ps2_memcard is not None:
-            self._ps2_card_import = Ps2CardImportService(
-                rom_info=self._rom_info,
-                romm_api=config.romm_api,
-                memcard=config.ps2_memcard,
-                quarantine=self._sync_engine.quarantine_local_file,
-                logger=config.logger,
-            )
 
         self._prune_support = PruneSaveSupport(
             config=PruneSaveSupportConfig(

@@ -72,7 +72,7 @@ from services.saves.sync_engine.rollback import RollbackOrchestrator
 
 if TYPE_CHECKING:
     import logging
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
     from domain.save_answer import SaveAnswer
     from domain.save_layout import SaveLayout
@@ -185,6 +185,10 @@ class SyncEngineConfig:
     detect_sort_change: SaveSortChangeFn
     is_retrodeck_migration_pending: MigrationPendingFn
     build_inventory: SaveInventoryBuilderFn
+    # Optional: ``(downloaded card path, game folder) -> outcome``, which writes a PS2 save
+    # that RomM holds as a memory-card image into the card folder a launch reads. ``None``
+    # leaves that shape skipped, the behaviour before ADR-0072.
+    ps2_card_import: Callable[[str, str], dict[str, Any] | None] | None = None
 
 
 class SyncEngine:
@@ -231,9 +235,8 @@ class SyncEngine:
             # The upload tag asks the same resolver the launch does, so the label and
             # the program that ran cannot disagree; ``None`` while no resolver is wired
             # leaves the tag to the core alone (ADR-0063).
-            emulator_identity=(
-                None if config.active_core is None else config.active_core.standalone_emulator_identity
-            ),
+            emulator_identity=(None if config.active_core is None else config.active_core.standalone_emulator_identity),
+            ps2_card_import=config.ps2_card_import,
         )
         self._rollback = RollbackOrchestrator(
             uow_factory=config.uow_factory,

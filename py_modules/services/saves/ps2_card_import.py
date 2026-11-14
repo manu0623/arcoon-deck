@@ -3,7 +3,7 @@
 A PS2 emulator keeps every game's saves in one memory card, and the card has two on-disk
 shapes: a *file* card (one 8,650,752-byte image) and a *folder* card (a directory with
 ``_pcsx2_superblock`` and one folder per game). This plugin's launch reads a folder card —
-the bank's ``Mcd001.ps2/`` holds the game's own folder, ``BASLUS-20307Burn`` for instance —
+the bank's ``Mcd001.ps2/`` holds each game's own folder, ``BASLUS-20307Burn`` for instance —
 and uploads that folder as one archive.
 
 Another client uploads the other shape. Measured on the reference server: the Android
@@ -14,7 +14,7 @@ the handheld at 03:30 never reached a Deck that had last saved at 00:38.
 Nothing about that image is a foreign format. The game's folder is inside it, and
 :func:`domain.ps2_file_card.read_file_card` reads it — the same reader the bank's own
 file-card conversion uses, measured on the handheld's file for rom 5338, which parsed to
-``BASLUS-20307Burn`` with five files.
+``BASLUS-21423GTA30001``, the folder the bank's card holds for that game.
 
 So a card that is the NEWEST save in the slot is opened and its game's folder written into
 the folder the launch reads. Two guards keep that from doing harm:
@@ -82,15 +82,15 @@ class Ps2CardImportService:
         if not info or (info.get("system") or "") != PS2_SYSTEM:
             return None
         answer = self._rom_info.save_answer(rom_id)
-        target = getattr(answer, "directory", None)
-        if answer is None or not answer.syncable or not target:
+        card_dir = getattr(answer, "directory", None)
+        if answer is None or not answer.syncable or not card_dir:
             return None
         newest = self._newest_in_slot(rom_id)
         if newest is None:
             return None
         if _extension(newest) != CARD_EXTENSION:
             return None
-        return self._apply(rom_id, int(newest["id"]), target, newest)
+        return self._apply(rom_id, int(newest["id"]), card_dir, game_folder(answer), newest)
 
     # ------------------------------------------------------------------
     # Reading the slot
@@ -114,47 +114,78 @@ class Ps2CardImportService:
     # Applying the card
     # ------------------------------------------------------------------
 
-    def _apply(self, rom_id: int, save_id: int, target: str, server_save: dict[str, Any]) -> dict[str, Any] | None:
-        image = self._download(save_id, target)
-        if image is None:
+    def import_card(self, image_path: str, card_dir: str, folder_name: str | None = None) -> dict[str, Any] | None:
+        """Write the game's folder out of the card at *image_path* into *card_dir*.
+
+        *card_dir* is the folder card (``…/saves/ps2/Mcd001.ps2``); the game's folder is
+        written inside it, selected by *folder_name* — the name the answer's own members
+        carry — or, when that is unknown, only when the card holds exactly one game.
+
+        ``None`` when the file names no folder — an unreadable image, or a card holding
+        several games and none of them this one. The folder's files are backed up through
+        quarantine before any of them is replaced, and a card whose bytes already match is
+        reported ``unchanged`` rather than written again.
+
+        Public because a version switch downloads the same card (``VersionsService``), so
+        both the launch and the restore take the identical path into the bank.
+        """
+        try:
+            with open(image_path, "rb") as handle:
+                image = handle.read()
+        except OSError as exc:
+            self._logger.warning(f"PS2 card import: cannot read {image_path}: {exc}")
             return None
-        folder = self._memcard.read_folder(image, folder_name=os.path.basename(target.rstrip("/")))
+        folder = self._memcard.read_folder(image, folder_name=folder_name)
         if folder is None:
             self._logger.info(
-                f"PS2 card import: rom {rom_id}'s newest save is a card that names no folder "
-                f"for {os.path.basename(target)}; leaving it on the server"
+                f"PS2 card import: the card names no folder for this game "
+                f"({folder_name or 'no name known'}); nothing was written"
             )
-            return {"status": "no_folder"}
+            return None
+        target = os.path.join(card_dir, folder.name)
+        names = [item.name for item in folder.files]
         if self._already_there(image, folder, target):
-            return {"status": "unchanged", "folder": folder.name}
+            return {"status": "unchanged", "folder": folder.name, "files": names}
         for item in folder.files:
             try:
                 self._quarantine(target, item.name)
             except Exception as exc:  # no backup, no write
                 self._logger.warning(f"PS2 card import: cannot back up {item.name} in {target}, writing nothing: {exc}")
-                return {"status": "backup_failed", "folder": folder.name}
-        outcome = self._memcard.write_folder(image, folder, target)
+                return {"status": "backup_failed", "folder": folder.name, "files": []}
+        return self._memcard.write_folder(image, folder, target)
+
+    def _apply(
+        self,
+        rom_id: int,
+        save_id: int,
+        card_dir: str,
+        folder_name: str | None,
+        server_save: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        staged = f"{card_dir}.card"
+        try:
+            self._romm_api.download_save(save_id, staged)
+        except Exception as exc:
+            self._logger.warning(f"PS2 card import: cannot download save {save_id}: {exc}")
+            return None
+        try:
+            outcome = self.import_card(staged, card_dir, folder_name)
+        finally:
+            with contextlib.suppress(OSError):
+                os.remove(staged)
+        if outcome is None:
+            self._logger.info(
+                f"PS2 card import: rom {rom_id}'s newest save is a card that names no folder "
+                f"for this game ({folder_name or 'no name known'}); leaving it on the server"
+            )
+            return {"status": "no_folder"}
         if outcome.get("status") == "imported":
             self._logger.info(
                 f"PS2 card import: rom {rom_id} took {outcome.get('folder')} "
                 f"({len(outcome.get('files') or ())} file(s)) from save {server_save.get('id')} "
-                f"made {server_save.get('updated_at')} into {target}"
+                f"made {server_save.get('updated_at')} into {card_dir}"
             )
         return outcome
-
-    def _download(self, save_id: int, target: str) -> bytes | None:
-        """The card's bytes, downloaded beside the card folder it will be written into."""
-        staged = f"{target}.card"
-        try:
-            self._romm_api.download_save(save_id, staged)
-            with open(staged, "rb") as handle:
-                return handle.read()
-        except Exception as exc:
-            self._logger.warning(f"PS2 card import: cannot download save {save_id}: {exc}")
-            return None
-        finally:
-            with contextlib.suppress(OSError):
-                os.remove(staged)
 
     @staticmethod
     def _already_there(image: bytes, folder: Ps2CardFolder, target: str) -> bool:
@@ -168,6 +199,21 @@ class Ps2CardImportService:
             if current != b"".join(image[start : start + length] for start, length in item.spans):
                 return False
         return True
+
+
+def game_folder(answer: Any) -> str | None:
+    """The game's own folder on the card, from the answer's members (``BASLUS-…/icon.sys``).
+
+    A PS2 answer names the card folder as its directory and every member below it, so the
+    first path segment is the folder this game's saves live in. ``None`` when the game has
+    never saved here — the download then has to name its own folder, which only a one-game
+    card can do.
+    """
+    for component in getattr(answer, "synced_files", ()) or ():
+        name = str(getattr(component, "name", component))
+        if "/" in name:
+            return name.split("/", 1)[0]
+    return None
 
 
 def _extension(server_save: dict[str, Any]) -> str:

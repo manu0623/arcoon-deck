@@ -11,6 +11,7 @@ Persistence is the operation's own narrow Unit of Work (ADR-0006).
 
 from __future__ import annotations
 
+import contextlib
 import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -263,10 +264,21 @@ class VersionsService:
             restore_dir=restore_dir,
         )
 
+        # The PUT moves no bytes the server does not already hold: it re-sends this version
+        # so RomM bumps ``updated_at`` and makes it newest in the slot. For a unit RomM
+        # carries as one archive there is no local file at the unit's name — the restore
+        # wrote the folder the archive was packed from — so the same version is downloaded
+        # once beside it and that copy is what the PUT sends.
+        put_path = local_path
+        put_cleanup = None
+        if unit_dir is not None:
+            put_path = os.path.join(saves_dir, f"{target_filename}.put")
+            put_cleanup = put_path
+            self._romm_api.download_save(save_id, put_path)
         try:
             self._sync_engine.do_upload_save(
                 rom_id,
-                local_path,
+                put_path,
                 target_filename,
                 save_state,
                 device_id,
@@ -287,6 +299,10 @@ class VersionsService:
                 e,
             )
             return {"status": "put_failed", "message": str(e)}
+        finally:
+            if put_cleanup is not None:
+                with contextlib.suppress(OSError):
+                    os.remove(put_cleanup)
 
         return {"status": "ok"}
 

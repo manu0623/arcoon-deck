@@ -56,6 +56,24 @@ The folder is chosen by name (`read_file_card` → `select_folder`): a card hold
 one folder is that game's save; a card holding several and none of them the expected name
 is ambiguous and refused, since guessing writes one game's progress over another's.
 
+### Which folder, and which card
+
+A PS2 answer's directory is the **card folder** (`…/saves/ps2/Mcd001.ps2`), and every member
+carries the game's folder as its first path segment (`BASLUS-21423GTA30001/icon.sys`). So
+the import is told the card and takes the folder from the answer's own members; a card
+holding several games is read by that name, and a card holding one game needs no name. A
+restore that arrives without an answer (a bare member in the matrix) can only be placed
+when its card holds a single game.
+
+### Restoring an older version, and the PUT that follows
+
+The version switch restores the chosen save and then re-sends it so RomM bumps
+`updated_at`. For a unit RomM carries as one archive there is no local file at the unit's
+name — the restore wrote the folder the archive is packed from — so the switch downloads
+the chosen version once more beside it and sends that copy. Without this the switch ended
+in `PUT to bump updated_at failed … No such file or directory` and reported "restored, but
+the server didn't update" while the save itself had already been applied.
+
 ## Consequences
 
 - Android → Deck works for PS2 saves: the newest card becomes the save the launch reads,
@@ -68,3 +86,6 @@ is ambiguous and refused, since guessing writes one game's progress over another
 - The card's own bytes are read once per cycle, not per launch: after the import, this
   device's upload is the newest save in the slot, so the next launch sees a `.zip` and the
   import does nothing.
+- A restoring device and a launching device take the same path: the version switch uses the
+  same import, so "restore this version" no longer writes an 8 MB card image into the card
+  folder as if it were a save.
