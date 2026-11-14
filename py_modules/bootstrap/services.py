@@ -538,6 +538,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             external_emulators=cfg.adapters.external_emulators,
             sgdb_api=cfg.adapters.sgdb_adapter,
             settings=cfg.stores.settings,
+            grid_dir=cfg.adapters.steam_config,
             settings_persister=cfg.callbacks.settings_persister,
         ),
     )

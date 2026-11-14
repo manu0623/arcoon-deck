@@ -7,6 +7,7 @@ import pytest
 from domain.artwork_paths import (
     SHORTCUT_APP_ID_MAX,
     SHORTCUT_APP_ID_MIN,
+    asset_grid_filenames,
     final_filename,
     grid_image_filenames,
     is_shortcut_app_id,
@@ -123,3 +124,32 @@ class TestGridImageFilenames:
 
     def test_str_app_id(self):
         assert "12345p.png" in grid_image_filenames("12345")
+
+
+class TestAssetGridFilenames:
+    """Which grid file means an SGDB asset type is already applied.
+
+    The suffix set is measured: a live grid directory on a Deck holds ``_logo`` (2178 files),
+    ``_hero`` (1927), portrait ``p`` (1098), bare wide ``.png`` (131) and ``_icon`` (104 png,
+    26 ico) and nothing else of that shape.
+    """
+
+    def test_hero_is_its_own_suffix(self):
+        assert asset_grid_filenames("hero", 7) == ("7_hero.png", "7_hero.jpg", "7_hero.jpeg")
+
+    def test_logo_and_icon_are_their_own_suffixes(self):
+        assert asset_grid_filenames("logo", 7)[0] == "7_logo.png"
+        assert asset_grid_filenames("icon", 7)[0] == "7_icon.png"
+
+    def test_grid_accepts_the_portrait_and_the_wide_form(self):
+        assert asset_grid_filenames("grid", 7) == (
+            "7p.png",
+            "7p.jpg",
+            "7p.jpeg",
+            "7.png",
+            "7.jpg",
+            "7.jpeg",
+        )
+
+    def test_an_unknown_asset_type_has_nothing_to_check(self):
+        assert asset_grid_filenames("banner", 7) == ()

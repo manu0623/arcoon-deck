@@ -15,17 +15,25 @@ row again — which is why the map is a hint, not the truth.
 name, so "PPSSPP" gives a real tile and something obscure gives nothing; a missing
 key, a no-match, or a failed download all mean "no art", never "no shortcut". The
 shortcut is the feature; the picture is what makes it fit beside the games.
+
+**An asset already on disk is answered, not fetched.** Steam's grid directory is the
+truth for "does this tile carry art": a file there costs one presence check, where
+re-fetching would spend a SteamGridDB request and a download on every plugin mount.
+That is what lets the frontend ask for art on a tile it did not create this run — 13
+tiles bound before the art existed would otherwise keep the default tile forever.
 """
 
 from __future__ import annotations
 
 import asyncio
 import base64
+import os
 import tempfile
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 from urllib.parse import quote
 
+from domain.artwork_paths import asset_grid_filenames
 from domain.emulator_shortcut import EmulatorShortcut, shortcuts
 from domain.sgdb_artwork import asset_type_name, sgdb_endpoint_path
 
@@ -63,6 +71,12 @@ class SettingsPersister(Protocol):
     def save_settings(self) -> None: ...
 
 
+class GridDirReader(Protocol):
+    """Steam's grid directory, as the presence check needs it."""
+
+    def grid_dir(self) -> str | None: ...
+
+
 @dataclass(frozen=True)
 class EmulatorShortcutConfig:
     """Everything this service is handed at construction.
@@ -76,6 +90,9 @@ class EmulatorShortcutConfig:
     sgdb_api: SgdbReader
     settings: dict[str, Any]
     settings_persister: SettingsPersister
+    #: Steam's grid directory. ``None`` means "cannot tell", and every asset is then
+    #: fetched as before — a missing answer must never look like "already applied".
+    grid_dir: GridDirReader | None = None
 
 
 class EmulatorShortcutService:
@@ -87,6 +104,7 @@ class EmulatorShortcutService:
         self._sgdb_api = config.sgdb_api
         self._settings = config.settings
         self._settings_persister = config.settings_persister
+        self._grid_dir = config.grid_dir
 
     # ── reading ──────────────────────────────────────────────────────────────
 
@@ -166,6 +184,9 @@ class EmulatorShortcutService:
         if row is None:
             return {"base64": None, "no_api_key": False, "reason": "unknown_emulator"}
 
+        if self._already_applied(key, name):
+            return {"base64": None, "no_api_key": False, "present": True}
+
         sgdb_id = self._search_game_id(row.search_term)
         if sgdb_id is None:
             return {"base64": None, "no_api_key": False, "reason": "no_match"}
@@ -179,6 +200,23 @@ class EmulatorShortcutService:
             return {"base64": None, "no_api_key": False, "reason": "no_asset"}
 
         return {"base64": self._download_base64(url), "no_api_key": False}
+
+    def _already_applied(self, key: str, asset_type: str) -> bool:
+        """Whether the bound tile already carries this asset, read off Steam's grid dir.
+
+        Three answers mean "cannot tell, so fetch": no ``grid_dir`` handed in, no
+        binding for this key (no tile to dress yet), and an asset type in no grid form.
+        """
+        if self._grid_dir is None:
+            return False
+        app_id = self._bindings().get(key)
+        if app_id is None:
+            return False
+        directory = self._grid_dir.grid_dir()
+        if not directory:
+            return False
+        names = asset_grid_filenames(asset_type, app_id)
+        return any(os.path.exists(os.path.join(directory, name)) for name in names)
 
     def _search_game_id(self, term: str) -> int | None:
         """SteamGridDB's best guess at the emulator, by name.

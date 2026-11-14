@@ -81,10 +81,13 @@ describe("syncEmulatorShortcuts", () => {
       collection: "Emulators",
       emulators: [row("ppsspp@native", 5000)],
     });
+    vi.mocked(backend.getEmulatorArtwork).mockResolvedValue({ base64: null, no_api_key: false, present: true });
 
     const outcome = await syncEmulatorShortcuts();
 
     expect(vi.mocked(steamShortcuts.addShortcut)).not.toHaveBeenCalled();
+    expect(mocked.getEmulatorArtwork).toHaveBeenCalledTimes(4);
+    expect(vi.mocked(SteamClient.Apps.SetCustomArtworkForApp)).not.toHaveBeenCalled();
     expect(mocked.bindEmulatorShortcut).not.toHaveBeenCalled();
     expect(vi.mocked(collections.createOrUpdateEmulatorCollection)).toHaveBeenCalledWith("Emulators", [5000]);
     expect(outcome).toMatchObject({ added: 0, existing: 1, total: 1 });
@@ -113,6 +116,7 @@ describe("syncEmulatorShortcuts", () => {
       collection: "Emulators",
       emulators: [row("ppsspp@native", 5000)],
     });
+    vi.mocked(backend.getEmulatorArtwork).mockResolvedValue({ base64: null, no_api_key: false, present: true });
 
     const outcome = await syncEmulatorShortcuts();
 
@@ -134,6 +138,26 @@ describe("syncEmulatorShortcuts", () => {
     const outcome = await syncEmulatorShortcuts();
 
     expect(mocked.getEmulatorArtwork).toHaveBeenCalledTimes(4);
+    expect(vi.mocked(SteamClient.Apps.SetCustomArtworkForApp)).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(SteamClient.Apps.SetShortcutIcon)).toHaveBeenCalledWith(5000, "/grid/5000_icon.png");
+    expect(outcome.art).toBe(4);
+  });
+
+  it("dresses an existing tile that has no art yet", async () => {
+    // The bug this covers: art was fetched only when the shortcut was created, so the 13
+    // tiles a device already had kept Steam's default picture for the life of the install.
+    liveStore([5000]);
+    vi.mocked(backend.getEmulatorShortcuts).mockResolvedValue({
+      collection: "Emulators",
+      emulators: [row("ppsspp@native", 5000)],
+    });
+    vi.mocked(backend.getEmulatorArtwork).mockResolvedValue({ base64: "AA==", no_api_key: false });
+    vi.mocked(backend.saveShortcutIcon).mockResolvedValue({ success: true, icon_path: "/grid/5000_icon.png" });
+
+    const outcome = await syncEmulatorShortcuts();
+
+    expect(vi.mocked(steamShortcuts.addShortcut)).not.toHaveBeenCalled();
+    expect(mocked.getEmulatorArtwork).toHaveBeenCalledWith("ppsspp@native", 1);
     expect(vi.mocked(SteamClient.Apps.SetCustomArtworkForApp)).toHaveBeenCalledTimes(3);
     expect(vi.mocked(SteamClient.Apps.SetShortcutIcon)).toHaveBeenCalledWith(5000, "/grid/5000_icon.png");
     expect(outcome.art).toBe(4);

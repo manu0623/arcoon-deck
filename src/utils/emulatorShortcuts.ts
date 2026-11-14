@@ -151,10 +151,15 @@ export async function syncEmulatorShortcuts(): Promise<EmulatorCollectionOutcome
       } catch (e) {
         logWarn(`Emulator collection: could not bind ${row.key} to ${created}: ${e}`);
       }
-      art += await applyEmulatorArtwork(row, created);
     } else {
       existing++;
     }
+    // Art is applied to a tile that LACKS it, not only to one this run created: a tile
+    // bound before the art existed — or before a SteamGridDB key was set — would
+    // otherwise wear Steam's default picture for the life of the install. The backend
+    // answers "already there" from Steam's grid directory, so a settled device pays four
+    // file checks per emulator and no request at all.
+    art += await applyEmulatorArtwork(row, appId);
     appIds.push(appId);
   }
 

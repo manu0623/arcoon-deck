@@ -209,3 +209,85 @@ class TestTheArtwork:
 
         assert answer == {"base64": None, "no_api_key": False, "reason": "unknown_asset_type"}
         assert sgdb.paths == []
+
+
+class _GridDir:
+    """Steam's grid directory, faked as a directory the test chose."""
+
+    def __init__(self, path) -> None:
+        self._path = path
+
+    def grid_dir(self) -> str | None:
+        return str(self._path)
+
+
+def _service_with_grid(grid, bindings: dict[str, int]) -> tuple[EmulatorShortcutService, _Sgdb]:
+    """A service that can see a grid dir, which is the half this class is about."""
+    sgdb = _Sgdb()
+    built = EmulatorShortcutService(
+        config=EmulatorShortcutConfig(
+            logger=logging.getLogger("test_emulator_shortcuts"),
+            external_emulators=_Scanner(),
+            sgdb_api=sgdb,
+            settings={"steamgriddb_api_key": "key", BINDINGS_KEY: bindings},
+            settings_persister=_Persister(),
+            grid_dir=_GridDir(grid),
+        )
+    )
+    return built, sgdb
+
+
+class TestAnAssetAlreadyOnDisk:
+    """Measured before this change: 13 tiles bound, ``0 images applied`` on every run, and no
+    file in Steam's grid dir for any of their app ids — art was fetched only at creation, so
+    a tile bound earlier could never gain any.
+    """
+
+    @pytest.mark.asyncio
+    async def test_an_applied_hero_is_answered_not_fetched(self, tmp_path) -> None:
+        (tmp_path / "1234_hero.png").write_bytes(b"\x89PNG")
+        built, sgdb = _service_with_grid(tmp_path, {"ppsspp@native": 1234})
+
+        answer = await built.artwork("ppsspp@native", 1)
+
+        assert answer == {"base64": None, "no_api_key": False, "present": True}
+        assert sgdb.paths == []
+
+    @pytest.mark.asyncio
+    async def test_a_missing_asset_is_fetched(self, tmp_path) -> None:
+        built, sgdb = _service_with_grid(tmp_path, {"ppsspp@native": 1234})
+
+        answer = await built.artwork("ppsspp@native", 1)
+
+        assert answer["base64"] is not None
+        assert sgdb.paths == ["/search/autocomplete/PPSSPP", "/heroes/game/9001"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("name", ["1234.png", "1234p.png"])
+    async def test_either_grid_form_counts(self, tmp_path, name) -> None:
+        (tmp_path / name).write_bytes(b"\x89PNG")
+        built, sgdb = _service_with_grid(tmp_path, {"ppsspp@native": 1234})
+
+        answer = await built.artwork("ppsspp@native", 3)
+
+        assert answer.get("present") is True
+        assert sgdb.paths == []
+
+    @pytest.mark.asyncio
+    async def test_a_row_with_no_binding_is_fetched(self, tmp_path) -> None:
+        (tmp_path / "1234_hero.png").write_bytes(b"\x89PNG")
+        built, sgdb = _service_with_grid(tmp_path, {})
+
+        answer = await built.artwork("ppsspp@native", 1)
+
+        assert answer["base64"] is not None
+        assert sgdb.paths != []
+
+    @pytest.mark.asyncio
+    async def test_no_grid_dir_is_fetched_as_before(self, service) -> None:
+        built, _, _, sgdb = service
+
+        answer = await built.artwork("ppsspp@native", 1)
+
+        assert answer["base64"] is not None
+        assert sgdb.paths != []

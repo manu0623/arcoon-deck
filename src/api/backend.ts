@@ -322,6 +322,8 @@ export interface EmulatorArtworkAnswer {
   base64: string | null;
   no_api_key: boolean;
   reason?: string;
+  /** Steam's grid dir already holds this asset for the bound tile — nothing to apply. */
+  present?: boolean;
 }
 
 export const getEmulatorShortcuts = callable<[], EmulatorShortcutCatalogue>("get_emulator_shortcuts");

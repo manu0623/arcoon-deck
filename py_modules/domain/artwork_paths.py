@@ -74,6 +74,32 @@ def grid_image_filenames(app_id: int | str) -> list[str]:
     return [f"{app_id}{suffix}.{ext}" for suffix in _GRID_IMAGE_SUFFIXES for ext in _GRID_IMAGE_EXTENSIONS]
 
 
+# Which grid file means a SteamGridDB asset type is already applied to a shortcut. Keyed by
+# the asset-type name the frontend's numeric codes resolve to, and "grid" has two measured
+# forms: the portrait ``{app_id}p.png`` a cover write produces, and the wide ``{app_id}.png``
+# Steam writes for an asset applied as a grid. Either one counts — the question a caller asks
+# is whether the tile already carries a picture of that kind, not which writer made it.
+_ASSET_TYPE_GRID_SUFFIXES: dict[str, tuple[str, ...]] = {
+    "hero": ("_hero",),
+    "logo": ("_logo",),
+    "grid": ("p", ""),
+    "icon": ("_icon",),
+}
+
+
+def asset_grid_filenames(asset_type: str, app_id: int | str) -> tuple[str, ...]:
+    """Return every grid filename that means *asset_type* is already on disk for *app_id*.
+
+    Empty for an unknown asset type: nothing to check and nothing applied are the same
+    answer, so a caller never has to special-case one.
+    """
+    return tuple(
+        f"{app_id}{suffix}.{ext}"
+        for suffix in _ASSET_TYPE_GRID_SUFFIXES.get(asset_type, ())
+        for ext in _GRID_IMAGE_EXTENSIONS
+    )
+
+
 def with_tmp_suffix(name: str) -> str:
     """Return *name* with the write-sidecar ``.tmp`` suffix appended.
 
