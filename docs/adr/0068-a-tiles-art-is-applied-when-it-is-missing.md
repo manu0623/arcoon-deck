@@ -82,6 +82,9 @@ the backend decodes the PNG and writes `{app_id}p.png` into the grid directory. 
 is involved, because Steam reads that directory itself; `save_shortcut_cover` is the callable,
 and `steam_config.write_shortcut_cover` the write.
 
-Two gaps this does **not** close, both SGDB coverage rather than plumbing: Dolphin has no hero
-asset on its SGDB entry, and the search term `Citron` matches nothing there at all, so that
-tile stays on Steam's default picture until the name it searches for changes.
+The last undressed tile was a different fault, and measuring it was worth the round trip:
+`Citron` autocompletes to `CITRON WORLD FORWARD:ZERO` first — a game holding **no** asset of
+any kind — while `Citron (Emulator)` is the second row and holds all five. Taking the first row
+was the whole bug, so an emulator may now state its own SGDB id (`EmulatorDef.sgdb_id`, measured
+`5471414` for Citron) and the service asks that id before it searches. Dolphin still has no
+hero asset on its SGDB entry; that one is coverage, not plumbing.

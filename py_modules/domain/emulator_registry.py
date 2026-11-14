@@ -97,6 +97,11 @@ class EmulatorDef:
     family: str
     platforms: tuple[str, ...]
     hints: DetectionHints
+    #: A SteamGridDB game id, for an emulator whose own name ranks below a game of the same
+    #: word in SGDB's autocomplete. ``Citron`` is the measured case: the first row for
+    #: "Citron" is ``CITRON WORLD FORWARD:ZERO``, which holds no art of any kind, while
+    #: ``Citron (Emulator)`` is the second row and holds all five (2026-11-13).
+    sgdb_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -336,6 +341,9 @@ _DEFINITIONS: tuple[EmulatorDef, ...] = (
             binary_prefixes=("citron",),
             launcher_names=("citron",),
         ),
+        # Measured: "Citron" autocompletes to a game first (`CITRON WORLD FORWARD:ZERO`,
+        # no assets at all); the emulator's own SGDB entry is the next row.
+        sgdb_id=5471414,
     ),
     EmulatorDef(
         id="yuzu",

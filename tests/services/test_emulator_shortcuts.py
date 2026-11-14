@@ -35,9 +35,7 @@ PPSSPP = EmulatorDef(
 class _Scanner:
     def __init__(self) -> None:
         self.rows = [
-            InstalledEmulator(
-                definition=PPSSPP, provider="native", path="/home/deck/Applications/PPSSPP.AppImage"
-            ),
+            InstalledEmulator(definition=PPSSPP, provider="native", path="/home/deck/Applications/PPSSPP.AppImage"),
             InstalledEmulator(definition=PPSSPP, provider="flatpak", path="org.ppsspp.PPSSPP"),
             # An emulator SteamGridDB's fake below has never heard of, for the
             # no-match branch: the art search is by name, so it can come back empty.
@@ -319,3 +317,61 @@ class TestAnAssetAlreadyOnDisk:
 
         assert answer["base64"] is not None
         assert sgdb.paths != []
+
+
+class _StatedIdScanner:
+    """One emulator whose SteamGridDB id is stated, not searched for."""
+
+    def installs(self):
+        definition = EmulatorDef(
+            id="citron",
+            display_name="Citron",
+            family="yuzu",
+            platforms=("switch",),
+            hints=DetectionHints(appimage_prefixes=("citron",)),
+            sgdb_id=5471414,
+        )
+        return [InstalledEmulator(definition=definition, provider="native", path="/apps/Citron.AppImage")]
+
+
+class TestAStatedArtworkId:
+    """Measured: "Citron" autocompletes to ``CITRON WORLD FORWARD:ZERO`` first, which has no
+    art of any kind, so the tile was dressed in nothing while the emulator's own SGDB entry
+    (the next row) had all five assets.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_stated_id_is_asked_directly(self, tmp_path) -> None:
+        sgdb = _Sgdb()
+        built = EmulatorShortcutService(
+            config=EmulatorShortcutConfig(
+                logger=logging.getLogger("test_emulator_shortcuts"),
+                external_emulators=_StatedIdScanner(),
+                sgdb_api=sgdb,
+                settings={"steamgriddb_api_key": "key", BINDINGS_KEY: {}},
+                settings_persister=_Persister(),
+                grid_dir=_GridDir(tmp_path),
+            )
+        )
+
+        answer = await built.artwork("citron@native", 1)
+
+        assert answer["base64"] is not None
+        assert sgdb.paths == ["/heroes/game/5471414"]
+
+    @pytest.mark.asyncio
+    async def test_the_row_carries_the_id(self, tmp_path) -> None:
+        built = EmulatorShortcutService(
+            config=EmulatorShortcutConfig(
+                logger=logging.getLogger("test_emulator_shortcuts"),
+                external_emulators=_StatedIdScanner(),
+                sgdb_api=_Sgdb(),
+                settings={"steamgriddb_api_key": "key"},
+                settings_persister=_Persister(),
+                grid_dir=_GridDir(tmp_path),
+            )
+        )
+
+        rows = built.catalogue()["emulators"]
+
+        assert rows[0]["sgdb_id"] == 5471414

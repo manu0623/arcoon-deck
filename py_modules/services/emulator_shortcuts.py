@@ -117,9 +117,7 @@ class EmulatorShortcutService:
         bindings = self._bindings()
         return {
             "collection": COLLECTION_NAME,
-            "emulators": [
-                {**asdict(row), "app_id": bindings.get(row.key)} for row in self._rows()
-            ],
+            "emulators": [{**asdict(row), "app_id": bindings.get(row.key)} for row in self._rows()],
         }
 
     def _rows(self) -> list[EmulatorShortcut]:
@@ -187,7 +185,7 @@ class EmulatorShortcutService:
         if self._already_applied(key, name):
             return {"base64": None, "no_api_key": False, "present": True}
 
-        sgdb_id = self._search_game_id(row.search_term)
+        sgdb_id = row.sgdb_id if row.sgdb_id is not None else self._search_game_id(row.search_term)
         if sgdb_id is None:
             return {"base64": None, "no_api_key": False, "reason": "no_match"}
 
@@ -224,6 +222,9 @@ class EmulatorShortcutService:
         Autocomplete rather than an exact match: SGDB's entries are games and its
         hit for "PPSSPP" is called "PPSSPP" sometimes and "PPSSPP Gold" others, and
         the first row is the most popular name match either way.
+
+        The guess is wrong where a game shares the emulator's name and outranks it, which
+        is why an emulator may state its SGDB id instead — the caller prefers that one.
         """
         try:
             found = self._sgdb_api.request(f"/search/autocomplete/{quote(term)}")

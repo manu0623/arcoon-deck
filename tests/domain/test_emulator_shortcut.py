@@ -93,3 +93,27 @@ class TestTheCatalogue:
         )
 
         assert [row.name for row in rows] == ["Dolphin (Flatpak)", "PPSSPP (Flatpak)"]
+
+
+CITRON = EmulatorDef(
+    id="citron",
+    display_name="Citron",
+    family="yuzu",
+    platforms=("switch",),
+    hints=DetectionHints(appimage_prefixes=("citron",)),
+    # Measured: SGDB's first row for "Citron" is a game with no assets, so the emulator
+    # states its own entry instead of relying on the name search.
+    sgdb_id=5471414,
+)
+
+
+class TestTheArtworkIdOnARow:
+    def test_a_stated_id_travels_to_the_row(self):
+        row = shortcut_for(InstalledEmulator(definition=CITRON, provider="native", path="/apps/Citron.AppImage"))
+        assert row is not None
+        assert row.sgdb_id == 5471414
+
+    def test_an_emulator_that_states_nothing_searches_by_name(self):
+        row = shortcut_for(InstalledEmulator(definition=PPSSPP, provider="native", path="/apps/PPSSPP.AppImage"))
+        assert row is not None
+        assert row.sgdb_id is None

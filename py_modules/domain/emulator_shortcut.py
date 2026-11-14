@@ -64,6 +64,9 @@ class EmulatorShortcut:
     launch_options: str
     search_term: str
     version: str | None = None
+    #: The SteamGridDB id this emulator's own entry has, when its name alone ranks a game
+    #: first. ``None`` means "search for it", which is what every other emulator wants.
+    sgdb_id: int | None = None
 
 
 def shortcut_for(install: InstalledEmulator) -> EmulatorShortcut | None:
@@ -83,6 +86,7 @@ def shortcut_for(install: InstalledEmulator) -> EmulatorShortcut | None:
             launch_options=f"run {install.path}",
             search_term=install.definition.display_name,
             version=install.version_hint,
+            sgdb_id=install.definition.sgdb_id,
         )
 
     return EmulatorShortcut(
@@ -93,6 +97,7 @@ def shortcut_for(install: InstalledEmulator) -> EmulatorShortcut | None:
         launch_options="",
         search_term=install.definition.display_name,
         version=install.version_hint,
+        sgdb_id=install.definition.sgdb_id,
     )
 
 
