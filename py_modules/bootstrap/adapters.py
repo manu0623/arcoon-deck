@@ -642,7 +642,12 @@ def bootstrap(
         return bool(settings.get("save_bank")) or retrodeck_paths.runtime_mode() is RuntimeMode.BUILTIN
 
     retroarch_appendconfig = RetroArchAppendConfigAdapter(
-        data_dir=locations.data_dir, logger=logger, enabled=save_bank_enabled
+        data_dir=locations.data_dir,
+        logger=logger,
+        enabled=save_bank_enabled,
+        # The launch repairs the path an earlier one baked into retroarch.cfg, because
+        # RetroArch honours that value over the appendconfig it was just handed.
+        config_dir=retroarch_config.config_dir,
     )
     save_bank_dir = SaveBankDirAdapter(data_dir=locations.data_dir, logger=logger, enabled=save_bank_enabled)
     # The one location a catalogue cannot answer on a device with no ES-DE: where the

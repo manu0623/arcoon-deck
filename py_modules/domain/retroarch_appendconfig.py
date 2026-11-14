@@ -149,6 +149,58 @@ def with_appendconfig(
     return replace(invocation, appendconfig=appendconfig)
 
 
+REPLAYED_KEYS: tuple[str, ...] = ("savefile_directory", "savestate_directory")
+"""The keys a finished launch writes back into the user's ``retroarch.cfg``.
+
+RetroArch saves its config on exit, and the value it saves is the one the launch was
+handed — so a redirected launch *bakes its own save directory into the user's config*.
+That baked value is what RetroArch then states on the next launch, and measured on a
+Deck it wins over the ``--appendconfig`` that launch passes: a PPSSPP launch whose
+appended config said ``…/romm-tender/saves/psp`` still resolved
+``…/romm-tender/saves/psp/PSP/SAVEDATA``, the one-level-too-deep value an earlier
+launch had left behind. The game then read ``SAVEDATA/PSP/SAVEDATA`` and opened with no
+save at all.
+"""
+
+_DEFAULT = '"default"'
+
+
+def _value_dir(value: str, user_home: str | None) -> str:
+    """The directory a config value names, with a leading ``~`` made absolute."""
+    unquoted = value.strip().strip('"')
+    if user_home and (unquoted == "~" or unquoted.startswith("~/")):
+        unquoted = posixpath.join(user_home, unquoted[2:])
+    return posixpath.normpath(unquoted)
+
+
+def unbake_replayed_paths(text: str, *, data_dir: str, user_home: str | None = None) -> str | None:
+    """Restore ``default`` for save/states paths an earlier launch baked into *text*.
+
+    Only values **inside the plugin's own data directory** are touched: those are the
+    ones a previous redirected launch wrote, and none of them can be a deliberate user
+    setting (the user has no reason to point RetroArch at the plugin's bank instead of
+    the plugin doing it per launch). Every other value is left exactly as written — a
+    config the user maintains is not this plugin's to rewrite.
+
+    Returns the repaired text, or ``None`` when there is nothing to change, because the
+    caller only writes when a launch would otherwise be overridden.
+    """
+    root = posixpath.normpath(data_dir)
+    changed = False
+    lines = text.splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        key, separator, value = line.partition("=")
+        if not separator or key.strip() not in REPLAYED_KEYS:
+            continue
+        resolved = _value_dir(value, user_home)
+        if resolved != root and not resolved.startswith(root + "/"):
+            continue
+        ending = line[len(line.rstrip("\r\n")) :]
+        lines[index] = f"{key.strip()} = {_DEFAULT}{ending}"
+        changed = True
+    return "".join(lines) if changed else None
+
+
 def appendconfig_dirs(
     *, data_dir: str, layout_subdir: tuple[str, ...], core_subdir: tuple[str, ...] = ()
 ) -> tuple[str, str]:

@@ -65,6 +65,30 @@ hashed by its member name and combined with `combine_zip_entry_hashes`, the same
 zip's entries follow. Size and mtime answer for the files inside the folder, since the
 directory inode's mtime only tracks entries being added or removed.
 
+## A path saved in the user's own config beats the launch that corrects it
+
+RetroArch writes its config on exit, and the value it writes is the one the launch was
+handed — so a redirected launch **bakes its save directory into `retroarch.cfg`**. After
+this ADR's one-level-too-deep redirect was corrected in the generated config, a PPSSPP
+launch on the reference Deck still logged:
+
+```text
+[INFO] [Override] Redirecting save file to ".../romm-tender/saves/psp/PSP/SAVEDATA/<stem>.srm"
+[INFO] [Environ] GET_SAVE_DIRECTORY: ".../romm-tender/saves/psp/PSP/SAVEDATA"
+```
+
+even though the appended config said `.../romm-tender/saves/psp`. The stale value an
+earlier launch had baked in won. The core then read `SAVEDATA/PSP/SAVEDATA`, found no
+disc-id folder, and the game opened on a new game while the synced save sat one level
+away — the exact symptom of a failed download, with a byte-perfect download behind it
+(the restored `ULES00151S0` files matched the server's archive entry for entry).
+
+So a launch now restores `savefile_directory` and `savestate_directory` to `default`
+whenever they name a directory inside the plugin's own data directory, and leaves every
+other value alone: a config the user maintains is not this plugin's to rewrite, while a
+bank path there can only have come from one of our own launches. `--appendconfig` then
+decides, which is what it was always meant to do.
+
 ## Consequences
 
 - PSP syncs both ways on a built-in-runtime Deck: the server's `<title> [timestamp].zip` is

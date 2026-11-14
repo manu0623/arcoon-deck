@@ -13,6 +13,7 @@ from domain.retroarch_appendconfig import (
     appendconfig_dirs,
     appendconfig_name,
     render_appendconfig,
+    unbake_replayed_paths,
 )
 
 BANK = "/home/deck/homebrew/data/romm-tender/saves/gba"
@@ -112,3 +113,38 @@ class TestNames:
         )
         assert save_dir == "/data/saves/switch/nand/user/save"
         assert state_dir == f"/data/{STATE_DIR_NAME}/switch/nand/user/save"
+
+
+class TestUnbakeReplayedPaths:
+    """A launch repairs what an earlier launch baked into the user's own config."""
+
+    def test_a_baked_bank_path_is_restored_to_default(self) -> None:
+        text = (
+            'video_driver = "vulkan"\n'
+            'savefile_directory = "/data/saves/psp/PSP/SAVEDATA"\n'
+            'savestate_directory = "/data/states/psp/PSP/SAVEDATA"\n'
+        )
+        repaired = unbake_replayed_paths(text, data_dir="/data")
+        assert repaired is not None
+        assert 'savefile_directory = "default"' in repaired
+        assert 'savestate_directory = "default"' in repaired
+        assert 'video_driver = "vulkan"' in repaired
+
+    def test_a_path_outside_the_bank_is_left_alone(self) -> None:
+        text = 'savefile_directory = "/home/deck/saves"\n'
+        assert unbake_replayed_paths(text, data_dir="/data") is None
+
+    def test_a_home_spelled_bank_path_is_recognised(self) -> None:
+        text = 'savefile_directory = "~/romm-tender/saves/psp/PSP/SAVEDATA"\n'
+        repaired = unbake_replayed_paths(text, data_dir="/home/deck/romm-tender", user_home="/home/deck")
+        assert repaired == 'savefile_directory = "default"\n'
+
+    def test_the_line_ending_survives(self) -> None:
+        text = 'savefile_directory = "/data/saves/psp"\r\n'
+        repaired = unbake_replayed_paths(text, data_dir="/data")
+        assert repaired == 'savefile_directory = "default"\r\n'
+
+    def test_a_sibling_of_the_bank_is_not_inside_it(self) -> None:
+        """``/data2`` shares a prefix with ``/data`` and is not the plugin's."""
+        text = 'savefile_directory = "/data2/saves"\n'
+        assert unbake_replayed_paths(text, data_dir="/data") is None

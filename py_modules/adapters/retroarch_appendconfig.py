@@ -17,6 +17,14 @@ contract: redirect a platform whose bank directory is missing and every save it 
 lands somewhere the plugin never reads, which is indistinguishable from a sync bug for
 as long as it takes someone to read the log.
 
+**The user's own config can still win, and is repaired.** RetroArch saves its config on
+exit, so a redirected launch bakes the save directory it was handed into
+``retroarch.cfg``. Measured on a Deck, that baked value then beats the next launch's
+``--appendconfig`` (a PPSSPP launch appended ``…/saves/psp`` and still resolved
+``…/saves/psp/PSP/SAVEDATA``), which silently sends the core to the wrong tree. Every
+launch therefore restores the two path keys to ``default`` when they point inside the
+plugin's own data directory, and leaves any other value alone.
+
 **Never fatal.** A save root is a nice-to-have at bake time and a hard requirement at
 sync time. If the directories cannot be created, this returns ``None`` and logs, and
 the caller bakes the launch without an appendconfig: the game still starts against the
@@ -33,7 +41,12 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
-from domain.retroarch_appendconfig import appendconfig_dirs, appendconfig_name, render_appendconfig
+from domain.retroarch_appendconfig import (
+    appendconfig_dirs,
+    appendconfig_name,
+    render_appendconfig,
+    unbake_replayed_paths,
+)
 from domain.save_bank import canonical_platform, layout_for
 
 if TYPE_CHECKING:
@@ -54,9 +67,14 @@ class RetroArchAppendConfigAdapter:
         data_dir: str,
         logger: logging.Logger,
         enabled: Callable[[], object] | None = None,
+        config_dir: Callable[[], str] | None = None,
     ) -> None:
         self._data_dir = data_dir
         self._logger = logger
+        # The RetroArch config directory in use, read live: the launch repairs the value
+        # a previous launch baked there (see ``unbake_replayed_paths``). ``None`` means a
+        # caller with no RetroArch to repair, which only ever skips the repair.
+        self._config_dir = config_dir
         # The same switch the save lookup reads (``save_bank``). ``None`` means "always"
         # for a caller that has no settings to consult, but the composition root passes
         # the live setting: a redirect the lookup does not follow is a save that vanishes.
@@ -98,6 +116,7 @@ class RetroArchAppendConfigAdapter:
             # Both directories first: RetroArch ignores a savefile_directory that does
             # not exist and writes to its own default instead, without an error.
             self._make_save_dirs(platform)
+            self._repair_retroarch_config()
             existing = self._read(path)
             if existing == text:
                 return path
@@ -108,6 +127,40 @@ class RetroArchAppendConfigAdapter:
             self._logger.warning(f"Cannot write RetroArch appendconfig at {path}: {exc}")
             return None
         return path
+
+    def _repair_retroarch_config(self) -> None:
+        """Undo a save directory an earlier launch baked into RetroArch's own config.
+
+        RetroArch saves its config on exit and that saved value beats the appendconfig
+        (measured, see this module's docstring), so one redirected launch would
+        otherwise pin this platform's directory for every later one. Rewriting the whole
+        file is avoided when it holds no path inside the bank — the common case — and the
+        file is read and written with ``newline=""`` so its line endings survive.
+
+        Failure is logged and ignored: a launch that cannot repair the config still
+        plays the game, and the worst case is the drift this method exists to remove.
+        """
+        if self._config_dir is None:
+            return
+        path = os.path.join(self._config_dir(), "retroarch.cfg")
+        try:
+            with open(path, encoding="utf-8", newline="") as handle:
+                text = handle.read()
+        except (OSError, UnicodeDecodeError):
+            return
+        repaired = unbake_replayed_paths(text, data_dir=self._data_dir, user_home=os.path.expanduser("~"))
+        if repaired is None:
+            return
+        try:
+            with open(path, "w", encoding="utf-8", newline="") as handle:
+                handle.write(repaired)
+        except OSError as exc:
+            self._logger.warning(f"Cannot repair RetroArch config at {path}: {exc}")
+            return
+        self._logger.info(
+            f"RetroArch config had a save directory from an earlier launch; restored "
+            f"the default in {path} so this launch's redirect applies"
+        )
 
     def _make_save_dirs(self, platform: str) -> None:
         """Create the save and state directories this platform's config states.
