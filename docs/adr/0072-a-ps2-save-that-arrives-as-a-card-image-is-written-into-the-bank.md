@@ -67,6 +67,14 @@ a conflict between a save and itself — reporting the server's own save as "loc
 records the applied bytes as this device's copy of that save. Which save wins stays the
 sync's decision, and the import cannot disagree with the bookkeeping that follows it.
 
+### One card, one unit
+
+Naming every card-shaped row by its own file name made each its own target, and the sync
+downloaded them in turn — measured on rom 5338, where the 03:30 card was applied after the
+11:21 card and put the older progress back. Every `.ps2` row in a slot is the same memory
+card, so they share one target name and the matrix's newest-wins rule chooses which card is
+opened.
+
 ### Which folder, and which card
 
 A PS2 answer's directory is the **card folder** (`…/saves/ps2/Mcd001.ps2`), and every member

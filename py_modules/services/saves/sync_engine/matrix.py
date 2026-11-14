@@ -79,6 +79,10 @@ def _novel_server_target(server_save: dict[str, Any], server_target_filter: Call
     return target if server_target_filter(target) else None
 
 
+#: The target name every card-shaped PS2 save in a slot shares, so they group as one unit.
+_PS2_CARD_UNIT = "card.ps2"
+
+
 def _is_ps2_card_unit(system: str) -> bool:
     """Whether this platform's saves travel as a memory card (PS2's folder card)."""
     return save_layout_for(system).family is SaveFamily.PS2_CARD
@@ -1119,6 +1123,14 @@ class MatrixExecutor:
                 continue
             if target not in carried:
                 novel = _novel_server_target(ss, server_target_filter)
+                if novel is not None and _is_ps2_card_unit(info.get("system") or ""):
+                    # Every card RomM holds in this slot is the SAME unit: one memory card,
+                    # uploaded by whichever emulator wrote last. Naming each by its own file
+                    # made two targets that were downloaded in turn, and the older one landed
+                    # last — measured on rom 5338, where the 03:30 card overwrote the 11:21
+                    # card that had just been applied. One name puts them in one group, so the
+                    # matrix's newest-wins rule picks the card to open (ADR-0072).
+                    novel = _PS2_CARD_UNIT
                 if novel is None:
                     self._log_debug(
                         f"iter_matrix_outcomes({rom_name!r}): server save {target!r} is not a file this "
