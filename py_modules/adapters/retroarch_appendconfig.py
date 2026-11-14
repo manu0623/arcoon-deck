@@ -41,12 +41,7 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
-from domain.retroarch_appendconfig import (
-    appendconfig_dirs,
-    appendconfig_name,
-    render_appendconfig,
-    unbake_replayed_paths,
-)
+from domain.retroarch_appendconfig import appendconfig_dirs, appendconfig_name, render_appendconfig
 from domain.save_bank import canonical_platform, layout_for
 
 if TYPE_CHECKING:
@@ -67,14 +62,15 @@ class RetroArchAppendConfigAdapter:
         data_dir: str,
         logger: logging.Logger,
         enabled: Callable[[], object] | None = None,
-        config_dir: Callable[[], str] | None = None,
+        repair_config: Callable[[], object] | None = None,
     ) -> None:
         self._data_dir = data_dir
         self._logger = logger
-        # The RetroArch config directory in use, read live: the launch repairs the value
-        # a previous launch baked there (see ``unbake_replayed_paths``). ``None`` means a
-        # caller with no RetroArch to repair, which only ever skips the repair.
-        self._config_dir = config_dir
+        # Repairs the value a previous launch baked into RetroArch's own config (see
+        # ``unbake_replayed_paths``); it belongs to the adapter that knows every config
+        # path this machine may hold. ``None`` means a caller with no RetroArch to
+        # repair, which only ever skips the repair.
+        self._repair_config = repair_config
         # The same switch the save lookup reads (``save_bank``). ``None`` means "always"
         # for a caller that has no settings to consult, but the composition root passes
         # the live setting: a redirect the lookup does not follow is a save that vanishes.
@@ -133,34 +129,20 @@ class RetroArchAppendConfigAdapter:
 
         RetroArch saves its config on exit and that saved value beats the appendconfig
         (measured, see this module's docstring), so one redirected launch would
-        otherwise pin this platform's directory for every later one. Rewriting the whole
-        file is avoided when it holds no path inside the bank — the common case — and the
-        file is read and written with ``newline=""`` so its line endings survive.
+        otherwise pin this platform's directory for every later one. The repair itself
+        lives in :meth:`adapters.retroarch_config.RetroArchConfigAdapter.restore_bank_paths`
+        because it knows every ``retroarch.cfg`` this machine may hold, and the launched
+        installation's is not always the first one found.
 
         Failure is logged and ignored: a launch that cannot repair the config still
         plays the game, and the worst case is the drift this method exists to remove.
         """
-        if self._config_dir is None:
-            return
-        path = os.path.join(self._config_dir(), "retroarch.cfg")
-        try:
-            with open(path, encoding="utf-8", newline="") as handle:
-                text = handle.read()
-        except (OSError, UnicodeDecodeError):
-            return
-        repaired = unbake_replayed_paths(text, data_dir=self._data_dir, user_home=os.path.expanduser("~"))
-        if repaired is None:
+        if self._repair_config is None:
             return
         try:
-            with open(path, "w", encoding="utf-8", newline="") as handle:
-                handle.write(repaired)
-        except OSError as exc:
-            self._logger.warning(f"Cannot repair RetroArch config at {path}: {exc}")
-            return
-        self._logger.info(
-            f"RetroArch config had a save directory from an earlier launch; restored "
-            f"the default in {path} so this launch's redirect applies"
-        )
+            self._repair_config()
+        except Exception as exc:
+            self._logger.warning(f"Cannot repair the RetroArch config: {exc}")
 
     def _make_save_dirs(self, platform: str) -> None:
         """Create the save and state directories this platform's config states.

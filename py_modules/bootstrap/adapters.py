@@ -646,8 +646,10 @@ def bootstrap(
         logger=logger,
         enabled=save_bank_enabled,
         # The launch repairs the path an earlier one baked into retroarch.cfg, because
-        # RetroArch honours that value over the appendconfig it was just handed.
-        config_dir=retroarch_config.config_dir,
+        # RetroArch honours that value over the appendconfig it was just handed. Every
+        # config on the machine is checked: the shortcut's installation is not always
+        # the one whose config is found first.
+        repair_config=functools.partial(retroarch_config.restore_bank_paths, locations.data_dir),
     )
     save_bank_dir = SaveBankDirAdapter(data_dir=locations.data_dir, logger=logger, enabled=save_bank_enabled)
     # The one location a catalogue cannot answer on a device with no ES-DE: where the

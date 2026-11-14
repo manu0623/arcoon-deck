@@ -23,6 +23,7 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
+from domain.retroarch_appendconfig import unbake_replayed_paths
 from domain.save_layout import ContentDir, InSaveDir, SaveLayout
 
 if TYPE_CHECKING:
@@ -69,6 +70,51 @@ class RetroArchConfigAdapter:
             if os.path.isfile(path):
                 return os.path.dirname(path)
         return os.path.dirname(os.path.join(self._user_home, self._RETROARCH_CFG_SUFFIXES[-1]))
+
+    def restore_bank_paths(self, data_dir: str) -> list[str]:
+        """Restore save/states paths inside *data_dir* to ``default``, in every cfg.
+
+        Every candidate is repaired, not only the first: this machine can hold more than
+        one ``retroarch.cfg`` (a RetroDECK flatpak and a bare RetroArch flatpak), and the
+        launch reads whichever one its own installation carries — measured on the
+        reference Deck, where the two exist side by side and the first is not the one the
+        PPSSPP shortcut starts. Nothing outside *data_dir* is touched, so repairing a
+        config the running RetroArch never reads costs nothing.
+
+        Returns the paths that changed. See
+        :func:`domain.retroarch_appendconfig.unbake_replayed_paths` for why a value there
+        defeats the launch's own ``--appendconfig``.
+        """
+        repaired: list[str] = []
+        for suffix in self._RETROARCH_CFG_SUFFIXES:
+            cfg_path = os.path.join(self._user_home, suffix)
+            try:
+                # ``newline=""`` keeps whatever line endings the file already has: the
+                # whole file is rewritten, so a translation would show up as a diff of a
+                # config nobody edited.
+                with open(cfg_path, encoding="utf-8", newline="") as handle:
+                    text = handle.read()
+            except FileNotFoundError:
+                continue
+            except (OSError, UnicodeDecodeError) as exc:
+                self._logger.warning(f"Failed to read {cfg_path}: {exc}")
+                continue
+            updated = unbake_replayed_paths(text, data_dir=data_dir, user_home=self._user_home)
+            if updated is None:
+                continue
+            try:
+                with open(cfg_path, "w", encoding="utf-8", newline="") as handle:
+                    handle.write(updated)
+            except OSError as exc:
+                self._logger.warning(f"Failed to repair {cfg_path}: {exc}")
+                continue
+            self._logger.info(
+                f"Restored the default save directory in {cfg_path}: it still named the "
+                f"bank from an earlier launch, and RetroArch honours that over the "
+                f"appendconfig this launch passes"
+            )
+            repaired.append(cfg_path)
+        return repaired
 
     def get_save_layout(self) -> SaveLayout:
         """Read the RetroArch save-**file** layout from retroarch.cfg.

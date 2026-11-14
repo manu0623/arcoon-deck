@@ -316,9 +316,7 @@ class SaveFileAdapter:
         than a hash of the directory inode. Without this, opening a sync session over a
         folder save failed outright: ``[Errno 21] Is a directory`` (rom 5395).
         """
-        return combine_zip_entry_hashes(
-            [(name, self.checksum_md5(whole)) for name, whole in self._folder_files(path)]
-        )
+        return combine_zip_entry_hashes([(name, self.checksum_md5(whole)) for name, whole in self._folder_files(path)])
 
     @contextlib.contextmanager
     def hash_memo_scope(self) -> Iterator[None]:
