@@ -50,6 +50,22 @@ unverified whole-machine sweep. Nothing is cached in either — a firmware answe
 is about files on disk that the user is actively adding and removing, and a
 cached one would outlive the download that changed it.
 
+**A reading speaks about one directory, and the app writes to another.** The
+resolver answers at the firmware root of the installation it read — the
+``system_directory`` of an arrangement's own ``retroarch.cfg`` — while the app
+places files under the BIOS root its runtime resolves. Those are the same
+directory under RetroDECK, and they are not under the app's own runtime, where
+the emulator the app launches is handed the app's root and the highest-priority
+arrangement the resolver found can be a tree nobody boots any more: on the
+reference Deck, ``~/retrodeck/bios`` left behind by a RetroDECK that is gone, 28
+mostly empty folders, while the file the app had just downloaded sat in
+``~/.local/share/romm-tender/bios``. So the adapter is told the root its
+readings have to be rooted at (:func:`_own_root`), and an answer rooted
+elsewhere keeps every DECLARATION it carries — who wants what, and at which
+subdirectory — while its destination half goes silent and the row says why
+(``read_elsewhere``). Who answers presence then is the service's, not this
+module's: it owns the destination and the probe.
+
 **One emulator is one identity, and a catalogue lists rows.** ES-DE declares one
 ``pcsx2_libretro.so`` under two labels, ``LRPS2`` and ``PCSX2``, so a per-system
 answer carries that emulator twice with identical declarations. The identity is
@@ -117,9 +133,16 @@ _IDENTIFIED_IMAGE_CODES = frozenset({CAVEAT_FIRMWARE_IMAGE_IDENTIFIED, CAVEAT_FI
 class AtlasFirmwareAdapter:
     """Reads what every installed libretro core wants, live, for the callers with no platform."""
 
-    def __init__(self, *, user_home: str, log_debug: Callable[[str], None]) -> None:
+    def __init__(
+        self,
+        *,
+        user_home: str,
+        log_debug: Callable[[str], None],
+        reads_root: Callable[[], str | None] | None = None,
+    ) -> None:
         self._user_home = user_home
         self._log_debug = log_debug
+        self._reads_root = reads_root
 
     def __call__(self) -> FirmwareCatalogue:
         """The whole machine's firmware demand, or an empty unresolved catalogue."""
@@ -139,15 +162,22 @@ class AtlasFirmwareAdapter:
             return _unresolved()
         answer = installation.firmware_inventory()
         self._log_debug(f"[firmware] machine: {_trace(answer)}")
-        return _catalogue(answer)
+        return _catalogue(answer, own_root=_own_root(self._reads_root))
 
 
 class AtlasPlatformFirmwareAdapter:
     """Reads what one system's emulators want, verified, live off the machine."""
 
-    def __init__(self, *, user_home: str, log_debug: Callable[[str], None]) -> None:
+    def __init__(
+        self,
+        *,
+        user_home: str,
+        log_debug: Callable[[str], None],
+        reads_root: Callable[[], str | None] | None = None,
+    ) -> None:
         self._user_home = user_home
         self._log_debug = log_debug
+        self._reads_root = reads_root
 
     def __call__(self, system: str) -> FirmwareCatalogue:
         """*system*'s firmware demand, or an empty unresolved catalogue."""
@@ -163,7 +193,7 @@ class AtlasPlatformFirmwareAdapter:
             return _unresolved()
         answer = installation.firmware_for_system(system, verify=True)
         self._log_debug(f"[firmware] {system}: {_trace(answer)}")
-        return _catalogue(answer)
+        return _catalogue(answer, own_root=_own_root(self._reads_root))
 
 
 def _installation(user_home: str, log_debug: Callable[[str], None]) -> Any | None:
@@ -180,13 +210,49 @@ def _installation(user_home: str, log_debug: Callable[[str], None]) -> Any | Non
     return installations[0]
 
 
+def _own_root(reads_root: Callable[[], str | None] | None) -> str | None:
+    """The root a reading must be rooted at to speak about this app's own files.
+
+    ``None`` means no root to hold the reading to, which is the answer while
+    RetroDECK drives: the launch is RetroDECK's and its emulator reads the
+    directory its own ``retroarch.cfg`` names, which is exactly what the
+    resolver read. A caller that cannot answer a root at all — a path reader
+    that raises — is the same nothing-to-hold-to, and never a reason to fail a
+    firmware question.
+    """
+    if reads_root is None:
+        return None
+    try:
+        return reads_root()
+    except Exception:
+        return None
+
+
+def _rooted_at(answer: Any, own_root: str | None) -> bool:
+    """Was this answer read at *own_root*? ``True`` where there is no root to hold it to.
+
+    Resolved through ``realpath`` on both sides: a root spelled through ``/home``
+    and the same directory reached through ``/var/home`` are one directory, and
+    that is exactly the pair a Deck produces (#1838).
+    """
+    if answer.root is None or own_root is None:
+        return True
+    return os.path.realpath(answer.root) == os.path.realpath(own_root)
+
+
 def _unresolved() -> FirmwareCatalogue:
     """The answer to "we could not ask" — no placements, nothing ruled out."""
     return FirmwareCatalogue(placements=(), unread_emulators=frozenset(), resolved=False)
 
 
-def _catalogue(answer: Any) -> FirmwareCatalogue:
-    """One resolver answer in the plugin's own vocabulary."""
+def _catalogue(answer: Any, *, own_root: str | None = None) -> FirmwareCatalogue:
+    """One resolver answer in the plugin's own vocabulary.
+
+    *own_root* is the BIOS root this app places firmware in, where its runtime
+    is the one launching the emulator; an answer read at any other directory
+    keeps its declarations and loses its destination half (:func:`_placements`).
+    """
+    rooted_here = _rooted_at(answer, own_root)
     if answer.root is None:
         return FirmwareCatalogue(
             placements=(),
@@ -195,7 +261,7 @@ def _catalogue(answer: Any) -> FirmwareCatalogue:
             caveats=_caveat_codes(answer),
         )
     return FirmwareCatalogue(
-        placements=_placements(answer),
+        placements=_placements(answer, rooted_here=rooted_here),
         unread_emulators=_unread_emulators(answer),
         resolved=True,
         caveats=_caveat_codes(answer),
@@ -344,7 +410,7 @@ def _declared_location(requirement: Any, root: str) -> str | None:
     return normalised
 
 
-def _placements(answer: Any) -> tuple[FirmwarePlacement, ...]:
+def _placements(answer: Any, *, rooted_here: bool = True) -> tuple[FirmwarePlacement, ...]:
     """One placement per declared file name, folding every emulator that declares it.
 
     Two emulators routinely want the same file — gambatte and SameBoy both ask
@@ -363,7 +429,8 @@ def _placements(answer: Any) -> tuple[FirmwarePlacement, ...]:
             by_name.setdefault(requirement.file_name, []).append((core, requirement))
 
     placements = [
-        _placement_for(file_name, pairs, answer.root, at_path, in_dir) for file_name, pairs in by_name.items()
+        _placement_for(file_name, pairs, answer.root, at_path, in_dir, rooted_here=rooted_here)
+        for file_name, pairs in by_name.items()
     ]
     return tuple(sorted(placements, key=lambda placement: placement.file_name))
 
@@ -403,6 +470,8 @@ def _placement_for(
     root: str,
     at_path: dict[str, tuple[Any, ...]],
     in_dir: dict[str, tuple[Any, ...]],
+    *,
+    rooted_here: bool = True,
 ) -> FirmwarePlacement:
     """One name's row: who wants it, and what was read where it goes.
 
@@ -423,20 +492,29 @@ def _placement_for(
     ``checked`` goes with the destination half, and off the same entry the
     declaration does: it is what became of the bytes AT that place, so carrying
     it past the early return would describe a read of somewhere else.
+
+    A reading taken at another firmware root silences the destination half the
+    same way and keeps the location, because the two facts are about different
+    things: the subdirectory an emulator declares under a root is its own, while
+    what stands at a path is a fact about one directory. The row says the
+    reading was taken elsewhere, so the consumer answers presence under the root
+    it writes to instead of inheriting an answer about a directory it never
+    touches (ADR-0064).
     """
     first_core, first = pairs[0]
     directory = first.declared_kind == DECLARED_DIRECTORY
     declared_kind = DECLARED_DIRECTORY if directory else DECLARED_FILE
     wants = _wants(pairs)
     location = _declared_location(first, root)
-    if location is None:
+    if location is None or not rooted_here:
         return FirmwarePlacement(
             file_name=file_name,
-            relative_path=None,
+            relative_path=location,
             description=first.description,
             wants=wants,
             declared_kind=declared_kind,
             declaration=first_core.declaration,
+            read_elsewhere=not rooted_here,
         )
 
     speaking = _speaking_for(at_path, in_dir, first, emulator_identity(first_core))

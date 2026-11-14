@@ -227,6 +227,19 @@ class FirmwarePlacement:
     consumer will never write. ``declared_kind`` does not, because it is a
     property of the declaration rather than of the destination.
 
+    ``read_elsewhere`` says the destination half above was read at a DIFFERENT
+    firmware root from the one a consumer places files in — the reading is true
+    about that other directory and establishes nothing about this one. It is
+    stated rather than folded into a silent ``present`` because the consumer's
+    answer differs: a destination it could not look at stays absent, while a
+    destination that was read somewhere else is one the consumer has to answer
+    for itself. ``relative_path`` still travels, because the declared shape
+    under a root is the emulator's and does not change with which directory was
+    read. The app's own runtime is where this happens: the emulator it launches
+    reads firmware from the root the app places files in, while the resolver
+    answers about whichever installation it detected first — a RetroDECK tree
+    left behind on a device that stopped using it (ADR-0064).
+
     ``declaration`` is the resolver's own word for HOW the entry ``description``
     came from stated what it wants — ``read`` off a libretro core's own ``.info``
     beside it, ``packaged`` out of the card that stands in for an emulator
@@ -269,6 +282,7 @@ class FirmwarePlacement:
     folder: FolderVerdict | None = None
     supplied_by: str | None = None
     checked: str | None = None
+    read_elsewhere: bool = False
 
     @property
     def required_by_any(self) -> bool:

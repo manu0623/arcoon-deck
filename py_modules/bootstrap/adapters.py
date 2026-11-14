@@ -551,8 +551,26 @@ def bootstrap(
     # its caveats are the whole degradation channel and reach the log through
     # this seam or not at all. That holds for both firmware questions and for
     # the emulator catalogue.
-    firmware_resolver = AtlasFirmwareAdapter(user_home=user_home, log_debug=debug_logger)
-    platform_firmware_resolver = AtlasPlatformFirmwareAdapter(user_home=user_home, log_debug=debug_logger)
+    # The root a firmware reading must be rooted at to speak about this app's own files.
+    # Under the app's own runtime the emulator is handed the BIOS root the app resolved —
+    # the owned launch states it as ``system_directory`` — while atlas answers about the
+    # arrangement it detected first, which on a device that dropped RetroDECK is the tree
+    # it left behind (28 mostly-empty folders under ``~/retrodeck/bios`` on the reference
+    # Deck, while the file just downloaded sat in the app's own root). A reading there
+    # establishes nothing about presence, so it is held to this root instead (ADR-0064).
+    # While RetroDECK drives there is nothing to hold it to: the launch is RetroDECK's and
+    # its emulator reads the directory its own retroarch.cfg names.
+    def owned_bios_root() -> str | None:
+        """The BIOS root the app's own launch hands its emulator, or none while RetroDECK drives."""
+        if retrodeck_paths.runtime_mode() is not RuntimeMode.BUILTIN:
+            return None
+        return retrodeck_paths.bios_path()
+    firmware_resolver = AtlasFirmwareAdapter(
+        user_home=user_home, log_debug=debug_logger, reads_root=owned_bios_root
+    )
+    platform_firmware_resolver = AtlasPlatformFirmwareAdapter(
+        user_home=user_home, log_debug=debug_logger, reads_root=owned_bios_root
+    )
     # Detection never picks a winner, so the choice is made here rather than in
     # the adapter: the highest-priority arrangement, which is RetroDECK wherever
     # one is installed. Offering the others is #918; nothing in services/ learns

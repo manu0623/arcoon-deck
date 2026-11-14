@@ -636,6 +636,36 @@ class TestPresenceComesFromTheReading:
         assert result["files"][0]["wanted"] == "not_needed"
 
     @pytest.mark.asyncio
+    async def test_a_reading_taken_at_another_root_is_ours_to_probe(self, plugin, tmp_path):
+        """The app's own runtime: the emulator reads our root, so the file there is the answer.
+
+        The reading was taken at a RetroDECK tree left behind on a device that runs
+        the app's builtin runtime — mostly empty folders under ``~/retrodeck/bios`` —
+        and says absent. The emulator the app launches is handed its own BIOS root
+        instead, where the file sits (ADR-0064).
+        """
+        resolver = FakeFirmwareResolver()
+        resolver.declare("dc_boot.bin", required_by=[_id(self._CORE)], present=False, read_elsewhere=True)
+        fw = self._service(plugin, tmp_path, resolver, self._store_holding(tmp_path, "dc_boot.bin"))
+
+        result = await fw.check_platform_bios("dc")
+
+        assert result["files"][0]["downloaded"] is True
+
+    @pytest.mark.asyncio
+    async def test_a_reading_taken_at_another_root_still_reads_absent_when_our_root_lacks_it(
+        self, plugin, tmp_path
+    ):
+        """The other direction: the flag hands the question over, it does not answer it."""
+        resolver = FakeFirmwareResolver()
+        resolver.declare("dc_boot.bin", required_by=[_id(self._CORE)], present=True, read_elsewhere=True)
+        fw = self._service(plugin, tmp_path, resolver)
+
+        result = await fw.check_platform_bios("dc")
+
+        assert result["files"][0]["downloaded"] is False
+
+    @pytest.mark.asyncio
     async def test_a_placement_we_cannot_honour_is_ours_to_probe_too(self, plugin, tmp_path):
         """The other one: a declared destination outside the BIOS root.
 

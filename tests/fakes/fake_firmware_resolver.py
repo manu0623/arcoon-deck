@@ -103,6 +103,7 @@ class FakeFirmwareResolver:
         caveats: tuple[str, ...] = (),
         supplied_by: str | None = None,
         checked: str | None = None,
+        read_elsewhere: bool = False,
     ) -> FirmwarePlacement:
         """State that some emulators ask for *file_name*, and return the placement.
 
@@ -125,6 +126,12 @@ class FakeFirmwareResolver:
         Unset is the ordinary answer — a reading that asked no byte question —
         and a test spells it out only where what was DONE to the file is what it
         is pinning, which ``present`` cannot say.
+
+        ``read_elsewhere`` states that the destination half was read at a root
+        other than the service's own — the app's builtin runtime reading a
+        RetroDECK tree left behind (ADR-0064). The service then answers presence
+        itself, so a test pairing this with a file in its BIOS root pins the
+        whole point of the flag.
         """
         placement = FirmwarePlacement(
             file_name=file_name,
@@ -140,6 +147,7 @@ class FakeFirmwareResolver:
             folder=folder,
             supplied_by=supplied_by,
             checked=checked,
+            read_elsewhere=read_elsewhere,
         )
         self.placements.append(placement)
         return placement

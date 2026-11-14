@@ -151,15 +151,20 @@ class FirmwareDemand:
         the resolver had the file and this service did not. Placed elsewhere the
         boundary falls the other way, and the next paragraph is why.
 
-        Our own probe covers what is left, and both halves of it are the same
+        Our own probe covers what is left, and every part of it is the same
         rule read backwards — we answer for the destinations the resolver did
         not read. A library file no installed emulator declares has no
         requirement at all; a placement with no ``relative_path`` has one, at a
         destination this service cannot honour, so *dest* is its own flat
-        fallback and the resolver's reading is about somewhere else. The third
-        is the re-check in ``FirmwareDownloader._download_firmware_batch``, where
-        re-reading the whole machine to learn whether one file just landed would
-        cost hundreds of milliseconds.
+        fallback and the resolver's reading is about somewhere else. A placement
+        that says ``read_elsewhere`` has one at a directory the resolver DID
+        read, but not this one: under the app's own runtime the emulator is
+        handed the app's BIOS root and the resolver answers about whichever
+        installation it detected first, so the file's presence at *dest* is what
+        the emulator will see (ADR-0064). The last is the re-check in
+        ``FirmwareDownloader._download_firmware_batch``, where re-reading the
+        whole machine to learn whether one file just landed would cost hundreds
+        of milliseconds.
 
         A ``present`` of ``None`` on a placement we do honour is a destination
         the resolver could not look at. It is not a claim that anything is
@@ -171,7 +176,7 @@ class FirmwareDemand:
         apart: what satisfies the emulator is a file inside the folder, and the
         folder itself is there on every stock RetroDECK.
         """
-        if placement is None or placement.relative_path is None:
+        if placement is None or placement.relative_path is None or placement.read_elsewhere:
             return self._firmware_file_store.exists(dest)
         return placement.present is True
 

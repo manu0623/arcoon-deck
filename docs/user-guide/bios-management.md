@@ -298,10 +298,14 @@ and the row you focus is the one the right-hand pane describes.
 
 <!-- Screenshot: Library › Platforms with a platform selected, its core button above the BIOS table -->
 
-BIOS files are downloaded to your RetroDECK bios directory (e.g. `~/retrodeck/bios/`). Some platforms use
-subdirectories: Dreamcast BIOS goes into `bios/dc/`, because that is the location the Dreamcast core declares. The
-plugin handles the correct placement automatically — the location is the one your emulator itself declares, so a file
-for a subdirectory lands in that subdirectory rather than loose in the BIOS root.
+BIOS files are downloaded to the BIOS directory of the runtime you are running — RetroDECK's (e.g. `~/retrodeck/bios/`)
+when RetroDECK drives, and the plugin's own (`~/.local/share/romm-tender/bios/` under the default structure) when it
+launches the emulators itself. Which directory that is is also where the readiness checks look, so a file the plugin
+downloaded is the file the table reports as present. See [Where your data
+lives](where-your-data-lives.md) for the exact roots. Some platforms use subdirectories: Dreamcast BIOS goes into
+`bios/dc/`, because that is the location the Dreamcast core declares. The plugin handles the correct placement
+automatically — the location is the one your emulator itself declares, so a file for a subdirectory lands in that
+subdirectory rather than loose in the BIOS root.
 
 PS2 looks like a subdirectory and is not one. Nothing declares a location for an individual PS2 BIOS dump, so the plugin
 puts it in the BIOS root — and RetroDECK links `bios/pcsx2/bios` back to that same folder, which is why the file appears

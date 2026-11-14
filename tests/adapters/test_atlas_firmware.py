@@ -579,6 +579,96 @@ class TestDestinationReadings:
         assert placement.caveats == ()
         assert placement.supplied_by is None
 
+    def test_a_reading_taken_at_another_root_keeps_the_declaration_and_loses_the_destination(
+        self, adapter, monkeypatch
+    ):
+        """The app's own runtime: the emulator reads the app's root, the resolver read its own.
+
+        A RetroDECK tree left behind on a device that runs the app's builtin runtime
+        is where the resolver answers from — mostly empty folders under
+        ``~/retrodeck/bios`` — while the file the app just downloaded sits in
+        ``~/.local/share/romm-tender/bios``. The subdirectory is still the one the
+        emulator declares under a root, so it travels; what stands at a path is a
+        fact about one directory, so it does not (ADR-0064).
+        """
+        own = AtlasFirmwareAdapter(
+            user_home="/home/deck",
+            log_debug=lambda _line: None,
+            reads_root=lambda: "/home/deck/.local/share/romm-tender/bios",
+        )
+        answer = _answer(
+            _core(
+                core_so="mgba_libretro.so",
+                requirements=(_requirement(found=KIND_FILE, checked="unchecked"),),
+            )
+        )
+        monkeypatch.setattr("adapters.atlas_firmware.detect", _detecting(_Installation(answer)))
+
+        placement = own().placements[0]
+
+        assert placement.read_elsewhere is True
+        assert placement.relative_path == "gba_bios.bin"
+        assert placement.present is None
+        assert placement.caveats == ()
+        assert placement.supplied_by is None
+        assert placement.wants[0].emulator == "mgba_libretro.so"
+
+    def test_a_reading_taken_at_our_own_root_is_carried_through(self, adapter, monkeypatch):
+        """The same directory two ways is one directory, and its reading is the answer.
+
+        ``~/retrodeck/bios`` reached through ``/home`` and through ``/var/home`` is a pair
+        a Deck produces, so the comparison is over resolved paths (#1838).
+        """
+        own = AtlasFirmwareAdapter(
+            user_home="/home/deck",
+            log_debug=lambda _line: None,
+            reads_root=lambda: "/var/home/deck/retrodeck/bios",
+        )
+        answer = _answer(
+            _core(
+                core_so="mgba_libretro.so",
+                requirements=(_requirement(found=KIND_FILE, checked="unchecked"),),
+            )
+        )
+        monkeypatch.setattr("adapters.atlas_firmware.detect", _detecting(_Installation(answer)))
+        monkeypatch.setattr("adapters.atlas_firmware.os.path.realpath", lambda path: path.replace("/var/home", "/home"))
+
+        placement = own().placements[0]
+
+        assert placement.read_elsewhere is False
+        assert placement.present is True
+
+    def test_no_root_to_hold_the_reading_to_leaves_it_alone(self, adapter, monkeypatch):
+        """While RetroDECK drives, the resolver's root IS the one the launch reads."""
+        answer = _answer(
+            _core(
+                core_so="mgba_libretro.so",
+                requirements=(_requirement(found=KIND_FILE, checked="unchecked"),),
+            )
+        )
+        monkeypatch.setattr("adapters.atlas_firmware.detect", _detecting(_Installation(answer)))
+
+        placement = adapter().placements[0]
+
+        assert placement.read_elsewhere is False
+        assert placement.present is True
+
+    def test_a_root_reader_that_raises_answers_nothing_about_presence(self, monkeypatch):
+        """A path reader that fails must not take the declarations down with it."""
+
+        def raising() -> str:
+            raise OSError("cannot read the runtime mode")
+
+        own = AtlasFirmwareAdapter(user_home="/home/deck", log_debug=lambda _line: None, reads_root=raising)
+        answer = _answer(_core(core_so="mgba_libretro.so", requirements=(_requirement(),)))
+        monkeypatch.setattr("adapters.atlas_firmware.detect", _detecting(_Installation(answer)))
+
+        catalogue = own()
+
+        assert catalogue.resolved is True
+        assert [placement.file_name for placement in catalogue.placements] == ["gba_bios.bin"]
+        assert catalogue.placements[0].present is False
+
     def test_no_stated_provenance_claims_nothing(self, adapter, monkeypatch):
         placement = self._placement(adapter, monkeypatch, _requirement(found=KIND_FILE, checked="unchecked"))
 
