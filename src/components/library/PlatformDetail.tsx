@@ -46,6 +46,7 @@ import {
   type ScopedStatus,
 } from "../qam/pane";
 import { EmulatorInstallSection } from "./EmulatorInstallSection";
+import { CoreInstallSection } from "./CoreInstallSection";
 import type { CoreAnswer, DetailStatus, PlatformRow, PlatformsPageState, StatusScope } from "./usePlatformsPage";
 
 /** The page's status line as the pane primitives read it: on this page the key
@@ -1104,6 +1105,9 @@ export const PlatformDetail: FC<{ row: PlatformRow; state: PlatformsPageState }>
       {/* The action the pane was missing: on a platform the plugin installs nothing for,
           every row said why it could not launch and offered no way to change that. */}
       <EmulatorInstallSection slug={row.slug} />
+      {/* The cores themselves: the missing-only sweep in Settings cannot replace a file
+          that is on disk but unusable, and this is the page that names the core. */}
+      <CoreInstallSection slug={row.slug} core={core} />
       {/* A failed RE-read keeps the answer it could not replace, so what is
           below is the state from before whatever changed it — which is exactly
           where a reader needs telling, and where the notice used to be silent.

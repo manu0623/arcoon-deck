@@ -509,14 +509,19 @@ class Plugin:
         """
         return await self._core_provisioning_service.ensure_runtime()
 
-    async def ensure_platform_cores(self, system_name):
+    async def ensure_platform_cores(self, system_name, force=False):
         """Install the libretro cores this system's inventory needs, verifying each.
 
         The owned runtime can only load cores that are on disk, and a Deck without
         RetroDECK has none. Answers one outcome per core; a failure is reported rather
         than raised, so a single unavailable core does not hide the ones that landed.
+
+        ``force`` re-downloads the cores even when they are already on disk. That is the
+        platform pane's reinstall action: a core written by an older build can be one
+        RetroArch refuses to load, and the build bot publishes nightlies with no version
+        this app could compare against, so "present but wrong" has no other repair.
         """
-        return await self._core_provisioning_service.ensure_for_system(system_name)
+        return await self._core_provisioning_service.ensure_for_system(system_name, force=bool(force))
 
     async def adopt_roms_on_disk(self):
         """Record an install for every known ROM whose file is already on disk.

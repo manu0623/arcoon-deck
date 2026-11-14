@@ -729,6 +729,30 @@ export const getPlatformCoreInfo = callable<[number], CoreInfo>("get_platform_co
 // platforms that payload has something to say about.
 export const getSystemCoreInfo = callable<[string], SystemCoreInfo>("get_system_core_info");
 
+/**
+ * What one platform's core run did — the whole-device sweep's answer narrowed to
+ * a system, plus the fields only this path has: which system answered, and the
+ * two refusals a caller can act on (`unknown_system`, `no_libretro`).
+ */
+export interface PlatformCoreResult {
+  success: boolean;
+  system?: string;
+  reason?: string;
+  runtime?: CoreProvisionResult["runtime"];
+  installed?: string[];
+  failed?: CoreProvisionFailure[];
+  /** Empty on a forced run: it re-fetches everything, so nothing was skipped. */
+  already_present?: string[];
+}
+
+/**
+ * Install one platform's libretro cores (`force: false`) or re-fetch them all
+ * (`force: true`). The forced form is the reinstall the platform pane offers —
+ * a core that is on disk but unusable, or older than the build bot's nightly,
+ * is exactly what a missing-only run skips by design.
+ */
+export const ensurePlatformCores = callable<[string, boolean], PlatformCoreResult>("ensure_platform_cores");
+
 /** One launchable disc image within a multi-disc ROM's install directory. */
 export interface Disc {
   filename: string;

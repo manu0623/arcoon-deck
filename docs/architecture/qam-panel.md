@@ -850,6 +850,20 @@ and a title over an empty body on all of them is noise. The section reads its ow
 `get_platform_emulators`, independent of the pane's core read, so a failure there leaves the
 rest of the pane alone.
 
+**Libretro cores** sit just above it (`src/components/library/CoreInstallSection.tsx`), one
+row per core file the platform's inventory names, each stating `installed` or `missing`
+(never "not installed": the clause above says that about the *emulator*, and the same
+words beside it read as the same claim). The button follows the rows rather than the other way round: with a core
+missing it names the count it will fetch (`Download the missing core`), and with every core
+on disk it becomes `Reinstall core` and re-fetches them all through `ensure_platform_cores`'s
+`force`. That second state is the one the section exists for: the whole-device sweep asks the
+filesystem, so a `.so` that is present but that RetroArch refuses to load — or one older than
+the build bot's nightly — is never looked at again by a missing-only run. A refusal is stated
+in the backend's own terms (`the archive was truncated or corrupt`, `the runtime is not
+installed yet`) instead of a generic failure, and a row that did not land is never counted
+with the ones that did. Nothing is drawn while the core read is out, nor on a platform whose
+emulators are all standalone — there the section below is the one with something to say.
+
 **Platforms** is list and detail. The list holds every platform RomM reports with at least one ROM — what
 `get_platforms` returns; a platform with nothing to sync is not listed — in two groups, **Synced** (the toggle is on)
 above **Available**, each alphabetical: **a dot, the name, the toggle, and nothing else**. The dot is the row's whole

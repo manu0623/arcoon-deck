@@ -71,3 +71,25 @@ one unavailable core does not abort the batch, and the response separates `insta
 - Nightly builds are not a pinned version: an install today and one next month are
   different binaries. Pinning a release tag would trade freshness for reproducibility; that
   is a decision for a later ADR if a core ever regresses between nightlies.
+
+## Amendment — reinstalling a core (0.48.44)
+
+The missing-only rule left one state with no repair. A core is asked for by its presence on
+disk, so a `.so` written by an older build (including any that predates the archive checks
+above) can be present, refused by RetroArch, and skipped by every later sweep; and because
+the source is a nightly, "present" says nothing about "current". Deleting the file from a
+terminal is not available on a Deck in Game Mode, which is the whole reason the button
+exists.
+
+`ensure_for_system(system_name, force=True)` therefore re-fetches every libretro core the
+inventory names for the system, and `ensure_platform_cores(system_name, force)` exposes it.
+Nothing is skipped on a forced run, so `already_present` is empty and every core is reported
+in `installed` or `failed` — a refusal is never counted as a reinstall. The write path is
+unchanged: the old file keeps loading until the new one is verified and `os.replace`d, so a
+failed reinstall leaves a working core behind.
+
+**Library → Platforms → the platform → Libretro cores** is the caller
+(`src/components/library/CoreInstallSection.tsx`): one row per core file, and a button that
+reads `Download the missing core` while any is missing and `Reinstall core` once the set is
+complete. The whole-device sweep keeps its missing-only meaning; a forced sweep over every
+platform would re-download a device's entire core set on one press.

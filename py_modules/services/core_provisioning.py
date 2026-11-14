@@ -114,14 +114,23 @@ class CoreProvisioningService:
             "skipped": skipped,
         }
 
-    async def ensure_for_system(self, system_name: str) -> dict[str, Any]:
-        """Install what *system_name* is missing and report every core's outcome.
+    async def ensure_for_system(self, system_name: str, *, force: bool = False) -> dict[str, Any]:
+        """Install what *system_name* needs and report every core's outcome.
 
         ``reason`` is set only for the answers a caller can act on: ``unknown_system``
         (the inventory does not describe this system) and ``no_libretro`` (it describes
         only standalone emulators, so there is nothing to download). A system that is
         already complete answers ``success: True`` with empty lists rather than taking a
         trip through the installer.
+
+        *force* re-fetches the cores that are already on disk, which is the one thing a
+        missing-only sweep cannot do. Two states need it: a core RetroArch refuses to load
+        (a truncated or mismatched build written before the archive checks landed) and a
+        core that is simply out of date, because the build bot publishes nightlies and
+        nothing in this app tracks a version to compare against. ``already_present`` is
+        therefore empty on a forced run — nothing was skipped — and every core comes back
+        in ``installed`` or ``failed``. Overwriting is what the installer's atomic replace
+        is for: the old file keeps working until the verified one lands.
 
         The installs run one at a time in the executor: cores are a handful of megabytes
         each and a batch is rarely more than one or two, so serialising them keeps the
@@ -151,14 +160,15 @@ class CoreProvisioningService:
                 "runtime": runtime,
                 "cores": [],
             }
-        missing = missing_cores(wanted, installed=self._installed)
+        targets = wanted if force else missing_cores(wanted, installed=self._installed)
         results: list[dict[str, Any]] = [
-            await self._loop.run_in_executor(None, self._installer, core) for core in missing
+            await self._loop.run_in_executor(None, self._installer, core) for core in targets
         ]
         installed = [result["core"] for result in results if result.get("ok")]
         failed = [result for result in results if not result.get("ok")]
         if installed:
-            self._logger.info(f"core_provisioning: installed {len(installed)} core(s) for {system_name}: {installed}")
+            verb = "reinstalled" if force else "installed"
+            self._logger.info(f"core_provisioning: {verb} {len(installed)} core(s) for {system_name}: {installed}")
         if failed:
             self._logger.warning(f"core_provisioning: {len(failed)} core(s) failed for {system_name}: {failed}")
         return {
@@ -167,6 +177,6 @@ class CoreProvisioningService:
             "runtime": runtime,
             "installed": installed,
             "failed": failed,
-            "already_present": [core for core in wanted if core not in missing],
+            "already_present": [] if force else [core for core in wanted if core not in targets],
             "cores": results,
         }

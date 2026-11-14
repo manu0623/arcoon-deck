@@ -81,6 +81,21 @@ yet; start it from RPCS3 in the meantime.
 
 To find the files, open the game's detail page — the **ROM File** section shows the filename the download produced.
 
+### The core won't load, or the emulator closes the moment it opens
+
+**Symptom**: A game for a libretro platform (SNES, GBA, PlayStation, …) opens RetroArch and comes straight back, or
+RetroArch reports it cannot load the core. Nothing else changed on the device.
+
+**What happened**: the core file is on disk, so **Settings › Emulators & Cores › Install Missing Cores** skips it —
+that button asks the filesystem, and the filesystem says the file exists. A `.so` written by an older build (including
+one from before the plugin started verifying its downloads) can be present and still be refused by RetroArch, and the
+cores come from the libretro nightlies, so the copy on disk is not necessarily current either.
+
+**Fix**: open **Library › Platforms**, pick the platform, and press **Reinstall core** under **Libretro cores**. That
+re-downloads and re-verifies the platform's cores, replacing each file only once the new copy has been checked — a
+failed reinstall leaves the old core in place, and the pane says why in the backend's own words ("the archive was
+truncated or corrupt", "the runtime is not installed yet").
+
 ### Controller doesn't work in RetroArch menus
 
 **Symptom**: The game plays fine, but the RetroArch Quick Menu (L3+R3) can't be navigated with the controller — only
