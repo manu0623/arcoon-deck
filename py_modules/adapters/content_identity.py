@@ -39,10 +39,16 @@ if TYPE_CHECKING:
     import logging
     from collections.abc import Callable
 
-# The head a disc image is read through. SYSTEM.CNF sits a few sectors into the ISO —
-# sector 16 is the primary volume descriptor, the directory records follow it — so a
-# megabyte of margin covers the layouts seen in practice without reading an image whole.
+# The head a disc image is read through. A PS1/PS2 header often carries the boot line
+# close enough to the front that one read answers, and the boot sector of a Dreamcast disc
+# is one sector — so a megabyte of margin covers the images that do, without reading an
+# image whole. It does NOT cover every PS2 disc: measured on the reference Deck,
+# ``Burnout (USA).iso`` keeps its ``SYSTEM.CNF`` at sector 857 (1.75 MiB in), so the head
+# alone answered nothing and every save the game wrote was refused. The ISO walk below is
+# what answers for those, which is why a miss here is a fallback and not a refusal.
 _DISC_HEAD_BYTES = 1 << 20
+# ``SYSTEM.CNF`` is a handful of lines naming the boot executable; a page is margin.
+_SYSTEM_CNF_MAX_BYTES = 1 << 12
 # A consumer of these formats never needs more than a couple of sectors.
 _SECTOR_HEAD_BYTES = 0x200
 # The NCCH head is read from the partition, and its program id is at 0x118.
@@ -96,7 +102,7 @@ class ContentIdentityAdapter:
             if slug in _SWITCH_PLATFORMS:
                 return self._switch(path)
             if slug in _DISC_SERIAL_PLATFORMS:
-                return disc_serial(self._read(path, 0, _DISC_HEAD_BYTES).decode("latin-1", errors="replace"))
+                return self._disc_serial(path)
             if slug in _PSP_PLATFORMS:
                 return self._psp(path)
             if slug in _PS3_PLATFORMS:
@@ -117,6 +123,31 @@ class ContentIdentityAdapter:
             self._logger.warning(f"content_identity: cannot read {os.path.basename(path)}: {exc}")
             return None
         return None
+
+    def _disc_serial(self, path: str) -> ContentIdentity | None:
+        """The boot line, read from the image's head and then from its ``SYSTEM.CNF``.
+
+        The head is tried first because on most discs the boot line is inside it, and one
+        read is cheaper than a directory walk. When it is not — the measured Burnout image
+        keeps ``SYSTEM.CNF`` at sector 857, past the head — the file's own directory says
+        where the boot configuration is, so the walk the PSP and PS3 readers already use
+        answers here too. A head-only reading is what left every PS2 save on that Deck
+        refused as ``save_shape_unsupported``: no serial, so no card folder to name.
+        """
+        identity = disc_serial(self._read(path, 0, _DISC_HEAD_BYTES).decode("latin-1", errors="replace"))
+        if identity is not None:
+            return identity
+        root = iso9660_root_directory(self._read(path, _ISO_PVD_OFFSET, _ISO_SECTOR))
+        if root is None:
+            return None
+        cnf = self._iso_entry(path, root, "SYSTEM.CNF")
+        if cnf is None:
+            return None
+        return disc_serial(
+            self._read(path, cnf[0] * _ISO_SECTOR, min(cnf[1], _SYSTEM_CNF_MAX_BYTES)).decode(
+                "latin-1", errors="replace"
+            )
+        )
 
     def _psp(self, path: str) -> ContentIdentity | None:
         """Three reads: the volume descriptor, two directory records, then the SFO.

@@ -59,6 +59,27 @@ class TestDiscSerials:
         assert identity is not None
         assert identity.save_id == "SLUS-20312"
 
+    def test_a_boot_line_past_the_head_is_read_from_system_cnf(self, tmp_path: Path) -> None:
+        # Measured on the reference Deck: Burnout keeps SYSTEM.CNF at sector 857, past the
+        # megabyte the head reader takes, so a head-only reading answered nothing — and a
+        # PS2 save with no serial has no card folder to sync into.
+        rom = tmp_path / "Burnout (USA).iso"
+        rom.write_bytes(_ps2_iso(b"BOOT2 = cdrom0:\\SLUS_203.07;1\r\nVER = 1.00\r\nVMODE = NTSC\r\n"))
+
+        identity = _adapter()(str(rom), "ps2")
+
+        assert identity is not None
+        assert identity.save_id == "SLUS-20307"
+
+    def test_an_image_with_no_system_cnf_answers_nothing(self, tmp_path: Path) -> None:
+        rom = tmp_path / "game.iso"
+        image = bytearray(_ps2_iso(b"BOOT2 = cdrom0:\\SLUS_203.07;1\r\n"))
+        # Blank the directory record so no entry can be found.
+        image[17 * _SECTOR : 18 * _SECTOR] = bytes(_SECTOR)
+        rom.write_bytes(bytes(image))
+
+        assert _adapter()(str(rom), "ps2") is None
+
     def test_the_same_file_answers_differently_by_platform(self, tmp_path: Path) -> None:
         # An .iso is a PS1, PS2 or GameCube image depending on what it was installed
         # for; the platform picks the reader, and the wrong reader refuses on its magic.
@@ -107,7 +128,6 @@ class TestDegradation:
         assert _adapter()(str(rom), "gba") is None
 
 
-
 _SECTOR = 2048
 _NUL = chr(0)
 
@@ -148,6 +168,28 @@ def _param_sfo(**entries: str) -> bytes:
     for offset, (value_offset, length) in zip(offsets, values, strict=True):
         out += struct.pack("<HHIII", offset, 0x0204, length, length, value_offset)
     return out + keys + data
+
+
+def _ps2_iso(cnf: bytes, *, cnf_sector: int = 857) -> bytes:
+    """An image whose root lists ``SYSTEM.CNF`` at *cnf_sector*.
+
+    The default sector is the one measured on the reference Deck's ``Burnout (USA).iso``:
+    857, which is 1.75 MiB into the image and therefore past the head the reader takes
+    before it walks the directory.
+    """
+    pvd = bytearray(_SECTOR)
+    pvd[0] = 1  # primary volume descriptor
+    pvd[1:6] = b"CD001"
+    pvd[6] = 1
+    root = _iso_record(_NUL, 17, _SECTOR, directory=True)
+    pvd[156 : 156 + len(root)] = root
+    listing = _iso_record("SYSTEM.CNF;1", cnf_sector, len(cnf))
+    sectors = {
+        16: bytes(pvd),
+        17: listing.ljust(_SECTOR, bytes(1)),
+        cnf_sector: cnf.ljust(_SECTOR, bytes(1)),
+    }
+    return b"".join(sectors.get(index, bytes(_SECTOR)) for index in range(cnf_sector + 1))
 
 
 def _ps3_iso(sfo: bytes, *, game_dir: str = "PS3_GAME") -> bytes:
