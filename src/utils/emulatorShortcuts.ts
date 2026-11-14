@@ -31,6 +31,7 @@ import {
   logError,
   logInfo,
   logWarn,
+  saveShortcutCover,
   saveShortcutIcon,
   type EmulatorShortcutRow,
 } from "../api/backend";
@@ -63,11 +64,17 @@ function liveShortcutAppIds(): Set<number> | null {
 /**
  * Apply one SGDB asset. Hero, logo and wide grid go through Steam's custom-art
  * call; the icon is a file the backend writes and Steam is pointed at, because an
- * icon needs a path in the grid folder rather than bytes.
+ * icon needs a path in the grid folder rather than bytes. The portrait cover (5)
+ * is a bare grid file too — `{app_id}p.png` is the tile the library grid and a
+ * collection show, and Steam reads it from the grid directory without being told.
  */
 async function applyAsset(appId: number, key: string, base64: string | null, assetType: number): Promise<boolean> {
   if (!base64) return false;
   try {
+    if (assetType === 5) {
+      const saved = await saveShortcutCover(appId, base64);
+      return saved.success;
+    }
     if (assetType === 4) {
       const saved = await saveShortcutIcon(appId, base64);
       if (!saved.success || !saved.icon_path) return false;
@@ -85,7 +92,7 @@ async function applyAsset(appId: number, key: string, base64: string | null, ass
 /** Fetch and apply all four asset types for one emulator. Returns how many landed. */
 async function applyEmulatorArtwork(row: EmulatorShortcutRow, appId: number): Promise<number> {
   const answers = await Promise.all(
-    [1, 2, 3, 4].map((assetType) =>
+    [1, 2, 3, 4, 5].map((assetType) =>
       getEmulatorArtwork(row.key, assetType).catch(() => ({ base64: null, no_api_key: false })),
     ),
   );

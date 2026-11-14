@@ -1,6 +1,6 @@
 # 0068 — A tile's art is applied when it is missing, not when the tile is created
 
-**Status:** Accepted (0.48.28)
+**Status:** Accepted (0.48.28); the portrait slot added in 0.48.29.
 **Follows:** 0050 (every installed emulator is a Steam tile).
 
 ## Context
@@ -46,8 +46,9 @@ directory instead of the network when the asset is already there.
   behind, so hand-picked art is never overwritten.
 - Which filename counts is `domain.artwork_paths.asset_grid_filenames`, built on the same
   suffix/extension table the grid cleanup already uses (`_hero`, `_logo`, `_icon`, portrait
-  `p`, bare wide) — measured on a live grid directory, not assumed. `grid` accepts either the
-  portrait or the wide form, because both mean "this tile has a grid picture".
+  `p`, bare wide) — measured on a live grid directory, not assumed. Each slot is its own
+  file: the wide capsule is the bare name and the portrait is `p`, so a tile carrying one is
+  not reported as carrying the other.
 - The service takes Steam's grid directory as a `grid_dir` reader. `None` means *cannot tell*
   and every asset is fetched as before, so a missing answer never reads as "already applied".
   The same three-way rule covers no binding (no tile yet) and an unknown asset type.
@@ -66,3 +67,21 @@ directory instead of the network when the asset is already there.
   device changes.
 - Art applied through Steam's own UI is respected rather than replaced, which is a behaviour
   change worth naming: the plugin no longer assumes it was the only writer.
+
+## The portrait slot, measured after the first release
+
+Shipping the above exposed what the first audit had read too shallowly. Twelve of the thirteen
+tiles carry `_hero`, `_logo`, the wide bare `.png` and `_icon`, and **none** carried `p`: the
+asset the collection was missing is the portrait cover, the `{app_id}p.png` a ROM tile's cover
+occupies. Steam's custom-art call writes the wide slot, so a type 3 fetch could never produce
+it, and the collection showed its emulators without the picture every game beside them has.
+
+So the portrait is its own asset type — `5`, named `cover`, on SGDB's grid endpoint asked for
+portrait dimensions (`600x900,342x482`) — and it is applied the way every ROM tile's cover is:
+the backend decodes the PNG and writes `{app_id}p.png` into the grid directory. No Steam call
+is involved, because Steam reads that directory itself; `save_shortcut_cover` is the callable,
+and `steam_config.write_shortcut_cover` the write.
+
+Two gaps this does **not** close, both SGDB coverage rather than plumbing: Dolphin has no hero
+asset on its SGDB entry, and the search term `Citron` matches nothing there at all, so that
+tile stays on Steam's default picture until the name it searches for changes.

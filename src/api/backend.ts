@@ -1086,6 +1086,13 @@ export const saveShortcutIcon = callable<[number, string], { success: boolean; i
   "save_shortcut_icon",
 );
 
+// Portrait cover support — writes `{app_id}p.png`, the tile Steam shows in the
+// library grid and inside a collection. Steam reads the grid dir itself, so the
+// written file is the whole job (no SetCustomArtworkForApp call).
+export const saveShortcutCover = callable<[number, string], { success: boolean; cover_path?: string }>(
+  "save_shortcut_cover",
+);
+
 // Save sync callables
 export const ensureDeviceRegistered = callable<[], { success: boolean; device_id: string; device_name: string }>(
   "ensure_device_registered",

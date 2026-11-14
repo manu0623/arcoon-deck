@@ -1185,6 +1185,10 @@ class Plugin:
         return await self._sgdb_service.save_shortcut_icon(app_id, icon_base64)
 
     @prune_active_blocked
+    async def save_shortcut_cover(self, app_id, cover_base64):
+        return await self._sgdb_service.save_shortcut_cover(app_id, cover_base64)
+
+    @prune_active_blocked
     async def get_sgdb_resolution(self, rom_id):
         return await self._sgdb_service.get_sgdb_resolution(rom_id)
 

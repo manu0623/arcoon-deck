@@ -19,6 +19,7 @@ vi.mock("../api/backend", () => ({
   forgetEmulatorShortcut: vi.fn(),
   getEmulatorArtwork: vi.fn(),
   saveShortcutIcon: vi.fn(),
+  saveShortcutCover: vi.fn(),
   logInfo: vi.fn(),
   logWarn: vi.fn(),
   logError: vi.fn(),
@@ -86,7 +87,7 @@ describe("syncEmulatorShortcuts", () => {
     const outcome = await syncEmulatorShortcuts();
 
     expect(vi.mocked(steamShortcuts.addShortcut)).not.toHaveBeenCalled();
-    expect(mocked.getEmulatorArtwork).toHaveBeenCalledTimes(4);
+    expect(mocked.getEmulatorArtwork).toHaveBeenCalledTimes(5);
     expect(vi.mocked(SteamClient.Apps.SetCustomArtworkForApp)).not.toHaveBeenCalled();
     expect(mocked.bindEmulatorShortcut).not.toHaveBeenCalled();
     expect(vi.mocked(collections.createOrUpdateEmulatorCollection)).toHaveBeenCalledWith("Emulators", [5000]);
@@ -125,7 +126,7 @@ describe("syncEmulatorShortcuts", () => {
     expect(outcome.existing).toBe(1);
   });
 
-  it("applies the four art assets to a new tile and counts them", async () => {
+  it("applies all five art assets to a new tile and counts them", async () => {
     liveStore([]);
     vi.mocked(backend.getEmulatorShortcuts).mockResolvedValue({
       collection: "Emulators",
@@ -134,13 +135,15 @@ describe("syncEmulatorShortcuts", () => {
     vi.mocked(steamShortcuts.addShortcut).mockResolvedValue(5000);
     vi.mocked(backend.getEmulatorArtwork).mockResolvedValue({ base64: "AA==", no_api_key: false });
     vi.mocked(backend.saveShortcutIcon).mockResolvedValue({ success: true, icon_path: "/grid/5000_icon.png" });
+    vi.mocked(backend.saveShortcutCover).mockResolvedValue({ success: true, cover_path: "/grid/5000p.png" });
 
     const outcome = await syncEmulatorShortcuts();
 
-    expect(mocked.getEmulatorArtwork).toHaveBeenCalledTimes(4);
+    expect(mocked.getEmulatorArtwork).toHaveBeenCalledTimes(5);
     expect(vi.mocked(SteamClient.Apps.SetCustomArtworkForApp)).toHaveBeenCalledTimes(3);
     expect(vi.mocked(SteamClient.Apps.SetShortcutIcon)).toHaveBeenCalledWith(5000, "/grid/5000_icon.png");
-    expect(outcome.art).toBe(4);
+    expect(vi.mocked(backend.saveShortcutCover)).toHaveBeenCalledWith(5000, "AA==");
+    expect(outcome.art).toBe(5);
   });
 
   it("dresses an existing tile that has no art yet", async () => {
@@ -153,6 +156,7 @@ describe("syncEmulatorShortcuts", () => {
     });
     vi.mocked(backend.getEmulatorArtwork).mockResolvedValue({ base64: "AA==", no_api_key: false });
     vi.mocked(backend.saveShortcutIcon).mockResolvedValue({ success: true, icon_path: "/grid/5000_icon.png" });
+    vi.mocked(backend.saveShortcutCover).mockResolvedValue({ success: true, cover_path: "/grid/5000p.png" });
 
     const outcome = await syncEmulatorShortcuts();
 
@@ -160,7 +164,8 @@ describe("syncEmulatorShortcuts", () => {
     expect(mocked.getEmulatorArtwork).toHaveBeenCalledWith("ppsspp@native", 1);
     expect(vi.mocked(SteamClient.Apps.SetCustomArtworkForApp)).toHaveBeenCalledTimes(3);
     expect(vi.mocked(SteamClient.Apps.SetShortcutIcon)).toHaveBeenCalledWith(5000, "/grid/5000_icon.png");
-    expect(outcome.art).toBe(4);
+    expect(vi.mocked(backend.saveShortcutCover)).toHaveBeenCalledWith(5000, "AA==");
+    expect(outcome.art).toBe(5);
   });
 
   it("writes no collection when there is nothing to put in it", async () => {

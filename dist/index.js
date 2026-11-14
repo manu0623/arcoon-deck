@@ -276,6 +276,7 @@ const getMetadataCachePage = callable("get_metadata_cache_page");
 const getAppIdRomIdMap = callable("get_app_id_rom_id_map");
 const getInstalledRelaunchOptions = callable("get_installed_relaunch_options");
 const saveShortcutIcon = callable("save_shortcut_icon");
+const saveShortcutCover = callable("save_shortcut_cover");
 const ensureDeviceRegistered = callable("ensure_device_registered");
 const listDevices = callable("list_devices");
 const getSaveStatus = callable("get_save_status");
@@ -11539,6 +11540,10 @@ async function applyAsset(appId, key, base64, assetType) {
     if (!base64)
         return false;
     try {
+        if (assetType === 5) {
+            const saved = await saveShortcutCover(appId, base64);
+            return saved.success;
+        }
         if (assetType === 4) {
             const saved = await saveShortcutIcon(appId, base64);
             if (!saved.success || !saved.icon_path)
@@ -11555,7 +11560,7 @@ async function applyAsset(appId, key, base64, assetType) {
     }
 }
 async function applyEmulatorArtwork(row, appId) {
-    const answers = await Promise.all([1, 2, 3, 4].map((assetType) => getEmulatorArtwork(row.key, assetType).catch(() => ({ base64: null, no_api_key: false }))));
+    const answers = await Promise.all([1, 2, 3, 4, 5].map((assetType) => getEmulatorArtwork(row.key, assetType).catch(() => ({ base64: null, no_api_key: false }))));
     if (answers.some((answer) => answer.no_api_key)) {
         logInfo("Emulator artwork: no SteamGridDB key configured, leaving the default tiles");
         return 0;

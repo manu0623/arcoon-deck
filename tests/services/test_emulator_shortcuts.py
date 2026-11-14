@@ -263,15 +263,43 @@ class TestAnAssetAlreadyOnDisk:
         assert sgdb.paths == ["/search/autocomplete/PPSSPP", "/heroes/game/9001"]
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("name", ["1234.png", "1234p.png"])
-    async def test_either_grid_form_counts(self, tmp_path, name) -> None:
-        (tmp_path / name).write_bytes(b"\x89PNG")
+    async def test_the_wide_grid_is_its_own_slot(self, tmp_path) -> None:
+        (tmp_path / "1234.png").write_bytes(b"\x89PNG")
         built, sgdb = _service_with_grid(tmp_path, {"ppsspp@native": 1234})
 
         answer = await built.artwork("ppsspp@native", 3)
 
         assert answer.get("present") is True
         assert sgdb.paths == []
+
+    @pytest.mark.asyncio
+    async def test_a_portrait_alone_is_not_the_wide_grid(self, tmp_path) -> None:
+        (tmp_path / "1234p.png").write_bytes(b"\x89PNG")
+        built, sgdb = _service_with_grid(tmp_path, {"ppsspp@native": 1234})
+
+        answer = await built.artwork("ppsspp@native", 3)
+
+        assert answer.get("present") is None
+        assert sgdb.paths != []
+
+    @pytest.mark.asyncio
+    async def test_the_portrait_cover_is_its_own_slot(self, tmp_path) -> None:
+        (tmp_path / "1234p.png").write_bytes(b"\x89PNG")
+        built, sgdb = _service_with_grid(tmp_path, {"ppsspp@native": 1234})
+
+        answer = await built.artwork("ppsspp@native", 5)
+
+        assert answer.get("present") is True
+        assert sgdb.paths == []
+
+    @pytest.mark.asyncio
+    async def test_a_missing_cover_asks_for_portrait_dimensions(self, tmp_path) -> None:
+        built, sgdb = _service_with_grid(tmp_path, {"ppsspp@native": 1234})
+
+        answer = await built.artwork("ppsspp@native", 5)
+
+        assert answer["base64"] is not None
+        assert sgdb.paths == ["/search/autocomplete/PPSSPP", "/grids/game/9001?dimensions=600x900,342x482"]
 
     @pytest.mark.asyncio
     async def test_a_row_with_no_binding_is_fetched(self, tmp_path) -> None:

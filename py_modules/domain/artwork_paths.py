@@ -82,8 +82,12 @@ def grid_image_filenames(app_id: int | str) -> list[str]:
 _ASSET_TYPE_GRID_SUFFIXES: dict[str, tuple[str, ...]] = {
     "hero": ("_hero",),
     "logo": ("_logo",),
-    "grid": ("p", ""),
+    # The wide capsule (the home shelf's shape) is the bare name; the portrait lives in
+    # its own slot below, so a tile carrying only one of them is not counted as both.
+    "grid": ("",),
     "icon": ("_icon",),
+    # The portrait cover is the library tile's own slot, and only ``p`` fills it.
+    "cover": ("p",),
 }
 
 

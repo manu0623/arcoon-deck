@@ -226,3 +226,21 @@ class TestToUnsignedAppId:
 
     def test_leaves_an_id_that_was_never_negative_alone(self):
         assert to_unsigned_app_id(42) == 42
+
+
+class TestThePortraitCover:
+    """The library tile's slot: `{app_id}p.png`, from the grid endpoint at portrait sizes.
+
+    Measured on the reference Deck: every tile the emulator collection made carried
+    `_hero`, `_logo`, the wide bare `.png` and `_icon`, and not one carried `p` — so the
+    collection showed them without the cover every game beside them has.
+    """
+
+    def test_the_code_resolves(self):
+        assert asset_type_name(5) == "cover"
+
+    def test_it_shares_the_grid_endpoint(self):
+        assert asset_type_endpoint("cover") == "grids"
+
+    def test_the_path_asks_for_portrait_dimensions(self):
+        assert sgdb_endpoint_path("cover", 9001) == "/grids/game/9001?dimensions=600x900,342x482"

@@ -149,20 +149,36 @@ class SteamConfigAdapter:
         Raises ``lib.errors.SteamGridDirMissingError`` when the Steam grid
         directory cannot be located.
         """
+        return self._write_grid_png(app_id, "_icon", icon_bytes)
+
+    def write_shortcut_cover(self, app_id: int, cover_bytes: bytes) -> str:
+        """Write a portrait cover PNG (``{app_id}p.png``) and return its path.
+
+        The portrait slot is the tile Steam shows in the library grid and inside a
+        collection, and it is a *file*: the plugin writes it for a ROM's cover the
+        same way, where a custom-art call dresses the wide, hero and logo slots.
+
+        Raises ``lib.errors.SteamGridDirMissingError`` when the grid directory
+        cannot be located.
+        """
+        return self._write_grid_png(app_id, "p", cover_bytes)
+
+    def _write_grid_png(self, app_id: int, suffix: str, data: bytes) -> str:
+        """Write ``{app_id}{suffix}.png`` atomically and return its path."""
         grid_dir = self.grid_dir()
         if not grid_dir:
             raise SteamGridDirMissingError("Cannot find Steam grid directory")
-        icon_path = os.path.join(grid_dir, f"{app_id}_icon.png")
-        tmp_path = icon_path + ".tmp"
+        target = os.path.join(grid_dir, f"{app_id}{suffix}.png")
+        tmp_path = target + ".tmp"
         try:
             with open(tmp_path, "wb") as f:
-                f.write(icon_bytes)
-            os.replace(tmp_path, icon_path)
+                f.write(data)
+            os.replace(tmp_path, target)
         except Exception:
             with contextlib.suppress(FileNotFoundError):
                 os.remove(tmp_path)
             raise
-        return icon_path
+        return target
 
     # -- Steam Input config ---------------------------------------------------
 

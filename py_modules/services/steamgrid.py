@@ -460,6 +460,32 @@ class SteamGridService:
             self._logger.error(f"Failed to write icon file for app_id {app_id}: {e}")
             return None
 
+    async def save_shortcut_cover(self, app_id, cover_base64):
+        """Write a frontend-supplied portrait cover into Steam's grid directory.
+
+        ``{app_id}p.png`` is the tile Steam shows in the library grid and inside a
+        collection — the slot a ROM's own cover occupies. Nothing is pointed at the
+        file: Steam reads the grid directory itself, so a written PNG is the whole
+        of the work (measured: every ROM tile on the reference Deck got its cover
+        this way).
+        """
+        app_id = int(app_id)
+        try:
+            cover_bytes = base64.b64decode(cover_base64)
+        except Exception as e:
+            self._logger.error(f"Failed to decode cover base64: {e}")
+            return {"success": False, "reason": "invalid_payload", "message": "Failed to decode cover data"}
+
+        try:
+            path = await self._loop.run_in_executor(None, self._steam_config.write_shortcut_cover, app_id, cover_bytes)
+        except SteamGridDirMissingError as e:
+            self._logger.warning(f"Cannot save cover: {e}")
+            return {"success": False, "reason": "grid_dir_missing", "message": "Cannot find Steam grid directory"}
+        except Exception as e:
+            self._logger.error(f"Failed to write cover file for app_id {app_id}: {e}")
+            return {"success": False, "reason": "cover_write_failed", "message": "Failed to write cover"}
+        return {"success": True, "cover_path": path}
+
     async def save_shortcut_icon(self, app_id, icon_base64):
         """Write a frontend-supplied icon PNG into Steam's grid directory.
 

@@ -26,6 +26,9 @@ _ASSET_TYPE_TO_ENDPOINT: dict[str, str] = {
     "logo": "logos",
     "grid": "grids",
     "icon": "icons",
+    # A portrait grid: the same SGDB endpoint as ``grid``, asked for the portrait
+    # dimensions the library tile and the collection page use (``{app_id}p.png``).
+    "cover": "grids",
 }
 
 # Numeric asset-type codes used by the frontend's `get_sgdb_artwork_base64`
@@ -35,6 +38,7 @@ _ASSET_TYPE_NUM_TO_NAME: dict[int, str] = {
     2: "logo",
     3: "grid",
     4: "icon",
+    5: "cover",
 }
 
 
@@ -61,6 +65,10 @@ def sgdb_endpoint_path(asset_type: str, sgdb_game_id: int) -> str | None:
     path = f"/{endpoint}/game/{sgdb_game_id}"
     if asset_type == "grid":
         path += "?dimensions=460x215,920x430"
+    elif asset_type == "cover":
+        # Portrait, in the two sizes Steam's library tile has used: the 600x900 capsule
+        # and the 342x482 one. A miss falls through to whatever grids the game has.
+        path += "?dimensions=600x900,342x482"
     return path
 
 

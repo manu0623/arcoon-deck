@@ -141,15 +141,11 @@ class TestAssetGridFilenames:
         assert asset_grid_filenames("logo", 7)[0] == "7_logo.png"
         assert asset_grid_filenames("icon", 7)[0] == "7_icon.png"
 
-    def test_grid_accepts_the_portrait_and_the_wide_form(self):
-        assert asset_grid_filenames("grid", 7) == (
-            "7p.png",
-            "7p.jpg",
-            "7p.jpeg",
-            "7.png",
-            "7.jpg",
-            "7.jpeg",
-        )
+    def test_grid_is_the_wide_form_only(self):
+        assert asset_grid_filenames("grid", 7) == ("7.png", "7.jpg", "7.jpeg")
+
+    def test_cover_is_the_portrait_form_only(self):
+        assert asset_grid_filenames("cover", 7) == ("7p.png", "7p.jpg", "7p.jpeg")
 
     def test_an_unknown_asset_type_has_nothing_to_check(self):
         assert asset_grid_filenames("banner", 7) == ()
