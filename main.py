@@ -212,6 +212,7 @@ class Plugin:
         self._emulator_provisioning_service = services["emulator_provisioning_service"]
         self._emulator_shortcut_service = services["emulator_shortcut_service"]
         self._emulator_save_link_service = services["emulator_save_link_service"]
+        self._emulator_bios_home_service = services["emulator_bios_home_service"]
         self._rom_install_discovery_service = services["rom_install_discovery_service"]
         self._disc_service = services["disc_service"]
         self._version_switch_service = services["version_switch_service"]
@@ -258,6 +259,13 @@ class Plugin:
             await self._emulator_save_link_service.ensure_all()
         except Exception as exc:  # a link is never worth failing the plugin's start
             decky.logger.warning(f"Emulator saves: startup link pass failed: {exc}")
+        # And the BIOS folder that emulator searches is pointed at the tree this app installs
+        # firmware into: a standalone emulator boots with the images it finds, or not at all
+        # (ADR-0069). Only an emulator whose settings file has been read is pointed.
+        try:
+            await self._emulator_bios_home_service.ensure_all()
+        except Exception as exc:  # a BIOS pointer is never worth failing the plugin's start
+            decky.logger.warning(f"Emulator BIOS: startup pass failed: {exc}")
         # No save-sync orphan prune: roms rows are permanent identity anchors
         # and saves/playtime survive a ROM leaving RomM (ADR-0007).
         self._sgdb_service.prune_orphaned_artwork_cache()
@@ -513,17 +521,30 @@ class Plugin:
         return await self._rom_install_discovery_service.adopt_found_content()
 
     async def ensure_emulator_save_links(self, system_name=None):
-        """Point each standalone emulator's save folder at the tree the plugin syncs.
+        """Point each standalone emulator's folders at the trees the plugin syncs.
 
-        A standalone emulator reads and writes its own folder, so a game's savedata the
+        A standalone emulator reads and writes its own folders, so a game's savedata the
         plugin downloaded is invisible to it: measured on the reference Deck, the
         standalone PPSSPP offered a first-run save while the game's folder sat in
         ``<saves>/psp/PSP/SAVEDATA``. The link makes them the same directory, and
         anything the emulator already saved is adopted rather than hidden (ADR-0051).
+
+        The same call points its BIOS folder at this app's firmware tree, because the
+        launch the reader is about to make boots with the images it finds there — a
+        DuckStation that finds none closes the game a second after opening it (ADR-0069).
         """
         if system_name:
-            return await self._emulator_save_link_service.ensure_for_platform(system_name)
-        return await self._emulator_save_link_service.ensure_all()
+            result = await self._emulator_save_link_service.ensure_for_platform(system_name)
+        else:
+            result = await self._emulator_save_link_service.ensure_all()
+        try:
+            if system_name:
+                await self._emulator_bios_home_service.ensure_for_platform(system_name)
+            else:
+                await self._emulator_bios_home_service.ensure_all()
+        except Exception as exc:  # a BIOS pointer never fails the save answer
+            decky.logger.warning(f"Emulator BIOS: pointing before a launch failed: {exc}")
+        return result
 
     async def get_emulator_shortcuts(self):
         """Every emulator this machine has, each with the shortcut it already became.
@@ -581,6 +602,10 @@ class Plugin:
                 await self._emulator_save_link_service.ensure_for_platform(system_name)
             except Exception as exc:  # a link failure must not fail the install
                 decky.logger.warning(f"Emulator saves: linking after installing {system_name} failed: {exc}")
+            try:
+                await self._emulator_bios_home_service.ensure_for_platform(system_name)
+            except Exception as exc:  # a BIOS pointer failure must not fail the install
+                decky.logger.warning(f"Emulator BIOS: pointing after installing {system_name} failed: {exc}")
         return result
 
     async def get_system_core_info(self, platform_slug):

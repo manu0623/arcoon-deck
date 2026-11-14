@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from adapters.coredumps import CoredumpAdapter
+from adapters.emulator_bios_home import EmulatorBiosHomeAdapter
 from adapters.emulator_save_link import EmulatorSaveLinkAdapter
 from adapters.ps2_memcard import Ps2MemcardAdapter
 from domain.owned_dolphin import user_dir_for
@@ -32,6 +33,7 @@ from services.data_location import DataLocationService, DataLocationServiceConfi
 from services.disc import DiscService, DiscServiceConfig
 from services.disc_launch_resolver import DiscLaunchResolver, DiscLaunchResolverConfig
 from services.downloads import DownloadService, DownloadServiceConfig
+from services.emulator_bios_homes import EmulatorBiosHomeConfig, EmulatorBiosHomeService
 from services.emulator_provisioning import EmulatorProvisioningConfig, EmulatorProvisioningService
 from services.emulator_save_links import EmulatorSaveLinkConfig, EmulatorSaveLinkService
 from services.emulator_shortcuts import EmulatorShortcutConfig, EmulatorShortcutService
@@ -516,6 +518,29 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         ),
     )
 
+    # Points a standalone emulator's BIOS folder at the tree this app installs firmware
+    # into, so the PlayStation images it just downloaded are the ones the emulator boots
+    # with: measured on the reference Deck, DuckStation searched an SD card's folder
+    # holding no scph image and the game closed a second after it opened (ADR-0069).
+    # Only the emulators whose settings file has been read are in the domain's table, and
+    # the app names no folder while another runtime drives this machine.
+    def owned_bios_root() -> str | None:
+        """The BIOS root this app's firmware install writes, or none while RetroDECK drives."""
+        if cfg.adapters.retrodeck_paths.runtime_mode() is not RuntimeMode.BUILTIN:
+            return None
+        return cfg.adapters.retrodeck_paths.bios_path()
+
+    emulator_bios_home_service = EmulatorBiosHomeService(
+        config=EmulatorBiosHomeConfig(
+            logger=cfg.runtime.logger,
+            external_emulators=cfg.adapters.external_emulators,
+            config_reader=cfg.adapters.emulator_config,
+            bios_path=owned_bios_root,
+            config_exists=os.path.exists,
+            apply=EmulatorBiosHomeAdapter(logger=cfg.runtime.logger).point,
+        ),
+    )
+
     # Records an install for a ROM the library knows whose file is already on disk, so a
     # library that arrived another way can be asked about its saves at all.
     rom_install_discovery_service = RomInstallDiscoveryService(
@@ -751,6 +776,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         "emulator_provisioning_service": emulator_provisioning_service,
         "emulator_shortcut_service": emulator_shortcut_service,
         "emulator_save_link_service": emulator_save_link_service,
+        "emulator_bios_home_service": emulator_bios_home_service,
         "rom_install_discovery_service": rom_install_discovery_service,
         "disc_service": disc_service,
         "version_switch_service": version_switch_service,
