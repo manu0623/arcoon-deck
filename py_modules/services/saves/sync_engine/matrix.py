@@ -24,7 +24,7 @@ from domain.emulator_tag import emulator_tag
 from domain.iso_time import parse_iso_to_epoch
 from domain.rom_save_sync_state import FileSyncState, RomSaveSyncState
 from domain.save_backup import BACKUP_DIR_NAME, backup_name, select_backups_to_prune
-from domain.save_bank import restores_by_extraction
+from domain.save_bank import archive_members_under, restores_by_extraction
 from domain.save_slot import filter_saves_to_slot
 from domain.sync_action import Conflict, Download, Skip, SyncAction, Upload
 from lib.errors import DeviceNotRegisteredError, RommApiError, RommConflictError, classify_error
@@ -51,9 +51,7 @@ if TYPE_CHECKING:
 _BACKUP_RETENTION = 10  # max .romm-backup copies kept per save file (#974)
 
 
-def _novel_server_target(
-    server_save: dict[str, Any], server_target_filter: Callable[[str], bool] | None
-) -> str | None:
+def _novel_server_target(server_save: dict[str, Any], server_target_filter: Callable[[str], bool] | None) -> str | None:
     """The name an empty member set may place *server_save* under, or ``None``.
 
     Two things are different here from every other download. The name is the SERVER's own —
@@ -415,6 +413,13 @@ class MatrixExecutor:
         Tracking follows the members rather than the archive: a baseline is
         recorded per restored file name, so the next sync compares the bytes
         the emulator will actually write against this download.
+
+        An archive can also arrive *rooted at the folder itself* — a client that packed the
+        folder rather than its contents names every member ``<folder>/<file>``, and the
+        folder those belong in is the one that heading names. Extracting them as they are
+        recreated that folder inside itself, and the emulator read an empty folder and
+        started a new game while the save sat one level down (ADR-0066). The heading is
+        dropped before the bytes are written, so nothing is written outside *target_dir*.
         """
         # The folder the members belong in: the answer's own directory, or — for a unit
         # staged as one archive outside it — the folder the archive was packed from.
@@ -426,14 +431,15 @@ class MatrixExecutor:
             # single card entry sends the ``.gci``, so its download is one member
             # with no container around it. Placing it under its own name is the
             # whole restore — and refusing here would throw away a save RomM holds.
-            self._restore_bare_member(
-                archive_path, target_dir, server_save, save_state, system, default_slot
-            )
+            self._restore_bare_member(archive_path, target_dir, server_save, save_state, system, default_slot)
             return
+        strip_root = os.path.basename(target_dir.rstrip("/\\")) or None
+        if strip_root is not None and archive_members_under(members, strip_root) is None:
+            strip_root = None
         try:
             for member in members:
                 self.quarantine_local_file(target_dir, os.path.basename(member))
-            restored = self._save_file_store.extract_archive(archive_path, target_dir)
+            restored = self._save_file_store.extract_archive(archive_path, target_dir, strip_root=strip_root)
         finally:
             self._save_file_store.remove_file(archive_path)
         if not restored:

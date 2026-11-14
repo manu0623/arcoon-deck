@@ -619,12 +619,14 @@ class SaveFileStore(Protocol):
         """Write *names* from *directory* into *archive_path*; members sit at the root."""
         ...
 
-    def extract_archive(self, archive_path: str, dest_dir: str) -> tuple[str, ...]:
+    def extract_archive(self, archive_path: str, dest_dir: str, *, strip_root: str | None = None) -> tuple[str, ...]:
         """Extract *archive_path*'s regular files into *dest_dir*; return their names.
 
         Member names come from a server, so an entry that would land outside
         *dest_dir* — absolute, or climbing with ``..`` — or through a symlink is
-        refused rather than written.
+        refused rather than written. *strip_root* names a heading every member must
+        sit under, and the one to drop first: an archive packed from the folder itself
+        names the folder at its root, and restoring it as-is nests the save.
         """
         ...
 

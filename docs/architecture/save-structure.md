@@ -137,6 +137,16 @@ quarantining each file it is about to overwrite first, and tracking each restore
 asked of the bank (`restores_by_extraction`), not of a file extension: only a family whose members live flat in
 one directory qualifies, because a nested family would need its tree rebuilt rather than its names restored.
 
+A member set can arrive **rooted at the folder itself**: a client that packs the folder rather than its
+contents names every member `<folder>/<file>`, and those members are relative to the folder's parent.
+Extracting them into the folder recreated it inside itself — measured on the reference Deck, a Switch save
+uploaded by another device restored to `<title>/01006BB00C6F0000/savedata1.bin`, and Eden read `<title>/`,
+found it empty and started a new game while the save sat one level down. So the restore asks the bank
+(`archive_members_under`) whether every member sits under exactly the destination folder's own name and,
+only then, drops that heading before writing: `extract_archive(strip_root=…)` refuses a member outside the
+heading and still writes nothing outside the destination. A flat archive — the shape this plugin packs — a
+mixed one, or a sibling whose name merely starts the same way is read exactly as before (ADR-0066).
+
 Restoring is only half of it: a GameCube save still has to be *named* before anything can be uploaded, and the
 resolver refuses names inside the card folder on purpose (`file-names-unestablished`) since it will not guess
 what a directory holds. Two fills settle that, both in `domain/save_answer.py` and both driven from the single
@@ -337,7 +347,8 @@ ROM-named `.zip`, and the backstop could not pair a `savedata0.bin` with any of 
 one archive named after the ROM, so the folder is packed into exactly that: `prepare_packed_unit` writes
 `.arcoon-archive/<rom name>.zip` beside the title folder (a zip cannot live inside the folder it archives,
 and a dot directory is one no emulator scans) and the matrix syncs that single file. Downloads come back as
-that zip and are extracted into the title folder, which is what `restore_dir` names on the download path. The
+that zip and are extracted into the title folder, which is what `restore_dir` names on the download path — a
+zip that packed the folder itself has its `<title>/` heading dropped first (ADR-0066). The
 folder stays the truth; the archive is derived from it on every sync, and repacking the same bytes yields the
 same content hash, so an unchanged save does not re-upload. Verified on the Deck: six members pack, repack
 byte-stable, source untouched.

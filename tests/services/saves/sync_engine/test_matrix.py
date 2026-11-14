@@ -7,6 +7,7 @@ device registration in test_devices.py; conflict rollback in test_rollback.py.
 """
 
 import hashlib
+import io
 import os
 import zipfile
 from typing import Any
@@ -2770,3 +2771,75 @@ class TestAnEmptyMemberSetAndTheServersOwnEntry:
 
     def test_without_a_filter_nothing_new_is_placed(self, tmp_path) -> None:
         assert self._outcomes(tmp_path, server_target_filter=None) == []
+
+
+class TestRootedArchiveRestore:
+    """ADR-0066: an archive that packed the title folder itself restores INTO it.
+
+    Measured on the reference Deck: the other console's save arrived as members named
+    ``01006BB00C6F0000/savedata1.bin``; the restore wrote them under the title folder as
+    they were, so Eden read an empty ``<title>/`` and started a new game while the save sat
+    in ``<title>/01006BB00C6F0000/``. The members belong in the folder their heading names.
+    """
+
+    _TITLE = "01006BB00C6F0000"
+    _SAVE_ID = 457
+
+    @staticmethod
+    def _stage(fake, save_id: int, members: dict[str, bytes]) -> None:
+        """Hand the fake server the archive the other device uploaded."""
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as zf:
+            for name, payload in members.items():
+                zf.writestr(name, payload)
+        fake.set_server_save_content(save_id, buffer.getvalue())
+
+    def _download(self, tmp_path, members: dict[str, bytes]):
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path, system="switch", file_name="Link's Awakening.nsp")
+        title_dir = tmp_path / "nand" / "93543B1D30E2AEB87D0F28AE30D83730" / self._TITLE
+        title_dir.mkdir(parents=True)
+        (title_dir / "savedata1.bin").write_bytes(b"local save")
+        staging = tmp_path / ".arcoon-archive"
+        staging.mkdir()
+        archive_name = "Link's Awakening.zip"
+        self._stage(fake, self._SAVE_ID, members)
+
+        state = RomSaveSyncState()
+        svc._sync_engine._matrix.do_download_save(
+            _server_save(save_id=self._SAVE_ID, filename=archive_name),
+            str(staging),
+            archive_name,
+            state,
+            "device-1",
+            "switch",
+            None,
+            restore_dir=str(title_dir),
+        )
+        return title_dir, state
+
+    def test_members_named_after_the_folder_land_inside_it(self, tmp_path) -> None:
+        title_dir, state = self._download(
+            tmp_path,
+            {
+                f"{self._TITLE}/savedata1.bin": b"server save",
+                f"{self._TITLE}/screenshot0.bin": b"shot",
+            },
+        )
+
+        assert (title_dir / "savedata1.bin").read_bytes() == b"server save"
+        assert (title_dir / "screenshot0.bin").read_bytes() == b"shot"
+        assert not (title_dir / self._TITLE).exists()
+        # The baseline names where the bytes landed, which is what the next sync hashes.
+        assert set(state.files) == {"savedata1.bin", "screenshot0.bin"}
+
+    def test_a_flat_archive_still_restores_into_the_folder(self, tmp_path) -> None:
+        """The shape this plugin packs — nothing is stripped, nothing nests."""
+        title_dir, state = self._download(
+            tmp_path,
+            {"savedata1.bin": b"server save", "screenshot0.bin": b"shot"},
+        )
+
+        assert (title_dir / "savedata1.bin").read_bytes() == b"server save"
+        assert set(state.files) == {"savedata1.bin", "screenshot0.bin"}

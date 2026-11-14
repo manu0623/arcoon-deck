@@ -474,6 +474,35 @@ def match_archive_root(layout: SaveLayout, root_name: str, save_id: str | None =
     return None
 
 
+def archive_members_under(members: Sequence[str], folder_name: str) -> tuple[str, ...] | None:
+    """The members' own names when the archive is rooted at *folder_name*, else ``None``.
+
+    RomM holds whatever bytes a client gave it, and a client that packs the unit folder
+    *itself* writes members named ``<folder>/<file>``. Those members are relative to the
+    folder's PARENT, so extracting them into the folder nests the save one level deep —
+    measured on the reference Deck, where a Switch save uploaded by another device restored
+    to ``<title>/<title>/savedata1.bin`` while Eden read ``<title>/`` and started a new game
+    (ADR-0066). A flat archive — the shape this plugin packs — names the folder's own files
+    and is left alone.
+
+    ``None`` unless every member sits under exactly that one heading, so a caller only
+    changes a destination it can prove; a mixed archive keeps its flat reading.
+    """
+    heading = folder_name.strip().strip("/\\")
+    if not heading or not members:
+        return None
+    relative: list[str] = []
+    for member in members:
+        normalized = member.replace("\\", "/")
+        while normalized.startswith("./"):
+            normalized = normalized[2:]
+        head, separator, tail = normalized.partition("/")
+        if head != heading or not separator or not tail:
+            return None
+        relative.append(tail)
+    return tuple(relative)
+
+
 def ps2_name_matches(folder_name: str, save_id: str) -> bool:
     """Whether a card entry belongs to the game *save_id* names.
 

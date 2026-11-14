@@ -524,3 +524,47 @@ class TestCreateArchive:
         archive = tmp_path / "empty.zip"
         save_files.create_archive(str(archive), str(tmp_path), [])
         assert not archive.exists()
+
+
+class TestExtractArchiveStripRoot:
+    """ADR-0066: an archive packed from the folder itself restores into the folder."""
+
+    @staticmethod
+    def _rooted_archive(path) -> None:
+        """Write the shape another client uploads: members named after the folder."""
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr("01006BB00C6F0000/savedata1.bin", b"server save")
+            archive.writestr("01006BB00C6F0000/screenshot0.bin", b"shot")
+
+    def test_the_heading_is_dropped_so_the_folder_is_not_recreated(self, save_files, tmp_path):
+        archive = tmp_path / "save.zip"
+        self._rooted_archive(archive)
+        target = tmp_path / "01006BB00C6F0000"
+        target.mkdir()
+
+        written = save_files.extract_archive(str(archive), str(target), strip_root="01006BB00C6F0000")
+
+        assert sorted(written) == ["savedata1.bin", "screenshot0.bin"]
+        assert (target / "savedata1.bin").read_bytes() == b"server save"
+        assert not (target / "01006BB00C6F0000").exists()
+
+    def test_a_member_outside_the_heading_is_refused(self, save_files, tmp_path):
+        """Stripping must never become a way to write somewhere the heading does not name."""
+        archive = tmp_path / "save.zip"
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("01006BB00C6F0000/savedata1.bin", b"server save")
+            zf.writestr("other/savedata0.bin", b"elsewhere")
+
+        with pytest.raises(ValueError, match="not under"):
+            save_files.extract_archive(str(archive), str(tmp_path), strip_root="01006BB00C6F0000")
+
+    def test_a_flat_archive_is_untouched(self, save_files, tmp_path):
+        """The shape this plugin packs names the folder's own files and needs no strip."""
+        archive = tmp_path / "save.zip"
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("savedata1.bin", b"server save")
+
+        target = tmp_path / "01006BB00C6F0000"
+        target.mkdir()
+        assert save_files.extract_archive(str(archive), str(target)) == ("savedata1.bin",)
+        assert (target / "savedata1.bin").read_bytes() == b"server save"

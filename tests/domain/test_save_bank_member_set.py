@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from domain.save_bank import restores_by_extraction
+from domain.save_bank import archive_members_under, restores_by_extraction
 
 
 class TestWhichPlatformsRestoreByExtraction:
@@ -79,3 +79,41 @@ class TestWhichPlatformsRestoreByExtraction:
     def test_an_unknown_platform_is_not_a_member_set(self) -> None:
         """An unaudited system falls back to the libretro per-ROM file, as everywhere else."""
         assert restores_by_extraction("some-new-core") is False
+
+
+class TestArchiveMembersUnder:
+    """An archive can arrive rooted at the folder it belongs in (ADR-0066).
+
+    Measured on the reference Deck: a Switch save uploaded elsewhere carried members named
+    ``01006BB00C6F0000/savedata1.bin``, the restore extracted them into the title folder as
+    they were, and Eden read ``<title>/`` — empty — while the save sat at
+    ``<title>/01006BB00C6F0000/savedata1.bin``. The game started a new one.
+    """
+
+    def test_members_named_after_the_folder_are_read_relative_to_it(self) -> None:
+        members = ("01006BB00C6F0000/savedata1.bin", "01006BB00C6F0000/screenshot0.bin")
+        assert archive_members_under(members, "01006BB00C6F0000") == (
+            "savedata1.bin",
+            "screenshot0.bin",
+        )
+
+    def test_a_flat_archive_is_not_rooted_at_the_folder(self) -> None:
+        """The shape this plugin packs: the members ARE the folder's own, so nothing moves."""
+        assert archive_members_under(("savedata1.bin", "screenshot0.bin"), "01006BB00C6F0000") is None
+
+    def test_one_member_outside_the_heading_keeps_the_flat_reading(self) -> None:
+        """A mixed archive is not provably rooted there, so no caller may move its destination."""
+        members = ("01006BB00C6F0000/savedata1.bin", "screenshot0.bin")
+        assert archive_members_under(members, "01006BB00C6F0000") is None
+
+    def test_a_longer_name_with_the_heading_as_its_prefix_is_not_that_heading(self) -> None:
+        members = ("01006BB00C6F00001/savedata1.bin",)
+        assert archive_members_under(members, "01006BB00C6F0000") is None
+
+    def test_a_nested_member_keeps_its_own_tree(self) -> None:
+        """A PSP save folder inside the heading survives with its folder intact."""
+        members = ("01006BB00C6F0000/DATA00/data.bin",)
+        assert archive_members_under(members, "01006BB00C6F0000") == ("DATA00/data.bin",)
+
+    def test_no_members_is_not_a_rooted_archive(self) -> None:
+        assert archive_members_under((), "01006BB00C6F0000") is None
