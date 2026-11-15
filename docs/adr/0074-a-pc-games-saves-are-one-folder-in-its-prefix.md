@@ -1,6 +1,6 @@
 # 0074 — A PC game's saves are one folder in its Proton prefix
 
-- **Status:** Accepted (0.48.48), prototype scope
+- **Status:** Accepted (0.48.49), prototype scope
 - **Follows:** 0031 (a save is answered by the emulator that writes it), 0073 (a PC game is unpacked and run under Proton)
 
 ## Context
@@ -42,6 +42,15 @@ served by a PC path instead of the battery-file pipeline, and that path treats a
 
 Neither hook may ever block a launch or fail a session: a listing, download or upload error is logged
 and answered with `synced/uploaded = 0`, and the game starts with whatever is on disk.
+
+**Amended in 0.48.49.** The exit does not arrive through the `sync_rom_saves` handler — a session ends
+through `SessionLifecycleService`, which holds its own `post_exit_sync` collaborator. Measured: after
+the first real session (rom 7159, 239 s, save written to `Documents/NFS Most Wanted/Manu`), the exit
+logged `post_exit_sync called` and then `do_sync_rom_saves(7159): system=win … server_saves=0`, with
+no PC-path line at all: the branch was correct and never called. The lifecycle therefore receives a
+`PcSaveSyncExitHook` that routes Windows ROMs to the PC folder and everything else to the emulator
+service, so the two entry points cannot disagree. A Windows game with nothing to carry yet answers
+with the benign `SAVE_SHAPE_UNSUPPORTED_REASON`, which raises no toast.
 
 ## Consequences
 

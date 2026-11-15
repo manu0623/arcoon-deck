@@ -38,6 +38,7 @@ from domain.pc_saves import (
     relative_to_prefix,
     resolve_relative,
 )
+from domain.save_answer import SAVE_SHAPE_UNSUPPORTED_REASON
 from domain.windows_launch import is_windows_platform
 
 if TYPE_CHECKING:
@@ -48,6 +49,7 @@ if TYPE_CHECKING:
     from adapters.steam_config import SteamConfigAdapter
     from domain.rom import Rom
     from services.protocols import DownloadFileStore, UnitOfWorkFactory
+    from services.protocols.cross_service import SessionPostExitSync
 
 #: The emulator label a PC save is stored under on the server. RomM keys saves by
 #: (rom, emulator, slot); ``proton`` says what wrote it without pretending to be
@@ -261,3 +263,49 @@ class PcSaveSync:
                 self._file_store.remove_file(path)
         except Exception as exc:
             self._logger.warning(f"PC save: could not remove {path}: {exc}")
+
+
+class PcSaveSyncExitHook:
+    """The session lifecycle's post-exit sync, routed by platform.
+
+    A session ends through ``SessionLifecycleService``, which holds its own
+    ``post_exit_sync`` collaborator — measured on the reference Deck, the exit of
+    rom 7159 reached the emulator pipeline even though the handler was branched,
+    and logged ``do_sync_rom_saves(7159): system=win … server_saves=0`` while the
+    game's folder sat unread in the prefix. This is the collaborator the
+    lifecycle gets instead: a Windows game goes to the PC folder, everything else
+    to the emulator service, so the two entry points cannot disagree.
+    """
+
+    def __init__(self, *, pc: PcSaveSync, emulator: SessionPostExitSync, loop: Any) -> None:
+        self._pc = pc
+        self._emulator = emulator
+        self._loop = loop
+
+    async def post_exit_sync(self, rom_id: int) -> dict[str, Any]:
+        if not self._pc.handles(rom_id):
+            return await self._emulator.post_exit_sync(rom_id)
+        result = await self._loop.run_in_executor(None, self._pc.capture, int(rom_id))
+        uploaded = int(result.get("uploaded") or 0)
+        # The lifecycle renders a toast from this shape. A PC game with nothing to
+        # carry yet (never saved, or its folder is not one we can name) is a benign
+        # skip, not a failure: the same reason the emulator side uses so no toast
+        # fires and the frontend's benign list stays in agreement.
+        if uploaded == 0 and result.get("success", True):
+            return {
+                "offline": False,
+                "success": False,
+                "reason": SAVE_SHAPE_UNSUPPORTED_REASON,
+                "synced": 0,
+                "uploaded": 0,
+                "downloaded": 0,
+                "conflicts": [],
+            }
+        return {
+            "offline": False,
+            "success": bool(result.get("success", True)),
+            "synced": uploaded,
+            "uploaded": uploaded,
+            "downloaded": 0,
+            "conflicts": [],
+        }

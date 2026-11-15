@@ -12,7 +12,8 @@ from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 
 from adapters.download_file import DownloadFileAdapter
 from domain.rom import Rom
-from services.pc_save_sync import PcSaveSync, PcSaveSyncConfig
+from domain.save_answer import BENIGN_SYNC_SKIP_REASONS
+from services.pc_save_sync import PcSaveSync, PcSaveSyncConfig, PcSaveSyncExitHook
 
 APP_ID = 2169565722
 ROM_ID = 7159
@@ -185,3 +186,60 @@ def test_the_remembered_folder_is_used_even_when_another_looks_newer(compatdata,
     uploaded.write_bytes(api.uploads[0]["body"])
     with zipfile.ZipFile(uploaded) as archive:
         assert archive.namelist() == ["profile"]
+
+
+class TestTheExitHookTheLifecycleCalls:
+    """The session's exit goes through the lifecycle's own collaborator, not the handler."""
+
+    @pytest.mark.asyncio
+    async def test_a_windows_game_is_captured_through_the_pc_path(self, compatdata, tmp_path):
+        import asyncio
+
+        folder = _save_folder(compatdata)
+        with open(os.path.join(folder, "Manu"), "wb") as handle:
+            handle.write(b"profile" * 10)
+
+        service, api, _uow = _build(tmp_path, compatdata)
+        hook = PcSaveSyncExitHook(pc=service, emulator=_NeverCalled(), loop=asyncio.get_running_loop())
+
+        result = await hook.post_exit_sync(ROM_ID)
+
+        assert result["uploaded"] == 1
+        assert result["success"] is True
+        assert api.uploads[0]["emulator"] == "proton"
+
+    @pytest.mark.asyncio
+    async def test_an_emulator_game_is_left_to_the_emulator_service(self, tmp_path):
+        import asyncio
+
+        emulator = _NeverCalled()
+        service, _api, _uow = _build(tmp_path, str(tmp_path / "compatdata"), rom=_rom(platform="snes"))
+        hook = PcSaveSyncExitHook(pc=service, emulator=emulator, loop=asyncio.get_running_loop())
+
+        result = await hook.post_exit_sync(ROM_ID)
+
+        assert result == {"delegated": True}
+        assert emulator.calls == [ROM_ID]
+
+    @pytest.mark.asyncio
+    async def test_nothing_to_carry_is_a_benign_skip_not_a_failure(self, compatdata, tmp_path):
+        import asyncio
+
+        service, _api, _uow = _build(tmp_path, compatdata)
+        hook = PcSaveSyncExitHook(pc=service, emulator=_NeverCalled(), loop=asyncio.get_running_loop())
+
+        result = await hook.post_exit_sync(ROM_ID)
+
+        assert result["reason"] in BENIGN_SYNC_SKIP_REASONS
+        assert result["uploaded"] == 0
+
+
+class _NeverCalled:
+    """A stand-in for SaveService that records whether it was asked to sync."""
+
+    def __init__(self) -> None:
+        self.calls: list[int] = []
+
+    async def post_exit_sync(self, rom_id: int) -> dict:
+        self.calls.append(rom_id)
+        return {"delegated": True}

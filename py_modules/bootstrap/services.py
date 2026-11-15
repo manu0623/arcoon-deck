@@ -48,7 +48,7 @@ from services.legacy_install import LegacyInstallService, LegacyInstallServiceCo
 from services.library import LibraryService, LibraryServiceConfig
 from services.metadata import MetadataService, MetadataServiceConfig
 from services.migration import MigrationService, MigrationServiceConfig
-from services.pc_save_sync import PcSaveSync, PcSaveSyncConfig
+from services.pc_save_sync import PcSaveSync, PcSaveSyncConfig, PcSaveSyncExitHook
 from services.playtime import PlaytimeService, PlaytimeServiceConfig
 from services.prune import PruneService, PruneServiceConfig
 from services.relaunch_options_resolver import RelaunchOptionsResolver, RelaunchOptionsResolverConfig
@@ -763,6 +763,14 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         ),
     )
 
+    # A session's exit arrives through the lifecycle, not the sync handler, so the
+    # platform split is applied to the collaborator the lifecycle holds (ADR-0074).
+    pc_save_exit_hook = PcSaveSyncExitHook(
+        pc=pc_save_sync,
+        emulator=save_sync_service,
+        loop=cfg.runtime.loop,
+    )
+
     # A session ends when Steam stops listing the game, which carries no exit status:
     # a crashed emulator and a quit one look identical. The one trace a signal death
     # leaves is a core dump, so the finalize round-trip asks coredumpctl for dumps since
@@ -779,7 +787,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
     session_lifecycle_service = SessionLifecycleService(
         config=SessionLifecycleServiceConfig(
             playtime_recorder=playtime_service,
-            post_exit_sync=save_sync_service,
+            post_exit_sync=pc_save_exit_hook,
             achievement_sync=achievements_service,
             migration_reader=migration_service,
             logger=cfg.runtime.logger,
