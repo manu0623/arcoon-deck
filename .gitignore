@@ -56,3 +56,6 @@ deno.lock
 
 # Locally built installable
 Arcoon Deck.zip
+
+# Built plugin archives: rebuild from a commit, never commit them.
+/*.zip
