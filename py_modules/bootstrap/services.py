@@ -33,7 +33,6 @@ from services.crash_detection import CrashDetectionService, CrashDetectionServic
 from services.data_location import DataLocationService, DataLocationServiceConfig
 from services.disc import DiscService, DiscServiceConfig
 from services.disc_launch_resolver import DiscLaunchResolver, DiscLaunchResolverConfig
-from services.launch_exe import LaunchExeService, LaunchExeServiceConfig
 from services.downloads import DownloadService, DownloadServiceConfig
 from services.emulator_bios_homes import EmulatorBiosHomeConfig, EmulatorBiosHomeService
 from services.emulator_card_stages import EmulatorCardStageConfig, EmulatorCardStageService
@@ -43,11 +42,13 @@ from services.emulator_shortcuts import EmulatorShortcutConfig, EmulatorShortcut
 from services.firmware import FirmwareService, FirmwareServiceConfig
 from services.game_detail import GameDetailService, GameDetailServiceConfig
 from services.game_process import GameProcessService, GameProcessServiceConfig
+from services.launch_exe import LaunchExeService, LaunchExeServiceConfig
 from services.launch_gate import LaunchGateService, LaunchGateServiceConfig
 from services.legacy_install import LegacyInstallService, LegacyInstallServiceConfig
 from services.library import LibraryService, LibraryServiceConfig
 from services.metadata import MetadataService, MetadataServiceConfig
 from services.migration import MigrationService, MigrationServiceConfig
+from services.pc_save_sync import PcSaveSync, PcSaveSyncConfig
 from services.playtime import PlaytimeService, PlaytimeServiceConfig
 from services.prune import PruneService, PruneServiceConfig
 from services.relaunch_options_resolver import RelaunchOptionsResolver, RelaunchOptionsResolverConfig
@@ -269,6 +270,19 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         ps2_memcard=Ps2MemcardAdapter(logger=cfg.runtime.logger),
     )
     save_sync_service = SaveService(config=save_service_config)
+
+    # A PC game's saves are one folder inside its Proton prefix; this is the
+    # prototype that carries that folder to RomM instead (ADR-0074).
+    pc_save_sync = PcSaveSync(
+        config=PcSaveSyncConfig(
+            romm_api=cfg.adapters.romm_api,
+            uow_factory=cfg.callbacks.uow_factory,
+            file_store=cfg.adapters.download_file_store,
+            steam_config=cfg.adapters.steam_config,
+            logger=cfg.runtime.logger,
+            data_dir=cfg.locations.data_dir,
+        ),
+    )
 
     playtime_service = PlaytimeService(
         config=PlaytimeServiceConfig(
@@ -797,6 +811,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
 
     return {
         "save_sync_service": save_sync_service,
+        "pc_save_sync": pc_save_sync,
         "playtime_service": playtime_service,
         "sync_service": sync_service,
         "download_service": download_service,

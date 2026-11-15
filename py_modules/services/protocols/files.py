@@ -276,6 +276,15 @@ class DownloadFileStore(Protocol):
         """
         ...
 
+    def zip_dir(self, source_dir: str, dest_zip: str) -> int:
+        """Zip *source_dir* into *dest_zip*, returning the archive's byte size.
+
+        Members are stored relative to *source_dir* and symlinks are skipped, so
+        the archive can be restored onto another machine without carrying a link
+        out of the folder it came from.
+        """
+        ...
+
     def extract_zip(
         self,
         archive_path: str,

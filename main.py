@@ -193,6 +193,7 @@ class Plugin:
             )
         )
         self._save_sync_service = services["save_sync_service"]
+        self._pc_save_sync = services["pc_save_sync"]
         self._playtime_service = services["playtime_service"]
         self._sync_service = services["sync_service"]
         self._download_service = services["download_service"]
@@ -1065,11 +1066,20 @@ class Plugin:
     @migration_blocked
     @prune_active_blocked
     async def pre_launch_sync(self, rom_id):
+        # A PC game's saves live in its Proton prefix, not in the libretro save
+        # directory, so the emulator pipeline would report a clean sync and move
+        # nothing. The PC path puts the newest server save back before launch.
+        if self._pc_save_sync.handles(rom_id):
+            return await self._loop.run_in_executor(None, self._pc_save_sync.restore, int(rom_id))
         return await self._save_sync_service.pre_launch_sync(rom_id)
 
     @migration_blocked
     @prune_active_blocked
     async def sync_rom_saves(self, rom_id):
+        # Same split as pre_launch_sync: a Windows game's saves are one folder in
+        # its prefix, zipped and uploaded here after the session.
+        if self._pc_save_sync.handles(rom_id):
+            return await self._loop.run_in_executor(None, self._pc_save_sync.capture, int(rom_id))
         return await self._save_sync_service.sync_rom_saves(rom_id)
 
     @prune_active_blocked

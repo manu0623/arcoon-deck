@@ -44,6 +44,15 @@ and they mean different things:
 None of these is an error, and none of them stops a game launching. If you change the emulator for a game, the answer is
 read again for the new one.
 
+### Windows games
+
+A Windows game is the fifth case, and it is answered differently: it runs under Proton, so a libretro save directory describes
+nothing about it. Its saves are one folder inside its own prefix, and the plugin carries that folder as a zip — uploaded to
+RomM as a `proton` save when you finish playing, and the newest one put back before the next launch. The folder is picked by
+name against the game's title (falling back to the one last written) and remembered per game; the log names it, so a wrong
+pick is visible. Saves a game keeps in the Windows registry, and games that spread progress over two folders, are not carried
+yet — see [ADR 0074](../adr/0074-a-pc-games-saves-are-one-folder-in-its-prefix.md).
+
 ## Categories
 
 |    | Meaning                                                                                                                                                                                                                                                        |

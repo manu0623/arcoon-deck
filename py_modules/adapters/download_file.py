@@ -482,6 +482,27 @@ class DownloadFileAdapter:
         if entries == 0:
             raise ValueError("the archive held nothing to extract")
 
+    def zip_dir(self, source_dir: str, dest_zip: str) -> int:
+        """Zip *source_dir* into *dest_zip*, returning the archive's byte size.
+
+        Members are stored relative to *source_dir*, in sorted order so the same
+        folder produces the same listing twice, and symlinks are skipped — a
+        game's save folder must not carry a link out of the prefix into an
+        archive that is then restored onto another machine.
+        """
+        parent = os.path.dirname(dest_zip)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with zipfile.ZipFile(dest_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for root, dirs, files in os.walk(source_dir):
+                dirs.sort()
+                for name in sorted(files):
+                    path = os.path.join(root, name)
+                    if os.path.islink(path):
+                        continue
+                    archive.write(path, os.path.relpath(path, source_dir))
+        return os.path.getsize(dest_zip)
+
     def decode_url_encoded_names(self, directory: str) -> None:
         """Rename URL-encoded files and directories under *directory* in place.
 

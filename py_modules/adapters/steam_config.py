@@ -47,6 +47,20 @@ class SteamConfigAdapter:
                     return os.path.join(base, users[0])
         return None
 
+    def compatdata_root(self) -> str | None:
+        """``<steam root>/steamapps/compatdata`` — one Wine prefix per appId.
+
+        A Proton game keeps everything it writes inside its own prefix, so this
+        is the only place a PC game's saves exist. ``None`` when the Steam
+        installation could not be located (nothing has run to create it).
+        """
+        user_dir = self.find_steam_user_dir()
+        if not user_dir:
+            return None
+        # <root>/userdata/<account id> -> <root>
+        root = os.path.dirname(os.path.dirname(user_dir))
+        return os.path.join(root, "steamapps", "compatdata")
+
     def shortcuts_vdf_path(self) -> str | None:
         user_dir = self.find_steam_user_dir()
         if not user_dir:

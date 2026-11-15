@@ -1118,3 +1118,59 @@ class TestExtractArchive:
 
         with pytest.raises(ValueError, match="is a link"):
             adapter.extract_archive(archive, str(dest), str(tmp_path))
+
+
+class TestZipDir:
+    """`zip_dir` is what carries a PC game's save folder to RomM."""
+
+    def test_members_are_relative_and_listed_in_sorted_order(self, adapter, tmp_path):
+        source = tmp_path / "NFS Most Wanted"
+        (source / "sub").mkdir(parents=True)
+        (source / "b.dat").write_bytes(b"bb")
+        (source / "a.dat").write_bytes(b"aa")
+        (source / "sub" / "c.dat").write_bytes(b"cc")
+
+        size = adapter.zip_dir(str(source), str(tmp_path / "save.zip"))
+
+        assert size == os.path.getsize(tmp_path / "save.zip")
+        with zipfile.ZipFile(tmp_path / "save.zip") as archive:
+            names = archive.namelist()
+            assert names == sorted(names)
+            assert set(names) == {"a.dat", "b.dat", "sub/c.dat"}
+            assert archive.read("a.dat") == b"aa"
+
+    def test_a_round_trip_restores_byte_identical_files(self, adapter, tmp_path):
+        source = tmp_path / "save"
+        (source / "slots").mkdir(parents=True)
+        (source / "profile").write_bytes(b"\x00\x01profile")
+        (source / "slots" / "2").write_bytes(b"slot")
+
+        adapter.zip_dir(str(source), str(tmp_path / "save.zip"))
+        target = tmp_path / "restored"
+        adapter.extract_zip(str(tmp_path / "save.zip"), str(target), str(tmp_path))
+
+        assert (target / "profile").read_bytes() == b"\x00\x01profile"
+        assert (target / "slots" / "2").read_bytes() == b"slot"
+
+    def test_an_empty_folder_still_produces_a_readable_archive(self, adapter, tmp_path):
+        source = tmp_path / "empty"
+        source.mkdir()
+
+        adapter.zip_dir(str(source), str(tmp_path / "out" / "save.zip"))
+
+        with zipfile.ZipFile(tmp_path / "out" / "save.zip") as archive:
+            assert archive.namelist() == []
+
+    def test_symlinks_are_not_carried_into_the_archive(self, adapter, tmp_path):
+        source = tmp_path / "save"
+        source.mkdir()
+        (source / "real.dat").write_bytes(b"real")
+        try:
+            os.symlink(str(source / "real.dat"), str(source / "link.dat"))
+        except (OSError, NotImplementedError):
+            pytest.skip("this machine cannot create symlinks")
+
+        adapter.zip_dir(str(source), str(tmp_path / "save.zip"))
+
+        with zipfile.ZipFile(tmp_path / "save.zip") as archive:
+            assert archive.namelist() == ["real.dat"]
