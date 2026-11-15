@@ -42,6 +42,7 @@ from domain.pc_saves import (
 )
 from domain.save_answer import SAVE_SHAPE_UNSUPPORTED_REASON
 from domain.windows_launch import is_windows_platform
+from services.saves._settings import save_sync_enabled, sync_after_exit, sync_before_launch
 
 if TYPE_CHECKING:
     import logging
@@ -83,6 +84,10 @@ class PcSaveSyncConfig:
     steam_config: SteamConfigAdapter
     logger: logging.Logger
     data_dir: str
+    #: The live ``settings.json`` dict. The PC path honours the same three toggles
+    #: as the emulator path — without this it would sync while the user has save
+    #: sync, pre-launch sync, or post-exit sync switched off.
+    settings: dict[str, Any]
     #: Called with the ROM's name and the folder it picked, for the log line that
     #: makes a wrong pick diagnosable without a debugger.
     log_pick: Callable[[str, str], None] | None = None
@@ -98,6 +103,7 @@ class PcSaveSync:
         self._steam_config = config.steam_config
         self._logger = config.logger
         self._data_dir = config.data_dir
+        self._settings = config.settings
         self._log_pick = config.log_pick
 
     # -- what this service owns ------------------------------------------------
@@ -114,6 +120,10 @@ class PcSaveSync:
         rom = self._rom(rom_id)
         if rom is None or not is_windows_platform(rom.platform_slug):
             return {"success": True, "synced": 0, "message": "Not a Windows game"}
+        if not save_sync_enabled(self._settings):
+            return {"success": True, "synced": 0, "message": "Save sync is off"}
+        if not sync_before_launch(self._settings):
+            return {"success": True, "synced": 0, "message": "Pre-launch sync disabled"}
         prefix_user = self._prefix_user(rom)
         if prefix_user is None:
             return {"success": True, "synced": 0, "message": "No Proton prefix for this game yet"}
@@ -148,6 +158,10 @@ class PcSaveSync:
         rom = self._rom(rom_id)
         if rom is None or not is_windows_platform(rom.platform_slug):
             return {"success": True, "uploaded": 0, "message": "Not a Windows game"}
+        if not save_sync_enabled(self._settings):
+            return {"success": True, "uploaded": 0, "message": "Save sync is off"}
+        if not sync_after_exit(self._settings):
+            return {"success": True, "uploaded": 0, "message": "Post-exit sync disabled"}
         prefix_user = self._prefix_user(rom)
         if prefix_user is None:
             return {"success": True, "uploaded": 0, "message": "No Proton prefix for this game yet"}

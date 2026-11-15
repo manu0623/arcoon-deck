@@ -281,6 +281,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             steam_config=cfg.adapters.steam_config,
             logger=cfg.runtime.logger,
             data_dir=cfg.locations.data_dir,
+            settings=cfg.stores.settings,
         ),
     )
 

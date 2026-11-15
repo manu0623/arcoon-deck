@@ -70,7 +70,7 @@ def _rom(*, platform: str = "win", name: str = "Need for Speed: Most Wanted") ->
     )
 
 
-def _build(data_dir, compatdata: str | None, *, rom: Rom | None = None):
+def _build(data_dir, compatdata: str | None, *, rom: Rom | None = None, settings: dict | None = None):
     """A service over a fake unit of work, an in-memory server, and real file I/O."""
     uow = FakeUnitOfWork()
     uow.roms.save(rom if rom is not None else _rom())
@@ -83,6 +83,7 @@ def _build(data_dir, compatdata: str | None, *, rom: Rom | None = None):
             steam_config=FakeSteamConfig(compatdata),
             logger=logging.getLogger("test"),
             data_dir=str(data_dir),
+            settings={"save_sync_enabled": True} if settings is None else settings,
         ),
     )
     return service, api, uow
@@ -350,3 +351,47 @@ class TestTheFolderTheGamePanelShows:
         uploaded.write_bytes(api.uploads[0]["body"])
         with zipfile.ZipFile(uploaded) as archive:
             assert archive.namelist() == ["profile"]
+
+
+class TestTheTogglesTheEmulatorPathHonours:
+    """The PC path must obey save sync / pre-launch / post-exit exactly as the emulator path does."""
+
+    def test_save_sync_off_restores_nothing(self, compatdata, tmp_path):
+        folder = _save_folder(compatdata)
+        service, api, _uow = _build(tmp_path, compatdata, settings={"save_sync_enabled": False})
+        api.saves = [{"id": 1, "rom_id": ROM_ID, "file_name": "s.zip", "updated_at": "2026-01-01T00:00:00"}]
+        api.served = _zip_bytes({"profile": b"server"})
+
+        assert service.restore(ROM_ID)["synced"] == 0
+        assert api.downloaded == []
+        assert os.listdir(folder) == []
+
+    def test_pre_launch_sync_off_restores_nothing(self, compatdata, tmp_path):
+        _save_folder(compatdata)
+        service, api, _uow = _build(
+            tmp_path, compatdata, settings={"save_sync_enabled": True, "sync_before_launch": False}
+        )
+        api.saves = [{"id": 1, "rom_id": ROM_ID, "file_name": "s.zip", "updated_at": "2026-01-01T00:00:00"}]
+
+        assert service.restore(ROM_ID)["synced"] == 0
+        assert api.downloaded == []
+
+    def test_post_exit_sync_off_uploads_nothing(self, compatdata, tmp_path):
+        folder = _save_folder(compatdata)
+        with open(os.path.join(folder, "profile"), "wb") as handle:
+            handle.write(b"local")
+        service, api, _uow = _build(
+            tmp_path, compatdata, settings={"save_sync_enabled": True, "sync_after_exit": False}
+        )
+
+        assert service.capture(ROM_ID)["uploaded"] == 0
+        assert api.uploads == []
+
+    def test_the_defaults_leave_sync_on(self, compatdata, tmp_path):
+        folder = _save_folder(compatdata)
+        with open(os.path.join(folder, "profile"), "wb") as handle:
+            handle.write(b"local")
+        service, api, _uow = _build(tmp_path, compatdata, settings={"save_sync_enabled": True})
+
+        assert service.capture(ROM_ID)["uploaded"] == 1
+        assert len(api.uploads) == 1

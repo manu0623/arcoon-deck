@@ -1,6 +1,6 @@
 # 0074 — A PC game's saves are one folder in its Proton prefix
 
-- **Status:** Accepted (0.48.52), prototype scope
+- **Status:** Accepted (0.48.53), prototype scope
 - **Follows:** 0031 (a save is answered by the emulator that writes it), 0073 (a PC game is unpacked and run under Proton)
 
 ## Context
@@ -39,6 +39,11 @@ served by a PC path instead of the battery-file pipeline, and that path treats a
   holds one save entry per PC game, visibly separate from any libretro core's saves.
 - **On launch.** The newest server save by `updated_at` is downloaded and unzipped back over the
   same folder with `extract_zip`'s ZIP-slip protection rooted at the prefix's user directory.
+
+Both hooks honour the same three toggles as the emulator path — `save_sync_enabled`, then
+`sync_before_launch` for the restore and `sync_after_exit` for the capture, read through
+`services/saves/_settings` so both paths interpret the settings dict identically (0.48.53). Without
+that, the PC path would have kept syncing while the user had turned sync off.
 
 Neither hook may ever block a launch or fail a session: a listing, download or upload error is logged
 and answered with `synced/uploaded = 0`, and the game starts with whatever is on disk.
