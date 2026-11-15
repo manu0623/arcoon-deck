@@ -394,6 +394,9 @@ class Plugin:
     async def update_plugin(self, url):
         """Install a newer build of this plugin from *url*, then let Decky restart.
 
+        An empty *url* installs the newest build from this plugin's own repository —
+        the ordinary path, so an update needs no pasted link.
+
         Offloaded to the executor: the download and the folder swap block, and the
         loader's event loop is what every other panel call is waiting on.
         """

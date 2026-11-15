@@ -96,17 +96,25 @@ describe("AdvancedSection", () => {
   // The update control — the section's other setting
   // ----------------------------------------------------------------
 
-  it("keeps Update now disabled until the field holds a real URL", async () => {
+  it("enables Update now with nothing pasted, because the project's own build is the default", async () => {
     const user = userEvent.setup();
     render(<AdvancedSection logLevel="info" onLogLevelChange={vi.fn()} />);
 
-    expect(updateButton()).toBeDisabled();
+    expect(updateButton()).toBeEnabled();
 
     await user.type(urlField(), "   ");
-    expect(updateButton()).toBeDisabled();
-
-    await user.type(urlField(), "https://example.test/arcoon.zip");
     expect(updateButton()).toBeEnabled();
+  });
+
+  it("installs this project's newest build when the field is left empty", async () => {
+    const user = userEvent.setup();
+    vi.mocked(updatePlugin).mockResolvedValue({ success: true, version: "0.48.55", message: "Updated to 0.48.55" });
+    render(<AdvancedSection logLevel="info" onLogLevelChange={vi.fn()} />);
+
+    await user.click(updateButton());
+
+    await waitFor(() => expect(updatePlugin).toHaveBeenCalledWith(""));
+    expect(toaster.toast).toHaveBeenCalledWith({ title: "Updating Arcoon Deck", body: "Updated to 0.48.55" });
   });
 
   it("installs the zip at the trimmed URL and reports success", async () => {

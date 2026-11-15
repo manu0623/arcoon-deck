@@ -121,9 +121,10 @@ jump straight to [Syncing Your Library](syncing-your-library.md).
 ## Updating the plugin
 
 The installed folder belongs to root, and a Deck in Game Mode has no terminal to type a password into — so the
-panel updates itself instead. **Settings → Advanced → Update from URL** takes the address of a plugin zip built
-from this repository, installs it and lets Decky restart the loader. Nothing else is needed: no Desktop mode, no
-password.
+panel updates itself instead. Open **Settings → Advanced**, leave the address field empty and press **Update now**:
+the plugin installs the newest build of this project from its own repository and lets Decky restart the loader.
+Nothing else is needed — no Desktop mode, no password, no link to paste. An address in the field still wins when
+one is given, which is how a build from anywhere else is installed.
 
 What it will refuse, and why each refusal exists:
 
@@ -132,6 +133,8 @@ What it will refuse, and why each refusal exists:
 - **A zip for another plugin, or one that unpacks into a different folder.** Decky derives this plugin's settings,
   data and logs from the folder name, so a differently named folder looks like a fresh plugin and loses the
   library.
+- **A source archive is trimmed first.** An update taken from the project's repository holds the whole repository —
+  its tests, docs and CI — and only the files the plugin runs with are installed; the rest is dropped.
 - **A zip missing `main.py`, `plugin.json`, `dist/index.js` or the bootstrap modules.** It would not run, and the
   code doing the swap is the code being swapped.
 

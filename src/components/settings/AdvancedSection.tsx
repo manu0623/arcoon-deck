@@ -25,8 +25,10 @@ export const AdvancedSection: FC<AdvancedSectionProps> = ({ logLevel, onLogLevel
   const [busy, setBusy] = useState(false);
 
   const runUpdate = async () => {
+    // An empty field is the ordinary case: the backend installs this project's
+    // newest build, so updating needs no pasted link.
     const target = url.trim();
-    if (!target || busy) {
+    if (busy) {
       return;
     }
     setBusy(true);
@@ -62,14 +64,20 @@ export const AdvancedSection: FC<AdvancedSectionProps> = ({ logLevel, onLogLevel
       <PanelSectionRow>
         <TextField
           label="Update from URL"
-          description="A plugin zip built from this repository — the panel installs it and Decky restarts"
+          description="Leave empty to install the newest build from this project's repository — paste a zip address to install a different build"
           value={url}
           onChange={(event) => setUrl(event.target.value)}
         />
       </PanelSectionRow>
       <PanelSectionRow>
         <Focusable>
-          <ButtonItem layout="below" disabled={busy || !url.trim()} onClick={() => { void runUpdate(); }}>
+          <ButtonItem
+            layout="below"
+            disabled={busy}
+            onClick={() => {
+              void runUpdate();
+            }}
+          >
             {busy ? "Updating…" : "Update now"}
           </ButtonItem>
         </Focusable>

@@ -11458,7 +11458,7 @@ const AdvancedSection = ({ logLevel, onLogLevelChange }) => {
     const [busy, setBusy] = SP_REACT.useState(false);
     const runUpdate = async () => {
         const target = url.trim();
-        if (!target || busy) {
+        if (busy) {
             return;
         }
         setBusy(true);
@@ -11481,7 +11481,9 @@ const AdvancedSection = ({ logLevel, onLogLevelChange }) => {
                         { data: "warn", label: "Warn" },
                         { data: "info", label: "Info" },
                         { data: "debug", label: "Debug" },
-                    ], selectedOption: logLevel, onChange: (option) => onLogLevelChange(option.data) }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.TextField, { label: "Update from URL", description: "A plugin zip built from this repository \u2014 the panel installs it and Decky restarts", value: url, onChange: (event) => setUrl(event.target.value) }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.Focusable, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", disabled: busy || !url.trim(), onClick: () => { void runUpdate(); }, children: busy ? "Updating…" : "Update now" }) }) })] }));
+                    ], selectedOption: logLevel, onChange: (option) => onLogLevelChange(option.data) }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.TextField, { label: "Update from URL", description: "Leave empty to install the newest build from this project's repository \u2014 paste a zip address to install a different build", value: url, onChange: (event) => setUrl(event.target.value) }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.Focusable, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", disabled: busy, onClick: () => {
+                            void runUpdate();
+                        }, children: busy ? "Updating…" : "Update now" }) }) })] }));
 };
 
 const RUNTIME_CHOICES = [
