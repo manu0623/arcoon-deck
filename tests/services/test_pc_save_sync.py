@@ -263,7 +263,9 @@ class TestTheFolderTheGamePanelShows:
         assert "prefix" in (state["message"] or "").lower() or "Wine" in (state["message"] or "")
 
     def test_the_game_folder_is_listed_first_and_reported_as_the_folder(self, compatdata, tmp_path):
-        _save_folder(compatdata)
+        game_folder = _save_folder(compatdata)
+        with open(os.path.join(game_folder, "save"), "wb") as handle:
+            handle.write(b"p")
         other = _save_folder(compatdata, "Something Else")
         with open(os.path.join(other, "notes.txt"), "w") as handle:
             handle.write("x")
@@ -272,9 +274,27 @@ class TestTheFolderTheGamePanelShows:
         state = service.get_save_folder(ROM_ID)
 
         assert state["folder"] == "Documents/NFS Most Wanted"
-        assert [c["path"] for c in state["candidates"]][0] == "Documents/NFS Most Wanted"
+        assert next(c["path"] for c in state["candidates"]) == "Documents/NFS Most Wanted"
         # A read must not decide where the game saves.
         assert uow.kv_config.get(f"pc_save_dir:{ROM_ID}") is None
+
+    def test_empty_and_housekeeping_folders_are_not_offered(self, compatdata, tmp_path):
+        game_folder = _save_folder(compatdata)
+        with open(os.path.join(game_folder, "save"), "wb") as handle:
+            handle.write(b"p")
+        housekeeping = os.path.join(
+            compatdata, str(APP_ID), "pfx", "drive_c", "users", "steamuser", "AppData", "Local", "dxvk"
+        )
+        os.makedirs(housekeeping)
+        with open(os.path.join(housekeeping, "cache.bin"), "wb") as handle:
+            handle.write(b"x")
+        _save_folder(compatdata, "Documents/Pictures")
+
+        service, _api, _uow = _build(tmp_path, compatdata)
+        paths = [c["path"] for c in service.get_save_folder(ROM_ID)["candidates"]]
+
+        assert paths == ["Documents/NFS Most Wanted"]
+        assert "Documents/Pictures" not in paths
 
     def test_a_hand_picked_folder_is_recorded_and_marked_manual(self, compatdata, tmp_path):
         _save_folder(compatdata)

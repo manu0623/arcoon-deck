@@ -33,6 +33,7 @@ from domain.iso_time import parse_iso_to_epoch
 from domain.pc_saves import (
     SAVE_ROOTS,
     SaveCandidate,
+    is_save_candidate,
     name_score,
     pick_save_dir,
     prefix_user_dir,
@@ -240,8 +241,15 @@ class PcSaveSync:
         return {"success": True, "folder": relative, "manual": True}
 
     def _ranked_candidates(self, rom: Rom, prefix_user: str) -> list[dict[str, Any]]:
-        """Every candidate folder, likeliest first — the same rule as the automatic pick."""
-        candidates = self._candidates(prefix_user)
+        """The folders a save could be in, likeliest first — the automatic pick's own rule.
+
+        The same predicate decides membership here as decides the guess: a folder
+        with no files, or one that is Windows housekeeping (``Temp``, ``dxvk``,
+        the shell's own Documents subfolders), is not offered. Measured on the
+        reference Deck, listing every scanned directory made a 13-row menu in which
+        the game's own folder was one line among a dozen empty ones.
+        """
+        candidates = [c for c in self._candidates(prefix_user) if is_save_candidate(c.name, c.file_count)]
         ranked = sorted(
             candidates,
             key=lambda c: (-name_score(rom.name, c.name), -c.mtime, c.name),
