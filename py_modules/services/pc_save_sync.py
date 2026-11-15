@@ -31,8 +31,10 @@ from typing import TYPE_CHECKING, Any
 
 from domain.iso_time import parse_iso_to_epoch
 from domain.pc_saves import (
+    ARCHIVE_FOLDER_NOTE,
     SAVE_ROOTS,
     SaveCandidate,
+    folder_from_note,
     is_save_candidate,
     name_score,
     pick_save_dir,
@@ -127,9 +129,6 @@ class PcSaveSync:
         prefix_user = self._prefix_user(rom)
         if prefix_user is None:
             return {"success": True, "synced": 0, "message": "No Proton prefix for this game yet"}
-        target = self._target_dir(rom, prefix_user)
-        if target is None:
-            return {"success": True, "synced": 0, "message": "No save folder found in the game's prefix yet"}
         try:
             saves = self._romm_api.list_saves(int(rom_id))
         except Exception as exc:
@@ -139,18 +138,68 @@ class PcSaveSync:
             return {"success": True, "synced": 0, "message": "No save on the server yet"}
         newest = max(saves, key=lambda save: parse_iso_to_epoch(save.get("updated_at")) or 0.0)
         tmp_zip = os.path.join(self._data_dir, "pc-saves", f"{int(rom_id)}.download.zip")
+        # The archive states the folder it came from, relative to the Wine user
+        # directory. That is what lets a second machine put the save back without
+        # guessing: the folder is created if this device has never seen it, and the
+        # game finds its own progress on the first launch there. Archives written
+        # before the note existed fall back to guessing locally, which is all that
+        # was possible then.
+        recorded: str | None = None
         try:
             self._file_store.make_dirs(os.path.dirname(tmp_zip))
             self._romm_api.download_save(int(newest["id"]), tmp_zip)
+            raw_note = self._file_store.read_zip_entry(tmp_zip, ARCHIVE_FOLDER_NOTE)
+            recorded = folder_from_note(raw_note)
+            if raw_note is not None and recorded is None:
+                # The save states where it goes and we will not follow it. Guessing a
+                # folder instead would drop another device's progress where the game
+                # never reads it — a silent loss dressed up as a restore.
+                self._logger.warning(
+                    f"PC save restore for rom {rom_id}: the save records the folder {raw_note!r}, "
+                    "which is not a path this plugin will write to"
+                )
+                return {
+                    "success": False,
+                    "synced": 0,
+                    "message": "The save records a folder we cannot follow",
+                }
+            if recorded is not None:
+                target = resolve_relative(prefix_user, recorded)
+                if target is None:
+                    self._logger.warning(
+                        f"PC save restore for rom {rom_id}: the save records {recorded!r}, "
+                        "which is outside this game's Wine prefix"
+                    )
+                    return {
+                        "success": False,
+                        "synced": 0,
+                        "message": "The save records a folder outside this game's Wine prefix",
+                    }
+                base = prefix_user
+            else:
+                guessed = self._target_dir(rom, prefix_user)
+                if guessed is None:
+                    return {
+                        "success": True,
+                        "synced": 0,
+                        "message": "No save folder found in the game's prefix yet",
+                    }
+                target = base = guessed
             self._file_store.make_dirs(target)
-            self._file_store.extract_zip(tmp_zip, target, prefix_user)
+            self._file_store.extract_zip(tmp_zip, base, prefix_user, skip_members=(ARCHIVE_FOLDER_NOTE,))
         except Exception as exc:
             self._logger.warning(f"PC save restore for rom {rom_id} failed: {exc}")
             return {"success": False, "synced": 0, "message": f"Could not restore the save: {exc}"}
         finally:
             self._remove_quietly(tmp_zip)
+        # This device now knows where the game saves, from the save itself — so the
+        # capture after this session reads the same folder the restore wrote to. A
+        # hand-picked folder is a person's decision and is left alone.
+        if recorded is not None and not self._is_manual(rom.rom_id):
+            self._store_relative(rom.rom_id, recorded)
         name = newest.get("file_name") or newest.get("id")
-        self._logger.info(f"PC save restored for rom {rom_id}: {name} -> {target}")
+        origin = "recorded in the save" if recorded is not None else "guessed on this device"
+        self._logger.info(f"PC save restored for rom {rom_id}: {name} -> {target} ({origin})")
         return {"success": True, "synced": 1, "message": f"Restored {name}"}
 
     def capture(self, rom_id: int) -> dict[str, Any]:
@@ -169,8 +218,16 @@ class PcSaveSync:
         if target is None or not os.path.isdir(target):
             return {"success": True, "uploaded": 0, "message": "No save folder found in the game's prefix yet"}
         zip_path = os.path.join(self._data_dir, "pc-saves", f"{int(rom_id)}.zip")
+        # The archive carries its own folder, not just its files: another device
+        # reads the note before unpacking and needs no local knowledge at all.
+        relative = relative_to_prefix(prefix_user, target)
         try:
-            size = self._file_store.zip_dir(target, zip_path)
+            size = self._file_store.zip_dir(
+                target,
+                zip_path,
+                arc_prefix=relative or "",
+                marker=(ARCHIVE_FOLDER_NOTE, relative) if relative else None,
+            )
             if size <= 0:
                 return {"success": True, "uploaded": 0, "message": "The save folder is empty"}
             self._romm_api.upload_save(int(rom_id), zip_path, PC_SAVE_EMULATOR, slot=PC_SAVE_SLOT)

@@ -90,9 +90,7 @@ def _build(data_dir, compatdata: str | None, *, rom: Rom | None = None, settings
 
 
 def _save_folder(compatdata: str, name: str = "NFS Most Wanted") -> str:
-    folder = os.path.join(
-        compatdata, str(APP_ID), "pfx", "drive_c", "users", "steamuser", "Documents", name
-    )
+    folder = os.path.join(compatdata, str(APP_ID), "pfx", "drive_c", "users", "steamuser", "Documents", name)
     os.makedirs(folder, exist_ok=True)
     return folder
 
@@ -126,7 +124,8 @@ def test_capture_uploads_the_game_folder_and_remembers_it(compatdata, tmp_path):
     uploaded = tmp_path / "uploaded.zip"
     uploaded.write_bytes(api.uploads[0]["body"])
     with zipfile.ZipFile(uploaded) as archive:
-        assert archive.namelist() == ["profile"]
+        assert archive.namelist() == [".arcoon-folder", "Documents/NFS Most Wanted/profile"]
+        assert archive.read(".arcoon-folder").decode() == "Documents/NFS Most Wanted"
     assert uow.kv_config.get(f"pc_save_dir:{ROM_ID}") == "Documents/NFS Most Wanted"
 
 
@@ -186,7 +185,7 @@ def test_the_remembered_folder_is_used_even_when_another_looks_newer(compatdata,
     uploaded = tmp_path / "uploaded.zip"
     uploaded.write_bytes(api.uploads[0]["body"])
     with zipfile.ZipFile(uploaded) as archive:
-        assert archive.namelist() == ["profile"]
+        assert archive.namelist() == [".arcoon-folder", "Documents/NFS Most Wanted/profile"]
 
 
 class TestTheExitHookTheLifecycleCalls:
@@ -350,7 +349,82 @@ class TestTheFolderTheGamePanelShows:
         uploaded = tmp_path / "uploaded.zip"
         uploaded.write_bytes(api.uploads[0]["body"])
         with zipfile.ZipFile(uploaded) as archive:
-            assert archive.namelist() == ["profile"]
+            assert archive.namelist() == [".arcoon-folder", "Documents/Something Else/profile"]
+
+
+class TestASaveFromAnotherDevice:
+    """A save carries the folder it came from, so a second device needs no local knowledge."""
+
+    def test_it_lands_where_the_game_expects_on_a_prefix_that_never_saw_it(self, compatdata, tmp_path):
+        # This device has the game installed and launched once, then quit: the
+        # prefix exists but holds no save folder of its own yet — the exact state
+        # in which a local guess has nothing to go on.
+        user = os.path.join(compatdata, str(APP_ID), "pfx", "drive_c", "users", "steamuser")
+        os.makedirs(os.path.join(user, "Temp"))
+        service, api, uow = _build(tmp_path, compatdata)
+        api.saves = [{"id": 7, "rom_id": ROM_ID, "file_name": "default.zip", "updated_at": "2026-02-01T10:00:00"}]
+        api.served = _zip_bytes(
+            {
+                ".arcoon-folder": b"Documents/NFS Most Wanted",
+                "Documents/NFS Most Wanted/Manu/Manu": b"64k-of-progress",
+            }
+        )
+
+        result = service.restore(ROM_ID)
+
+        assert result["synced"] == 1
+        landed = os.path.join(user, "Documents", "NFS Most Wanted", "Manu", "Manu")
+        with open(landed, "rb") as handle:
+            assert handle.read() == b"64k-of-progress"
+        # The device learned the folder from the save, so the exit upload reads it.
+        assert uow.kv_config.get(f"pc_save_dir:{ROM_ID}") == "Documents/NFS Most Wanted"
+        # The note is metadata, not part of the game's folder.
+        assert not os.path.exists(os.path.join(user, ".arcoon-folder"))
+
+    def test_an_older_flat_save_still_restores_into_the_local_guess(self, compatdata, tmp_path):
+        folder = _save_folder(compatdata)
+        with open(os.path.join(folder, "profile"), "wb") as handle:
+            handle.write(b"old")
+        service, api, _uow = _build(tmp_path, compatdata)
+        api.saves = [{"id": 3, "rom_id": ROM_ID, "file_name": "old.zip", "updated_at": "2026-01-01T00:00:00"}]
+        api.served = _zip_bytes({"profile": b"flat"})
+
+        assert service.restore(ROM_ID)["synced"] == 1
+        with open(os.path.join(folder, "profile"), "rb") as handle:
+            assert handle.read() == b"flat"
+
+    def test_a_note_pointing_out_of_the_prefix_is_refused(self, compatdata, tmp_path):
+        user = os.path.join(compatdata, str(APP_ID), "pfx", "drive_c", "users", "steamuser")
+        os.makedirs(user)
+        service, api, _uow = _build(tmp_path, compatdata)
+        api.saves = [{"id": 7, "rom_id": ROM_ID, "file_name": "evil.zip", "updated_at": "2026-02-01T10:00:00"}]
+        api.served = _zip_bytes({".arcoon-folder": b"../../../../etc", "profile": b"x"})
+
+        result = service.restore(ROM_ID)
+
+        assert result["success"] is False
+        assert "cannot follow" in result["message"]
+
+    def test_the_capture_after_a_restore_uses_the_recorded_folder(self, compatdata, tmp_path):
+        user = os.path.join(compatdata, str(APP_ID), "pfx", "drive_c", "users", "steamuser")
+        os.makedirs(user)
+        service, api, _uow = _build(tmp_path, compatdata)
+        api.saves = [{"id": 7, "rom_id": ROM_ID, "file_name": "default.zip", "updated_at": "2026-02-01T10:00:00"}]
+        api.served = _zip_bytes(
+            {
+                ".arcoon-folder": b"Documents/NFS Most Wanted",
+                "Documents/NFS Most Wanted/Manu/Manu": b"progress",
+            }
+        )
+
+        service.restore(ROM_ID)
+        service.capture(ROM_ID)
+
+        uploaded = tmp_path / "uploaded.zip"
+        uploaded.write_bytes(api.uploads[0]["body"])
+        with zipfile.ZipFile(uploaded) as archive:
+            assert archive.namelist() == [".arcoon-folder", "Documents/NFS Most Wanted/Manu/Manu"]
+            assert archive.read(".arcoon-folder").decode() == "Documents/NFS Most Wanted"
 
 
 class TestTheTogglesTheEmulatorPathHonours:

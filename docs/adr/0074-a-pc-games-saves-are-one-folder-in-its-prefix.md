@@ -1,6 +1,6 @@
 # 0074 — A PC game's saves are one folder in its Proton prefix
 
-- **Status:** Accepted (0.48.53), prototype scope
+- **Status:** Accepted (0.48.54), prototype scope
 - **Follows:** 0031 (a save is answered by the emulator that writes it), 0073 (a PC game is
   unpacked and run under Proton)
 
@@ -40,6 +40,15 @@ served by a PC path instead of the battery-file pipeline, and that path treats a
   holds one save entry per PC game, visibly separate from any libretro core's saves.
 - **On launch.** The newest server save by `updated_at` is downloaded and unzipped back over the
   same folder with `extract_zip`'s ZIP-slip protection rooted at the prefix's user directory.
+
+- **The save carries its own folder (0.48.54).** The archive is written with the folder's path inside it
+  (`Documents/NFS Most Wanted/Manu/Manu`) plus a one-line note at its root recording that path, so a device
+  that has never seen the folder — a second Deck, a freshly created prefix — unpacks straight to where the game
+  looks. Measured
+  on a prefix holding only `Temp`: the save landed at `Documents/NFS Most Wanted/Manu/Manu`, the note was not written
+  into the game's folder, and the device recorded the folder for its own exit upload. The guess is now only a fallback
+  for archives written before the note existed, and a note the plugin will not follow (absolute, drive-qualified, or
+  containing `..`) fails the restore rather than quietly writing progress where the game will never read it.
 
 Both hooks honour the same three toggles as the emulator path — `save_sync_enabled`, then
 `sync_before_launch` for the restore and `sync_after_exit` for the capture, read through

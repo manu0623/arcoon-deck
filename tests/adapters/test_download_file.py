@@ -1174,3 +1174,60 @@ class TestZipDir:
 
         with zipfile.ZipFile(tmp_path / "save.zip") as archive:
             assert archive.namelist() == ["real.dat"]
+
+
+class TestTheFolderAnArchiveCarries:
+    """`arc_prefix` and the note marker: how a save states where it belongs."""
+
+    def test_the_prefix_nests_every_member(self, adapter, tmp_path):
+        source = tmp_path / "save"
+        (source / "Manu").mkdir(parents=True)
+        (source / "Manu" / "Manu").write_bytes(b"profile")
+
+        adapter.zip_dir(
+            str(source),
+            str(tmp_path / "save.zip"),
+            arc_prefix="Documents/NFS Most Wanted",
+            marker=(".arcoon-folder", "Documents/NFS Most Wanted"),
+        )
+
+        with zipfile.ZipFile(tmp_path / "save.zip") as archive:
+            assert archive.namelist() == [".arcoon-folder", "Documents/NFS Most Wanted/Manu/Manu"]
+
+    def test_the_note_is_read_back_without_unpacking(self, adapter, tmp_path):
+        source = tmp_path / "save"
+        source.mkdir()
+        (source / "profile").write_bytes(b"x")
+        adapter.zip_dir(str(source), str(tmp_path / "save.zip"), marker=(".arcoon-folder", "Documents/Game"))
+
+        assert adapter.read_zip_entry(str(tmp_path / "save.zip"), ".arcoon-folder") == "Documents/Game"
+
+    def test_a_missing_note_or_a_broken_archive_answers_none(self, adapter, tmp_path):
+        source = tmp_path / "save"
+        source.mkdir()
+        (source / "profile").write_bytes(b"x")
+        adapter.zip_dir(str(source), str(tmp_path / "save.zip"))
+
+        assert adapter.read_zip_entry(str(tmp_path / "save.zip"), ".arcoon-folder") is None
+        broken = tmp_path / "broken.zip"
+        broken.write_bytes(b"not a zip")
+        assert adapter.read_zip_entry(str(broken), ".arcoon-folder") is None
+
+    def test_extraction_skips_the_note_member(self, adapter, tmp_path):
+        source = tmp_path / "save"
+        source.mkdir()
+        (source / "profile").write_bytes(b"p")
+        zip_path = tmp_path / "save.zip"
+        adapter.zip_dir(
+            str(source),
+            str(zip_path),
+            arc_prefix="Documents/Game",
+            marker=(".arcoon-folder", "Documents/Game"),
+        )
+        dest = tmp_path / "prefix"
+        dest.mkdir()
+
+        adapter.extract_zip(str(zip_path), str(dest), str(dest), skip_members=(".arcoon-folder",))
+
+        assert (dest / "Documents" / "Game" / "profile").read_bytes() == b"p"
+        assert not (dest / ".arcoon-folder").exists()

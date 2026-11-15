@@ -24,6 +24,32 @@ from dataclasses import dataclass
 #: Where the Windows user's document/app-data folders sit inside the prefix.
 PREFIX_USER_SUFFIX: tuple[str, ...] = ("pfx", "drive_c", "users", "steamuser")
 
+#: The entry a save archive carries at its root, recording the folder the files
+#: came from relative to the Wine user directory. Without it a second machine has
+#: to guess where another machine's save belongs, which is how a save arrives and
+#: lands in the wrong place (or nowhere) on a fresh setup.
+ARCHIVE_FOLDER_NOTE = ".arcoon-folder"
+
+
+def folder_from_note(note: str | None) -> str | None:
+    """The folder an archive records for itself, or ``None`` when it records none.
+
+    Accepts either separator so an archive written on one platform is readable on
+    the other, and rejects anything that is not a plain relative path — an absolute
+    path, a drive letter, or a ``..`` component is a note we will not follow. The
+    caller still resolves the result against its own prefix.
+    """
+    if not note:
+        return None
+    text = note.strip().replace("\\", "/")
+    if not text or text.startswith("/") or ":" in text:
+        return None
+    parts = text.rstrip("/").split("/")
+    if any(part in ("", ".", "..") for part in parts):
+        return None
+    return "/".join(parts)
+
+
 #: The folders Windows games put saves in. Relative to the prefix's user folder.
 SAVE_ROOTS: tuple[str, ...] = ("Documents", "Saved Games", "AppData/Roaming", "AppData/Local")
 

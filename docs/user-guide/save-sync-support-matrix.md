@@ -51,7 +51,9 @@ nothing about it. Its saves are one folder inside its own prefix, and the plugin
 RomM as a `proton` save when you finish playing, and the newest one put back before the next launch. The folder is picked by
 name against the game's title (falling back to the one last written) and remembered per game. The plugin's **Game Info** pane
 shows that folder under **Saves**, next to the game's own executable under **Launches**, and lets you switch to any other folder
-in the same prefix — a hand-picked folder is then never replaced by a new guess. Saves a game keeps in the Windows registry, and games that spread progress over two folders, are not carried
+in the same prefix — a hand-picked folder is then never replaced by a new guess. The uploaded zip records the folder it
+came from, so a second device unpacks it where the game looks instead of guessing — including a prefix the game has only
+just created. Saves a game keeps in the Windows registry, and games that spread progress over two folders, are not carried
 yet — see [ADR 0074](../adr/0074-a-pc-games-saves-are-one-folder-in-its-prefix.md).
 
 ## Categories

@@ -276,12 +276,30 @@ class DownloadFileStore(Protocol):
         """
         ...
 
-    def zip_dir(self, source_dir: str, dest_zip: str) -> int:
+    def zip_dir(
+        self,
+        source_dir: str,
+        dest_zip: str,
+        *,
+        arc_prefix: str = "",
+        marker: tuple[str, str] | None = None,
+    ) -> int:
         """Zip *source_dir* into *dest_zip*, returning the archive's byte size.
 
         Members are stored relative to *source_dir* and symlinks are skipped, so
         the archive can be restored onto another machine without carrying a link
-        out of the folder it came from.
+        out of the folder it came from. *arc_prefix* nests the members under that
+        path so the archive states where it belongs; *marker* adds one
+        ``(entry_name, text)`` note at the archive's root, read back with
+        :meth:`read_zip_entry` before unpacking.
+        """
+        ...
+
+    def read_zip_entry(self, archive_path: str, name: str) -> str | None:
+        """The text of one root entry of *archive_path*, or ``None`` if unreadable.
+
+        Missing members, damaged archives and non-text members all answer
+        ``None`` so a caller can treat "no note" and "unreadable note" alike.
         """
         ...
 
@@ -291,6 +309,8 @@ class DownloadFileStore(Protocol):
         dest_dir: str,
         safe_root: str,
         progress_callback: Callable[[int, int], None] | None = None,
+        *,
+        skip_members: tuple[str, ...] = (),
     ) -> None:
         """Extract *archive_path* into *dest_dir* with ZIP-slip protection.
 

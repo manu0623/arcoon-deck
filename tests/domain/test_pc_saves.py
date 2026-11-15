@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "py_modules"))
 
 from domain.pc_saves import (
     SaveCandidate,
+    folder_from_note,
     is_save_candidate,
     name_score,
     pick_save_dir,
@@ -25,8 +26,10 @@ def _candidate(name: str, *, files: int = 3, mtime: float = 1.0, path: str | Non
 
 
 def test_prefix_user_dir_is_the_shortcuts_own_prefix():
-    assert prefix_user_dir("/steam/compatdata", 2169565722).replace(os.sep, "/").endswith(
-        "2169565722/pfx/drive_c/users/steamuser"
+    assert (
+        prefix_user_dir("/steam/compatdata", 2169565722)
+        .replace(os.sep, "/")
+        .endswith("2169565722/pfx/drive_c/users/steamuser")
     )
 
 
@@ -95,3 +98,20 @@ def test_exploiting_relative_paths_is_refused():
 @pytest.mark.parametrize("name", ["Saved Games", "AppData", "Temp"])
 def test_system_folders_are_skipped(name):
     assert is_save_candidate(name, 10) is False
+
+
+class TestTheFolderAnArchiveRecords:
+    """The note an archive carries about its own folder, and what we refuse to follow."""
+
+    def test_a_plain_relative_path_is_kept(self):
+        assert folder_from_note("Documents/NFS Most Wanted") == "Documents/NFS Most Wanted"
+
+    def test_a_windows_separator_is_read_the_same(self):
+        assert folder_from_note("Documents" + chr(92) + "NFS Most Wanted") == "Documents/NFS Most Wanted"
+
+    def test_surrounding_noise_and_a_trailing_slash_are_stripped(self):
+        assert folder_from_note("  Documents/Game/  ") == "Documents/Game"
+
+    @pytest.mark.parametrize("note", [None, "", "   ", "/", "../..", "Documents/../..", "/etc"])
+    def test_anything_unsafe_is_no_note_at_all(self, note):
+        assert folder_from_note(note) is None

@@ -357,6 +357,8 @@ class DownloadFileAdapter:
         dest_dir: str,
         safe_root: str,
         progress_callback: Callable[[int, int], None] | None = None,
+        *,
+        skip_members: tuple[str, ...] = (),
     ) -> None:
         """Extract *archive_path* into *dest_dir* with ZIP-slip protection.
 
@@ -376,7 +378,7 @@ class DownloadFileAdapter:
         if not (real_dest == real_safe or real_dest.startswith(real_safe + os.sep)):
             raise ValueError(f"Extract directory would be outside safe root: {dest_dir}")
         with zipfile.ZipFile(archive_path, "r") as zf:
-            members = zf.infolist()
+            members = [member for member in zf.infolist() if member.filename not in skip_members]
             for member in members:
                 member_path = os.path.realpath(os.path.join(real_dest, member.filename))
                 if not (member_path == real_dest or member_path.startswith(real_dest + os.sep)):
@@ -482,26 +484,58 @@ class DownloadFileAdapter:
         if entries == 0:
             raise ValueError("the archive held nothing to extract")
 
-    def zip_dir(self, source_dir: str, dest_zip: str) -> int:
+    def zip_dir(
+        self,
+        source_dir: str,
+        dest_zip: str,
+        *,
+        arc_prefix: str = "",
+        marker: tuple[str, str] | None = None,
+    ) -> int:
         """Zip *source_dir* into *dest_zip*, returning the archive's byte size.
 
         Members are stored relative to *source_dir*, in sorted order so the same
         folder produces the same listing twice, and symlinks are skipped — a
         game's save folder must not carry a link out of the prefix into an
         archive that is then restored onto another machine.
+
+        *arc_prefix* nests every member under that path inside the archive, so the
+        archive states where it belongs instead of leaving the reading end to
+        guess. *marker* writes one extra ``(entry_name, text)`` file at the
+        archive's root: the note a restoring machine reads before unpacking.
         """
         parent = os.path.dirname(dest_zip)
         if parent:
             os.makedirs(parent, exist_ok=True)
+        prefix = arc_prefix.strip("/").replace("\\", "/")
         with zipfile.ZipFile(dest_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            if marker is not None:
+                archive.writestr(marker[0], marker[1])
             for root, dirs, files in os.walk(source_dir):
                 dirs.sort()
                 for name in sorted(files):
                     path = os.path.join(root, name)
                     if os.path.islink(path):
                         continue
-                    archive.write(path, os.path.relpath(path, source_dir))
+                    member = os.path.relpath(path, source_dir).replace(os.sep, "/")
+                    if prefix:
+                        member = f"{prefix}/{member}"
+                    archive.write(path, member)
         return os.path.getsize(dest_zip)
+
+    def read_zip_entry(self, archive_path: str, name: str) -> str | None:
+        """The text of one entry at an archive's root, or ``None`` when unreadable.
+
+        Reads a save archive's folder note without unpacking it. A missing member,
+        a damaged archive, or a member that is not text all answer ``None`` — a
+        note the caller cannot read is the same as no note, and the caller then
+        falls back to its own local knowledge.
+        """
+        try:
+            with zipfile.ZipFile(archive_path, "r") as archive:
+                return archive.read(name).decode("utf-8", "replace")
+        except (KeyError, OSError, zipfile.BadZipFile):
+            return None
 
     def decode_url_encoded_names(self, directory: str) -> None:
         """Rename URL-encoded files and directories under *directory* in place.
