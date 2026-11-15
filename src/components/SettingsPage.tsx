@@ -11,7 +11,7 @@
  */
 
 import { useState, useEffect, FC, type ReactNode } from "react";
-import { ConfirmModal, Field, showModal } from "@decky/ui";
+import { ButtonItem, ConfirmModal, Focusable, PanelSection, PanelSectionRow, showModal } from "@decky/ui";
 import { showToast } from "../utils/toast";
 import {
   getSettings,
@@ -61,8 +61,6 @@ import {
 import { detach } from "../utils/detach";
 import { trimServerUrl, isValidServerUrl } from "../utils/serverUrl";
 import { WidePage } from "./qam/WidePage";
-import { ListDetail, type ListDetailItem } from "./qam/ListDetail";
-import { ROW_MARKER_GAP, ROW_MARKER_WIDTH, SELECTION_ACCENT } from "./qam/pane";
 import { pendingEdits } from "./settings/TextInputModal";
 import { SaveSortMigrationSection } from "./settings/SaveSortMigrationSection";
 import { ConnectionSection } from "./settings/ConnectionSection";
@@ -104,14 +102,11 @@ const SECTION_LABELS: Record<SettingsSection, string> = {
   advanced: "Advanced",
 };
 
-/** The list hands its ids back as plain strings; this is where one becomes a
- *  section again — by lookup rather than by assertion, so an id no section
- *  answers to opens the first section instead of typing as one that is absent. */
-const asSection = (id: string | null): SettingsSection =>
-  SETTINGS_SECTIONS.find((candidate) => candidate === id) ?? SETTINGS_SECTIONS[0];
-
 export const SettingsPage: FC<SettingsPageProps> = ({ onBack, section }) => {
-  const [selectedSection, setSelectedSection] = useState<SettingsSection>(section ?? SETTINGS_SECTIONS[0]);
+  // null means the menu itself: one section at a time is mounted, and the menu
+  // is the page a Back returns to. A navigation from Main opens its section
+  // straight away, which is what `section` is for.
+  const [openSection, setOpenSection] = useState<SettingsSection | null>(section ?? null);
   // Connection state
   const [url, setUrl] = useState("");
   const [hasToken, setHasToken] = useState(false);
@@ -776,34 +771,49 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack, section }) => {
     }
   };
 
-  const items: ListDetailItem[] = SETTINGS_SECTIONS.map((id) => ({
-    id,
-    render: (selected: boolean) => (
-      // The marker bar and the label, and nothing else: these rows carry no
-      // control, which is what `selectOnActivate` below is for — the activate
-      // handler it adds to the wrapper is what makes the row a focus stop at
-      // all.
-      <div
-        data-testid={`settings-section-${id}`}
-        style={{
-          borderLeft: `${ROW_MARKER_WIDTH}px solid ${selected ? SELECTION_ACCENT : "transparent"}`,
-          paddingLeft: `${ROW_MARKER_GAP}px`,
-        }}
-      >
-        <Field label={SECTION_LABELS[id]} bottomSeparator="none" />
-      </div>
-    ),
-  }));
+  // One section at a time, reached from a menu rather than scrolled past: the
+  // pane is 348 px wide, and a list whose detail sits under it put every control
+  // behind rows a reader had to scroll through first.
+  const body = (
+    <div style={{ height: "100%", minHeight: 0, overflowY: "auto" }}>
+      <Focusable flow-children="vertical">
+        {openSection === null ? (
+          <PanelSection title="Settings">
+            {SETTINGS_SECTIONS.map((id) => (
+              <PanelSectionRow key={id}>
+                <div data-testid={`settings-section-${id}`}>
+                  <ButtonItem layout="below" onClick={() => setOpenSection(id)}>
+                    {SECTION_LABELS[id]}
+                  </ButtonItem>
+                </div>
+              </PanelSectionRow>
+            ))}
+          </PanelSection>
+        ) : (
+          <>
+            <PanelSection>
+              <PanelSectionRow>
+                <div data-testid="settings-back-row">
+                  <ButtonItem layout="below" onClick={() => setOpenSection(null)}>
+                    Back
+                  </ButtonItem>
+                </div>
+              </PanelSectionRow>
+            </PanelSection>
+            {renderSection(openSection)}
+          </>
+        )}
+      </Focusable>
+    </div>
+  );
 
   return (
-    <WidePage title="Settings" onBack={onBack} ownRegions>
-      <ListDetail
-        items={items}
-        selectedId={selectedSection}
-        onSelect={(id) => setSelectedSection(asSection(id))}
-        selectOnActivate
-        renderDetail={(id) => renderSection(asSection(id))}
-      />
+    <WidePage
+      title={openSection === null ? "Settings" : SECTION_LABELS[openSection]}
+      onBack={openSection === null ? onBack : () => setOpenSection(null)}
+      ownRegions
+    >
+      {body}
     </WidePage>
   );
 };

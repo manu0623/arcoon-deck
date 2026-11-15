@@ -253,7 +253,7 @@ does not say it owns its regions. A tabbed body gets none from the frame, and ne
 | Main            | 348   | notices, status, the conditional slot, the download summary, the menu                                         | as described                                                                      |
 | Sync            | 854   | preview as a table, the run as a plan, Skip preview, Force Full Sync, Steam memory, session budget, last runs | as described; the import choice (#1364) is the one thing still to come            |
 | Library         | 854   | Platforms as list and detail (sync, core, emulator install, BIOS files, removal); Collections as filter and list | Platforms is built; Collections still carries the narrow page's controls and list |
-| Settings        | 854   | five sections, list and detail                                                                                | as described; RetroAchievements has no sign-in to hold yet (#1627)                |
+| Settings        | 854   | a menu of six sections, one section open at a time, Back above it                                             | as described; RetroAchievements has no sign-in to hold yet (#1627)                |
 | Data Management | 854   | five library-wide operations, list and detail                                                                 | narrow; opens the cleanup in a modal                                              |
 | Downloads       | 348   | the queue with its controls                                                                                   | unchanged                                                                         |
 
@@ -267,8 +267,10 @@ Controller**, **Open Save Sync**, **Open Connections** — but a notice and the 
 condition is, so the menu is the navigation a reader can go looking for. A target is a page id, or
 `{ page: "settings", section }` for those three (`src/types/navigation.ts`); the section rides on the page rather than
 beside it, so no target can pair a section with a page that has none, and the router (`src/index.tsx`) stays the only
-thing that decides what is mounted. A navigation naming no section opens Settings on its first, exactly as the menu's
-own entry does. Every page but Main opens with a **Back** chip, which returns to Main. The chip shares its line with the
+thing that decides what is mounted. A navigation naming no section opens Settings on its menu, exactly as the menu's
+own entry does; one that names a section opens that section directly, and Back returns to the menu rather than to
+Main. Settings is a menu rather than a list with its detail underneath (0.48.58): the pane is 348 px wide, so a
+detail under a six-row list put every control behind rows a reader had to scroll past first. Every page but Main opens with a **Back** chip, which returns to Main. The chip shares its line with the
 page title — one row, not the three a full-width button plus a title line used to cost, which on the Deck's body is most
 of what a detail pane has to spend. Back is also on **B**, and the binding lives in the panel's router (`src/index.tsx`)
 rather than on a page: one `Focusable` with `onCancelButton` wraps the mounted content **only while `page` is not
@@ -404,8 +406,8 @@ the list changes the detail at once, as Steam's own settings do. A list row may 
 selection. Both regions scroll independently inside the page's measured height, and both scroll by moving focus — so a
 detail pane is built from focusable rows, not from paragraphs.
 
-A list whose rows carry no control of their own — a label and nothing else, which is what Settings and Data Management
-have — asks for `selectOnActivate`, and every row wrapper takes an activate handler that selects it. That handler is
+A list whose rows carry no control of their own — a label and nothing else, which is what Data Management has —
+asks for `selectOnActivate`, and every row wrapper takes an activate handler that selects it. That handler is
 what makes the wrapper a focus stop rather than a container, so without it those rows are unreachable and the list
 cannot be scrolled. It is off by default, because a row that does carry a control must leave A to it.
 

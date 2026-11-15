@@ -10996,72 +10996,6 @@ const WidePage = ({ title, onBack, tabs, activeTab, onShowTab, children, ownRegi
     return (SP_JSX.jsxs("div", { className: WIDE_ROOT_CLASS, ref: rootRef, style: rootStyle, [OWNS_ENTRY_FOCUS_ATTR]: "", children: [SP_JSX.jsxs(DFL.Focusable, { style: { display: "flex", alignItems: "center", gap: "10px", padding: "4px 16px 6px" }, children: [SP_JSX.jsx(DFL.DialogButton, { style: { flex: "0 0 auto", minWidth: 0, width: "auto", padding: "4px 10px", fontSize: "13px" }, onClick: onBack, children: SP_JSX.jsx(BackChipLabel, {}) }), SP_JSX.jsx("span", { style: { fontSize: "16px", fontWeight: 600, color: "#dcdedf" }, children: title })] }), SP_JSX.jsx("div", { ref: bodyRef, style: bodyStyle, "data-testid": "wide-page-body", children: body })] }));
 };
 
-const ListDetail = ({ items, selectedId, onSelect, renderDetail, listHeader, selectOnActivate, }) => (SP_JSX.jsxs("div", { style: { height: "100%", minHeight: 0, overflowY: "auto" }, children: [SP_JSX.jsxs(DFL.Focusable, { "flow-children": "vertical", children: [listHeader, items.map((item) => (SP_JSX.jsx("div", { style: { display: "contents" }, ...(item.id === selectedId ? { [ENTRY_STOP_ATTR]: "" } : {}), children: SP_JSX.jsx(DFL.Focusable, { onFocus: () => {
-                            if (item.id !== selectedId)
-                                onSelect(item.id);
-                        }, ...(selectOnActivate ? { onActivate: () => onSelect(item.id) } : {}), children: item.render(item.id === selectedId) }) }, item.id)))] }), SP_JSX.jsx("div", { style: { borderTop: "1px solid rgba(255, 255, 255, 0.12)", marginTop: "8px" }, children: SP_JSX.jsx(DFL.Focusable, { "flow-children": "vertical", children: renderDetail(selectedId) }) })] }));
-
-const SECONDARY_FONT = "11px";
-const MUTED = "#8f98a0";
-const RED = "#d94126";
-const GREEN = "#5ba32b";
-const AMBER = "#d4a72c";
-const PALE_GREEN = "#8fc46b";
-const VIOLET = "#a48fd4";
-const ROW_MARKER_WIDTH = 3;
-const ROW_MARKER_GAP = 5;
-const ROW_CONTENT_INSET = ROW_MARKER_WIDTH + ROW_MARKER_GAP;
-const SELECTION_ACCENT = "#1a9fff";
-const PANE_GUTTER = "16px";
-const TABLE_LINE = "1px solid rgba(255, 255, 255, 0.12)";
-const PANE_TABLE_REGISTER = {
-    rowPadding: `4px ${PANE_GUTTER}`,
-    headerPadding: `0 ${PANE_GUTTER} 4px`,
-};
-const CELL_CLIP = {
-    minWidth: 0,
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-};
-const asCell = (cell) => (typeof cell === "string" ? { content: cell } : cell);
-const cellStyle = (cell) => ({ ...(cell.clip === false ? {} : CELL_CLIP), ...cell.style });
-const COLUMN_GAP = "8px";
-const Cells = ({ cells }) => (SP_JSX.jsx(SP_JSX.Fragment, { children: cells.map((cell, index) => (SP_JSX.jsx("span", { style: cellStyle(cell), ...(cell.title === undefined ? {} : { title: cell.title }), children: cell.content }, index))) }));
-const PaneTableHeader = ({ columns, cells, register = PANE_TABLE_REGISTER, testId }) => (SP_JSX.jsx("div", { ...(testId === undefined ? {} : { "data-testid": testId }), style: {
-        display: "grid",
-        gridTemplateColumns: columns,
-        gap: COLUMN_GAP,
-        padding: register.headerPadding,
-        ...(register.rule ? { borderBottom: TABLE_LINE } : {}),
-        fontSize: SECONDARY_FONT,
-        color: MUTED,
-    }, children: SP_JSX.jsx(Cells, { cells: cells.map(asCell) }) }));
-const PaneTableRow = ({ columns, cells, register = PANE_TABLE_REGISTER, style, testId, focusStop = true, children }) => {
-    const body = (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsx("div", { style: { display: "grid", gridTemplateColumns: columns, gap: COLUMN_GAP, alignItems: "center" }, children: SP_JSX.jsx(Cells, { cells: cells }) }), children] }));
-    const wrapperStyle = {
-        padding: register.rowPadding,
-        ...(register.rowFont === undefined ? {} : { fontSize: register.rowFont }),
-        ...(register.rowLineHeight === undefined ? {} : { lineHeight: register.rowLineHeight }),
-        ...style,
-    };
-    const marker = testId === undefined ? {} : { "data-testid": testId };
-    return focusStop ? (SP_JSX.jsx(DFL.Focusable, { onActivate: () => { }, style: wrapperStyle, ...marker, children: body })) : (SP_JSX.jsx("div", { style: wrapperStyle, ...marker, children: body }));
-};
-const FLAT_BUTTON = { flex: "1 1 auto", minWidth: 0, padding: "6px 10px", fontSize: "13px" };
-const ROW_BUTTON = { width: "100%", minWidth: 0, padding: "4px", fontSize: "11px" };
-const SectionTitle = ({ title, note, noteColor }) => (SP_JSX.jsxs("div", { style: { display: "flex", alignItems: "baseline", gap: "8px", padding: "12px 16px 4px" }, children: [SP_JSX.jsx("span", { style: { fontSize: "12px", fontWeight: 600, letterSpacing: "0.5px", color: "#dcdedf" }, children: title.toUpperCase() }), note && SP_JSX.jsx("span", { style: { fontSize: SECONDARY_FONT, color: noteColor ?? MUTED }, children: note })] }));
-const Muted = ({ children }) => (SP_JSX.jsx("div", { style: { fontSize: SECONDARY_FONT, color: MUTED, padding: "0 16px 6px" }, children: children }));
-const ButtonRow = ({ padding, children }) => (SP_JSX.jsx(DFL.Focusable, { "flow-children": "horizontal", style: { display: "flex", gap: "8px", padding }, children: children }));
-function GroupStatus({ status, forKey, scope, }) {
-    return status?.key === forKey && status.scope === scope ? (SP_JSX.jsx("div", { "data-testid": `status-${scope}`, style: { fontSize: "12px", color: "#dcdedf", padding: "0 16px 8px" }, children: status.text })) : null;
-}
-const BusyElsewhere = ({ busyKey, ownKey, busyName, }) => {
-    if (busyKey === null || busyKey === ownKey)
-        return null;
-    return SP_JSX.jsx(Muted, { children: `Working on ${busyName} — actions here are paused until it finishes.` });
-};
-
 const pendingEdits = {};
 const TextInputModal = ({ label, value: initial, field, bIsPassword, closeModal, onSubmit, }) => {
     const [value, setValue] = SP_REACT.useState(initial);
@@ -11436,6 +11370,67 @@ const SaveSyncSection = ({ saveSyncSettings, saveSyncToggleKey, deviceInfo, sync
                                     { data: 20, label: "20" },
                                     { data: 50, label: "50" },
                                 ], selectedOption: saveSyncSettings.autocleanup_limit, onChange: (option) => onSettingChange({ autocleanup_limit: option.data }) }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: onSyncAll, disabled: syncing, children: syncing ? "Syncing..." : "Sync All Saves Now" }) }), syncStatus && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.Field, { label: syncStatus, focusable: true }) }))] }))] })) : (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.Field, { label: "Loading..." }) })) }));
+};
+
+const SECONDARY_FONT = "11px";
+const MUTED = "#8f98a0";
+const RED = "#d94126";
+const GREEN = "#5ba32b";
+const AMBER = "#d4a72c";
+const PALE_GREEN = "#8fc46b";
+const VIOLET = "#a48fd4";
+const ROW_MARKER_WIDTH = 3;
+const ROW_MARKER_GAP = 5;
+const ROW_CONTENT_INSET = ROW_MARKER_WIDTH + ROW_MARKER_GAP;
+const SELECTION_ACCENT = "#1a9fff";
+const PANE_GUTTER = "16px";
+const TABLE_LINE = "1px solid rgba(255, 255, 255, 0.12)";
+const PANE_TABLE_REGISTER = {
+    rowPadding: `4px ${PANE_GUTTER}`,
+    headerPadding: `0 ${PANE_GUTTER} 4px`,
+};
+const CELL_CLIP = {
+    minWidth: 0,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+};
+const asCell = (cell) => (typeof cell === "string" ? { content: cell } : cell);
+const cellStyle = (cell) => ({ ...(cell.clip === false ? {} : CELL_CLIP), ...cell.style });
+const COLUMN_GAP = "8px";
+const Cells = ({ cells }) => (SP_JSX.jsx(SP_JSX.Fragment, { children: cells.map((cell, index) => (SP_JSX.jsx("span", { style: cellStyle(cell), ...(cell.title === undefined ? {} : { title: cell.title }), children: cell.content }, index))) }));
+const PaneTableHeader = ({ columns, cells, register = PANE_TABLE_REGISTER, testId }) => (SP_JSX.jsx("div", { ...(testId === undefined ? {} : { "data-testid": testId }), style: {
+        display: "grid",
+        gridTemplateColumns: columns,
+        gap: COLUMN_GAP,
+        padding: register.headerPadding,
+        ...(register.rule ? { borderBottom: TABLE_LINE } : {}),
+        fontSize: SECONDARY_FONT,
+        color: MUTED,
+    }, children: SP_JSX.jsx(Cells, { cells: cells.map(asCell) }) }));
+const PaneTableRow = ({ columns, cells, register = PANE_TABLE_REGISTER, style, testId, focusStop = true, children }) => {
+    const body = (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsx("div", { style: { display: "grid", gridTemplateColumns: columns, gap: COLUMN_GAP, alignItems: "center" }, children: SP_JSX.jsx(Cells, { cells: cells }) }), children] }));
+    const wrapperStyle = {
+        padding: register.rowPadding,
+        ...(register.rowFont === undefined ? {} : { fontSize: register.rowFont }),
+        ...(register.rowLineHeight === undefined ? {} : { lineHeight: register.rowLineHeight }),
+        ...style,
+    };
+    const marker = testId === undefined ? {} : { "data-testid": testId };
+    return focusStop ? (SP_JSX.jsx(DFL.Focusable, { onActivate: () => { }, style: wrapperStyle, ...marker, children: body })) : (SP_JSX.jsx("div", { style: wrapperStyle, ...marker, children: body }));
+};
+const FLAT_BUTTON = { flex: "1 1 auto", minWidth: 0, padding: "6px 10px", fontSize: "13px" };
+const ROW_BUTTON = { width: "100%", minWidth: 0, padding: "4px", fontSize: "11px" };
+const SectionTitle = ({ title, note, noteColor }) => (SP_JSX.jsxs("div", { style: { display: "flex", alignItems: "baseline", gap: "8px", padding: "12px 16px 4px" }, children: [SP_JSX.jsx("span", { style: { fontSize: "12px", fontWeight: 600, letterSpacing: "0.5px", color: "#dcdedf" }, children: title.toUpperCase() }), note && SP_JSX.jsx("span", { style: { fontSize: SECONDARY_FONT, color: noteColor ?? MUTED }, children: note })] }));
+const Muted = ({ children }) => (SP_JSX.jsx("div", { style: { fontSize: SECONDARY_FONT, color: MUTED, padding: "0 16px 6px" }, children: children }));
+const ButtonRow = ({ padding, children }) => (SP_JSX.jsx(DFL.Focusable, { "flow-children": "horizontal", style: { display: "flex", gap: "8px", padding }, children: children }));
+function GroupStatus({ status, forKey, scope, }) {
+    return status?.key === forKey && status.scope === scope ? (SP_JSX.jsx("div", { "data-testid": `status-${scope}`, style: { fontSize: "12px", color: "#dcdedf", padding: "0 16px 8px" }, children: status.text })) : null;
+}
+const BusyElsewhere = ({ busyKey, ownKey, busyName, }) => {
+    if (busyKey === null || busyKey === ownKey)
+        return null;
+    return SP_JSX.jsx(Muted, { children: `Working on ${busyName} — actions here are paused until it finishes.` });
 };
 
 const TABLE_COLUMNS$1 = "1fr 144px 72px";
@@ -11891,9 +11886,8 @@ const SECTION_LABELS = {
     cores: "Emulators & Cores",
     advanced: "Advanced",
 };
-const asSection = (id) => SETTINGS_SECTIONS.find((candidate) => candidate === id) ?? SETTINGS_SECTIONS[0];
 const SettingsPage = ({ onBack, section }) => {
-    const [selectedSection, setSelectedSection] = SP_REACT.useState(section ?? SETTINGS_SECTIONS[0]);
+    const [openSection, setOpenSection] = SP_REACT.useState(section ?? null);
     const [url, setUrl] = SP_REACT.useState("");
     const [hasToken, setHasToken] = SP_REACT.useState(false);
     const [status, setStatus] = SP_REACT.useState("");
@@ -12384,14 +12378,8 @@ const SettingsPage = ({ onBack, section }) => {
                 return SP_JSX.jsx(AdvancedSection, { logLevel: logLevel, onLogLevelChange: handleLogLevelChange });
         }
     };
-    const items = SETTINGS_SECTIONS.map((id) => ({
-        id,
-        render: (selected) => (SP_JSX.jsx("div", { "data-testid": `settings-section-${id}`, style: {
-                borderLeft: `${ROW_MARKER_WIDTH}px solid ${selected ? SELECTION_ACCENT : "transparent"}`,
-                paddingLeft: `${ROW_MARKER_GAP}px`,
-            }, children: SP_JSX.jsx(DFL.Field, { label: SECTION_LABELS[id], bottomSeparator: "none" }) })),
-    }));
-    return (SP_JSX.jsx(WidePage, { title: "Settings", onBack: onBack, ownRegions: true, children: SP_JSX.jsx(ListDetail, { items: items, selectedId: selectedSection, onSelect: (id) => setSelectedSection(asSection(id)), selectOnActivate: true, renderDetail: (id) => renderSection(asSection(id)) }) }));
+    const body = (SP_JSX.jsx("div", { style: { height: "100%", minHeight: 0, overflowY: "auto" }, children: SP_JSX.jsx(DFL.Focusable, { "flow-children": "vertical", children: openSection === null ? (SP_JSX.jsx(DFL.PanelSection, { title: "Settings", children: SETTINGS_SECTIONS.map((id) => (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { "data-testid": `settings-section-${id}`, children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => setOpenSection(id), children: SECTION_LABELS[id] }) }) }, id))) })) : (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsx(DFL.PanelSection, { children: SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { "data-testid": "settings-back-row", children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => setOpenSection(null), children: "Back" }) }) }) }), renderSection(openSection)] })) }) }));
+    return (SP_JSX.jsx(WidePage, { title: openSection === null ? "Settings" : SECTION_LABELS[openSection], onBack: openSection === null ? onBack : () => setOpenSection(null), ownRegions: true, children: body }));
 };
 
 function fuzzyMatch(query, target) {
@@ -12407,6 +12395,11 @@ function fuzzyMatch(query, target) {
 
 const LOADING_SPINNER_SIZE = 24;
 const LoadingRow = ({ label }) => (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: { display: "flex", alignItems: "center", justifyContent: "center", gap: "8px", padding: "8px 0" }, children: [SP_JSX.jsx(DFL.Spinner, { width: LOADING_SPINNER_SIZE, height: LOADING_SPINNER_SIZE }), label ? SP_JSX.jsx("span", { style: { fontSize: "13px", opacity: 0.7 }, children: label }) : null] }) }));
+
+const ListDetail = ({ items, selectedId, onSelect, renderDetail, listHeader, selectOnActivate, }) => (SP_JSX.jsxs("div", { style: { height: "100%", minHeight: 0, overflowY: "auto" }, children: [SP_JSX.jsxs(DFL.Focusable, { "flow-children": "vertical", children: [listHeader, items.map((item) => (SP_JSX.jsx("div", { style: { display: "contents" }, ...(item.id === selectedId ? { [ENTRY_STOP_ATTR]: "" } : {}), children: SP_JSX.jsx(DFL.Focusable, { onFocus: () => {
+                            if (item.id !== selectedId)
+                                onSelect(item.id);
+                        }, ...(selectOnActivate ? { onActivate: () => onSelect(item.id) } : {}), children: item.render(item.id === selectedId) }) }, item.id)))] }), SP_JSX.jsx("div", { style: { borderTop: "1px solid rgba(255, 255, 255, 0.12)", marginTop: "8px" }, children: SP_JSX.jsx(DFL.Focusable, { "flow-children": "vertical", children: renderDetail(selectedId) }) })] }));
 
 const SYNC_RUNNING_HINT = "Unavailable while a library sync is running.";
 const useSyncRunning = () => {

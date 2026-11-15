@@ -10,7 +10,6 @@ import { render, fireEvent, act } from "@testing-library/react";
 import { createElement, useSyncExternalStore, type ComponentProps, type ReactElement } from "react";
 import { SettingsPage } from "./SettingsPage";
 import * as backend from "../api/backend";
-import { ENTRY_STOP_ATTR } from "../utils/entryFocus";
 import type { SaveSortMigrationStatus, RegisteredDevice, SettingsSection } from "../types";
 import { showModal } from "@decky/ui";
 import { toaster } from "@decky/api";
@@ -723,7 +722,7 @@ describe("SettingsPage", () => {
         ...defaultSettings(),
         romm_custom_header_names: ["P-Access-Token", "P-Access-Token-Id"],
       });
-      render(<SettingsPage onBack={vi.fn()} />);
+      render(<SettingsPage onBack={vi.fn()} section="connections" />);
       await flushAsync();
 
       expect(capturedConnection[capturedConnection.length - 1]?.customHeaderNames).toEqual([
@@ -733,7 +732,7 @@ describe("SettingsPage", () => {
     });
 
     it("treats a payload without the field as none configured", async () => {
-      render(<SettingsPage onBack={vi.fn()} />);
+      render(<SettingsPage onBack={vi.fn()} section="connections" />);
       await flushAsync();
 
       expect(capturedConnection[capturedConnection.length - 1]?.customHeaderNames).toEqual([]);
@@ -741,7 +740,7 @@ describe("SettingsPage", () => {
 
     it("persists the list and updates the names on success", async () => {
       vi.mocked(backend.saveCustomHeaders).mockResolvedValue({ success: true });
-      render(<SettingsPage onBack={vi.fn()} />);
+      render(<SettingsPage onBack={vi.fn()} section="connections" />);
       await flushAsync();
       const conn = capturedConnection[capturedConnection.length - 1];
       const entries = [{ name: "X-Token" as const, value_action: "set" as const, value: "abc" }];
@@ -764,7 +763,7 @@ describe("SettingsPage", () => {
         reason: "authorization_reserved",
         message: "'Authorization' already carries your RomM API token",
       });
-      render(<SettingsPage onBack={vi.fn()} />);
+      render(<SettingsPage onBack={vi.fn()} section="connections" />);
       await flushAsync();
       const conn = capturedConnection[capturedConnection.length - 1];
 
@@ -2004,89 +2003,81 @@ describe("SettingsPage", () => {
     });
   });
 
-  describe("the section list", () => {
-    it("shows exactly the six sections, in order", async () => {
-      const { getAllByTestId } = renderPage();
+  describe("the section menu", () => {
+    const labels = ["Connections", "Save Sync", "Controller", "Steam Library", "Emulators & Cores", "Advanced"];
+
+    it("lists exactly the six sections, in order", async () => {
+      const { getByTestId } = render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();
-      const labels = getAllByTestId("field").map((el) => el.textContent);
-      expect(labels).toEqual([
-        "Connections",
-        "Save Sync",
-        "Controller",
-        "Steam Library",
-        "Emulators & Cores",
-        "Advanced",
-      ]);
+
+      const ids = ["connections", "save-sync", "controller", "steam-library", "cores", "advanced"];
+      const shown = ids.map((id) => getByTestId(`settings-section-${id}`).textContent?.trim());
+      expect(shown).toEqual(labels);
     });
 
-    it("opens on the section a navigation names", async () => {
-      openOn = "controller";
-      renderPage();
-      await flushAsync();
-      expect(capturedController.length).toBeGreaterThan(0);
-      expect(capturedConnection).toHaveLength(0);
-    });
-
-    it("declares that section's row the area entry focus belongs in, so the open is not undone", async () => {
-      // Mounting on the section is only half of it: focus selects on this
-      // layout, so entry focus landing on row one would select Connections a
-      // moment later — which is what a notice's Open Controller did on the
-      // device. The declaration is what the frame places focus on instead.
-      //
-      // **The undoing itself is not reachable here.** It needs Steam's focus
-      // resolution after the mount and the frame's timer; happy-dom has no nav
-      // tree, so what this pins is the mark, and the frame reading it is pinned
-      // in `qam/WidePage.test.tsx`.
-      openOn = "controller";
-      const { getByTestId } = renderPage();
+    it("opens on the menu when a navigation names no section", async () => {
+      const { getByTestId, queryByTestId } = render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();
 
-      expect(getByTestId("settings-section-controller").closest(`[${ENTRY_STOP_ATTR}]`)).not.toBeNull();
-      expect(getByTestId("settings-section-connections").closest(`[${ENTRY_STOP_ATTR}]`)).toBeNull();
-    });
-
-    it("opens on the first section when a navigation names none", async () => {
-      const { queryByTestId } = render(<SettingsPage onBack={vi.fn()} />);
-      await flushAsync();
-      expect(queryByTestId("connection-section")).not.toBeNull();
-      expect(queryByTestId("advanced-section")).toBeNull();
-    });
-
-    it("selects on activate, so a row that carries no control is still a focus stop", async () => {
-      const { getByTestId, queryByTestId } = renderPage();
-      await flushAsync();
-      expect(queryByTestId("advanced-section")).toBeNull();
-      // The wrapper the layout puts round each row is what carries the activate
-      // handler; the press on the row's own content bubbles to it.
-      fireEvent.click(getByTestId("settings-section-advanced"));
-      expect(queryByTestId("advanced-section")).not.toBeNull();
+      expect(getByTestId("settings-section-connections")).toBeInTheDocument();
       expect(queryByTestId("connection-section")).toBeNull();
     });
 
-    it("moving focus onto a row selects it, without a press", async () => {
-      const { getByTestId, queryByTestId } = renderPage();
+    it("opens the section a navigation names, with no menu above it", async () => {
+      openOn = "controller";
+      const { queryByTestId } = renderPage();
       await flushAsync();
-      fireEvent.focus(getByTestId("settings-section-steam-library"));
-      expect(queryByTestId("library-section")).not.toBeNull();
+
+      expect(queryByTestId("controller-section")).not.toBeNull();
+      expect(queryByTestId("settings-section-connections")).toBeNull();
+    });
+
+    it("a press opens exactly one section, and Back returns to the menu", async () => {
+      const { getByRole, queryByTestId } = render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      fireEvent.click(getByRole("button", { name: "Advanced" }));
+      expect(queryByTestId("advanced-section")).not.toBeNull();
+      expect(queryByTestId("connection-section")).toBeNull();
+
+      fireEvent.click(getByRole("button", { name: "Back" }));
+      expect(queryByTestId("advanced-section")).toBeNull();
+      expect(getByRole("button", { name: "Connections" })).toBeInTheDocument();
     });
 
     it.each([
-      ["connections", "connection-section"],
-      ["save-sync", "savesync-section"],
-      ["controller", "controller-section"],
-      ["steam-library", "library-section"],
-      ["advanced", "advanced-section"],
-    ] as const)("reaches every section's content: %s", async (section, testId) => {
-      const { getByTestId, queryByTestId } = renderPage();
+      ["Connections", "connection-section"],
+      ["Save Sync", "savesync-section"],
+      ["Controller", "controller-section"],
+      ["Steam Library", "library-section"],
+      ["Advanced", "advanced-section"],
+    ] as const)("reaches every section's content: %s", async (label, testId) => {
+      const { getByRole, queryByTestId } = render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();
-      fireEvent.click(getByTestId(`settings-section-${section}`));
+
+      fireEvent.click(getByRole("button", { name: label }));
+
       expect(queryByTestId(testId)).not.toBeNull();
     });
 
-    it("keeps the SteamGridDB key on the Connections pane, not on its own section", async () => {
-      const { queryByTestId } = renderPage();
+    it("opens the cores section, which carries no test id of its own", async () => {
+      const { getByRole, queryByTestId } = render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();
+
+      fireEvent.click(getByRole("button", { name: "Emulators & Cores" }));
+
+      expect(getByRole("button", { name: "Back" })).toBeInTheDocument();
+      expect(queryByTestId("settings-section-cores")).toBeNull();
+    });
+
+    it("keeps the SteamGridDB key on the Connections pane, not on its own section", async () => {
+      const { getByRole, queryByTestId } = render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      fireEvent.click(getByRole("button", { name: "Connections" }));
+
       expect(queryByTestId("sgdb-section")).not.toBeNull();
+      expect(queryByTestId("settings-section-connections")).toBeNull();
     });
   });
 });
