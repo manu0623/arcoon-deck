@@ -96,6 +96,22 @@ re-downloads and re-verifies the platform's cores, replacing each file only once
 failed reinstall leaves the old core in place, and the pane says why in the backend's own words ("the archive was
 truncated or corrupt", "the runtime is not installed yet").
 
+### A Windows game opens and closes straight away
+
+**Symptom**: A PC game in RomM's Windows platform shows as playing for a few seconds and then stops, with no window.
+Every other game on the device still launches.
+
+**What happened**: the shortcut is pointed at the game's `.exe`, which is right — but its **launch options** still held a
+command from an earlier, emulator-shaped install (visible as `flatpak run net.retrodeck.retrodeck "…/game.exe"` in the
+shortcut's properties). Steam passes launch options to the program as arguments, so Proton started the game with that
+text on its command line and it exited immediately. The plugin's own writes were not reaching the shortcut before
+0.48.46, so this could survive a re-download.
+
+**Fix**: update the plugin and press **Play** once on the game — the pre-launch re-confirm now repoints the shortcut and
+clears the leftover command before starting it. If Play still exits at once, clear the field by hand: Steam → the game →
+**Properties → Launch Options** → empty it. A game that ships as an installer (an `.msi` or a setup wizard) also exits
+like this until you run the installer once — see **Change** under the game's **Launches** row.
+
 ### Controller doesn't work in RetroArch menus
 
 **Symptom**: The game plays fine, but the RetroArch Quick Menu (L3+R3) can't be navigated with the controller — only

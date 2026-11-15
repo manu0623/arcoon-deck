@@ -5,7 +5,7 @@ import {
   logWarn,
   type SwitchVersionSuccess,
 } from "../api/backend";
-import { setLaunchOptionsConfirmed } from "./steamShortcuts";
+import { setLaunchOptionsConfirmed, setShortcutTarget } from "./steamShortcuts";
 import { isPruneLeaseCancelled, withPruneLease, type PruneLeaseAdmission } from "./pruneLease";
 
 export async function applyCommittedVersionSwitch(
@@ -20,6 +20,7 @@ export async function applyCommittedVersionSwitch(
       let confirmed = false;
       if (isPruneLeaseCancelled(signal)) return confirmed;
       try {
+        if (result.exe && result.start_dir != null) setShortcutTarget(result.app_id, result.exe, result.start_dir);
         confirmed = await setLaunchOptionsConfirmed(result.app_id, result.launch_options);
       } catch (e) {
         logError(

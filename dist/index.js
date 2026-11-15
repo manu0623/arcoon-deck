@@ -1273,12 +1273,12 @@ function setLaunchOptionsConfirmed(appId, value, timeoutMs = 2000) {
             reg?.unregister();
             resolve(matched);
         };
-        SteamClient.Apps.SetAppLaunchOptions(appId, value);
+        SteamClient.Apps.SetShortcutLaunchOptions(appId, value);
         reg = SteamClient.Apps.RegisterForAppDetails(appId, (details) => {
             if (!details)
                 return;
-            const current = details.strLaunchOptions ?? details.LaunchOptions ?? "";
-            if (current === value)
+            const current = details.strLaunchOptions ?? details.LaunchOptions;
+            if (typeof current === "string" ? current === value : value === "")
                 finish(true);
         });
         setTimeout(() => finish(false), timeoutMs);
@@ -3815,6 +3815,10 @@ function withPruneLease(token, context, operation, owner = context, admission) {
 }
 
 const CONCURRENCY = 10;
+function retargetIfExe(item) {
+    if (item.exe && item.start_dir != null)
+        setShortcutTarget(item.app_id, item.exe, item.start_dir);
+}
 const RECONFIRM_FETCH_TIMEOUT_MS = 3000;
 function releaseLateReconfirmLease(fetchOutcome, context) {
     void fetchOutcome
@@ -3869,7 +3873,8 @@ async function reconfirmLaunchOptions(romId, appId, context, admission = capture
         await withPruneLease(item.prune_lease_token, context, async (signal) => {
             if (signal.aborted)
                 return;
-            await setLaunchOptionsConfirmed(appId, item.launch_options);
+            retargetIfExe(item);
+            await setLaunchOptionsConfirmed(item.app_id ?? appId, item.launch_options);
         }, context, admission);
         return { status: isPruneLeaseAdmissionCurrent(admission) ? "ready" : "cancelled" };
     }
@@ -3890,6 +3895,7 @@ async function batchConfirmLaunchOptions(items, context, signal) {
             if (signal?.aborted)
                 return;
             try {
+                retargetIfExe(item);
                 const ok = await setLaunchOptionsConfirmed(item.app_id, item.launch_options);
                 if (!ok) {
                     logError(`${context}: failed to confirm launch options for appId ${item.app_id}`);
@@ -5031,6 +5037,8 @@ async function applyCommittedVersionSwitch(result, onCover, admission) {
         if (isPruneLeaseCancelled(signal))
             return confirmed;
         try {
+            if (result.exe && result.start_dir != null)
+                setShortcutTarget(result.app_id, result.exe, result.start_dir);
             confirmed = await setLaunchOptionsConfirmed(result.app_id, result.launch_options);
         }
         catch (e) {

@@ -40,7 +40,7 @@ export function isRomMShortcutDetails(details: SteamAppDetails | null): details 
  * same measurement that covers the launcher relocation covers this.
  *
  * There is no confirm poll here: Steam gives `SetShortcutExe` no read-back the
- * way `strLaunchOptions` gives `SetAppLaunchOptions` one, so the write is
+ * way `strLaunchOptions` gives `SetShortcutLaunchOptions` one, so the write is
  * fire-and-forget and the backend's next re-bake is the repair path.
  */
 export function setShortcutTarget(appId: number, exe: string, startDir: string): void {
@@ -85,12 +85,20 @@ export function getAppDetails(appId: number, timeoutMs = 2000): Promise<SteamApp
 /**
  * Set an existing shortcut's launch options and confirm the write landed.
  *
- * Every Steam ``Set*`` returns ``void`` with no success signal, so we fire
- * ``SetAppLaunchOptions`` then poll ``RegisterForAppDetails`` until the
- * read-back ``strLaunchOptions`` matches ``value``. Resolves ``true`` on a
- * confirmed match, ``false`` if no matching read-back arrives within
- * ``timeoutMs``. Setting ``""`` (the uninstalled-placeholder value) is valid
- * and confirms against an empty read-back.
+ * The write is `SetShortcutLaunchOptions`, not `SetAppLaunchOptions`: the latter
+ * belongs to installed Steam apps and is a **no-op for a non-Steam shortcut**,
+ * which is what every RomM tile is. It was the whole reason a shortcut kept a
+ * stale command — measured on the reference Deck, two PC games carried
+ * `flatpak run net.retrodeck.retrodeck <exe>` and started under Proton with that
+ * as their argument list.
+ *
+ * Every Steam ``Set*`` returns ``void`` with no success signal, so we poll
+ * ``RegisterForAppDetails`` until the read-back ``strLaunchOptions`` matches
+ * ``value``. Resolves ``true`` on a confirmed match, ``false`` if no matching
+ * read-back arrives within ``timeoutMs``. A details object with no
+ * ``strLaunchOptions`` at all reads as empty — the uninstalled placeholder — and
+ * that is the only case where a missing field counts as a match, so clearing a
+ * stale command still confirms honestly.
  */
 export function setLaunchOptionsConfirmed(appId: number, value: string, timeoutMs = 2000): Promise<boolean> {
   return new Promise((resolve) => {
@@ -107,12 +115,14 @@ export function setLaunchOptionsConfirmed(appId: number, value: string, timeoutM
       resolve(matched);
     };
 
-    SteamClient.Apps.SetAppLaunchOptions(appId, value);
+    SteamClient.Apps.SetShortcutLaunchOptions(appId, value);
 
     reg = SteamClient.Apps.RegisterForAppDetails(appId, (details) => {
       if (!details) return;
-      const current = details.strLaunchOptions ?? details.LaunchOptions ?? "";
-      if (current === value) finish(true);
+      const current = details.strLaunchOptions ?? details.LaunchOptions;
+      // A missing field is Steam saying "nothing set", which only matches "".
+      // Falling back to "" for every read-back made a failed write look confirmed.
+      if (typeof current === "string" ? current === value : value === "") finish(true);
     });
 
     setTimeout(() => finish(false), timeoutMs);
@@ -278,7 +288,7 @@ export async function addShortcut(data: ShortcutSpec): Promise<number | null> {
     SteamClient.Apps.SetShortcutStartDir(appId, data.start_dir);
     // A freshly created shortcut's launch options are already empty. For an
     // uninstalled ROM (launch_options ""), there is nothing to write or confirm,
-    // so skip both SetAppLaunchOptions and the confirm poll — the confirm poll's
+    // so skip both SetShortcutLaunchOptions and the confirm poll — the confirm poll's
     // RegisterForAppDetails forces Steam to load+cache a fat AppDetails object
     // per call, so skipping it for the majority uninstalled case avoids that
     // heap hit. A non-empty command (installed ROM) still takes the confirmed

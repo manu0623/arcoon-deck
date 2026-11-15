@@ -208,3 +208,48 @@ describe("reconfirmLaunchOptions", () => {
     }
   });
 });
+
+describe("a Windows game's re-confirm", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(steamShortcuts.setLaunchOptionsConfirmed).mockResolvedValue(true);
+  });
+
+  it("repoints the shortcut at the exe and then clears its command", async () => {
+    // Measured on the reference Deck: the shortcut kept
+    // `flatpak run net.retrodeck.retrodeck "<exe>"` from its emulator-shaped past,
+    // so Proton started speed.exe with that text as its arguments. The re-bake
+    // now answers exe + empty command, and both have to land.
+    const exe = "/roms/win/Need For Speed Most Wanted 2005/speed.exe";
+    vi.mocked(backend.getRomRelaunchOptions).mockResolvedValue({
+      success: true,
+      app_id: 2169565722,
+      launch_options: "",
+      exe,
+      start_dir: "/roms/win/Need For Speed Most Wanted 2005",
+      prune_lease_token: "win-lease",
+    });
+
+    await expect(reconfirmLaunchOptions(9, 2169565722, "CustomPlayButton")).resolves.toEqual({ status: "ready" });
+
+    expect(vi.mocked(steamShortcuts.setShortcutTarget)).toHaveBeenCalledWith(
+      2169565722,
+      exe,
+      "/roms/win/Need For Speed Most Wanted 2005",
+    );
+    expect(vi.mocked(steamShortcuts.setLaunchOptionsConfirmed)).toHaveBeenCalledWith(2169565722, "");
+  });
+
+  it("leaves a console shortcut's target alone", async () => {
+    vi.mocked(backend.getRomRelaunchOptions).mockResolvedValue({
+      success: true,
+      app_id: 100,
+      launch_options: 'flatpak run net.retrodeck.retrodeck "/roms/gba/pokemon.gba"',
+      prune_lease_token: "lease",
+    });
+
+    await reconfirmLaunchOptions(42, 100, "CustomPlayButton");
+
+    expect(vi.mocked(steamShortcuts.setShortcutTarget)).not.toHaveBeenCalled();
+  });
+});

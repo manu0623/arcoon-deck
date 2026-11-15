@@ -31,12 +31,12 @@ describe("setLaunchOptionsConfirmed", () => {
     vi.useRealTimers();
   });
 
-  it("fires SetAppLaunchOptions and resolves true when the read-back matches", async () => {
+  it("fires SetShortcutLaunchOptions and resolves true when the read-back matches", async () => {
     const value = 'flatpak run net.retrodeck.retrodeck "/games/x.bin"';
     const setLaunchOptions = vi.fn();
     const { fn } = makeRegisterForAppDetails(() => ({ strLaunchOptions: value }));
     vi.stubGlobal("SteamClient", {
-      Apps: { SetAppLaunchOptions: setLaunchOptions, RegisterForAppDetails: fn },
+      Apps: { SetShortcutLaunchOptions: setLaunchOptions, RegisterForAppDetails: fn },
     });
 
     await expect(setLaunchOptionsConfirmed(123, value)).resolves.toBe(true);
@@ -47,11 +47,42 @@ describe("setLaunchOptionsConfirmed", () => {
     const setLaunchOptions = vi.fn();
     const { fn } = makeRegisterForAppDetails(() => ({ strLaunchOptions: "" }));
     vi.stubGlobal("SteamClient", {
-      Apps: { SetAppLaunchOptions: setLaunchOptions, RegisterForAppDetails: fn },
+      Apps: { SetShortcutLaunchOptions: setLaunchOptions, RegisterForAppDetails: fn },
     });
 
     await expect(setLaunchOptionsConfirmed(7, "")).resolves.toBe(true);
     expect(setLaunchOptions).toHaveBeenCalledWith(7, "");
+  });
+
+  it("does not count a missing read-back field as a match for a real command", async () => {
+    // Steam delivering no strLaunchOptions means "nothing set", not "the value".
+    // Treating it as a match is how a failed write used to report success.
+    vi.useFakeTimers();
+    const setLaunchOptions = vi.fn();
+    const { fn } = makeRegisterForAppDetails(() => ({}) as SteamAppDetails);
+    vi.stubGlobal("SteamClient", {
+      Apps: { SetShortcutLaunchOptions: setLaunchOptions, RegisterForAppDetails: fn },
+    });
+
+    const promise = setLaunchOptionsConfirmed(5, "flatpak run x", 2000);
+    await vi.advanceTimersByTimeAsync(2000);
+
+    await expect(promise).resolves.toBe(false);
+  });
+
+  it("writes the shortcut's options, never the app's", async () => {
+    // SetAppLaunchOptions belongs to installed Steam apps and is a no-op for a
+    // non-Steam shortcut, so every re-bake silently never landed.
+    const appSetter = vi.fn();
+    const shortcutSetter = vi.fn();
+    const { fn } = makeRegisterForAppDetails(() => ({ strLaunchOptions: "" }));
+    vi.stubGlobal("SteamClient", {
+      Apps: { SetAppLaunchOptions: appSetter, SetShortcutLaunchOptions: shortcutSetter, RegisterForAppDetails: fn },
+    });
+
+    await expect(setLaunchOptionsConfirmed(11, "")).resolves.toBe(true);
+    expect(shortcutSetter).toHaveBeenCalledWith(11, "");
+    expect(appSetter).not.toHaveBeenCalled();
   });
 
   it("resolves false and unregisters on timeout when the read-back never matches", async () => {
@@ -60,7 +91,7 @@ describe("setLaunchOptionsConfirmed", () => {
     // Read-back always reports a stale value, so the match never happens.
     const { fn, unregister } = makeRegisterForAppDetails(() => ({ strLaunchOptions: "stale" }));
     vi.stubGlobal("SteamClient", {
-      Apps: { SetAppLaunchOptions: setLaunchOptions, RegisterForAppDetails: fn },
+      Apps: { SetShortcutLaunchOptions: setLaunchOptions, RegisterForAppDetails: fn },
     });
 
     const promise = setLaunchOptionsConfirmed(99, "new-value", 2000);
@@ -402,7 +433,7 @@ describe("addShortcut — overview-readiness poll + empty-launch-options skip", 
         SetShortcutName: setName,
         SetShortcutExe: vi.fn(),
         SetShortcutStartDir: vi.fn(),
-        SetAppLaunchOptions: vi.fn(),
+        SetShortcutLaunchOptions: vi.fn(),
         RegisterForAppDetails: vi.fn(() => ({ unregister: vi.fn() })),
       },
     });
@@ -430,7 +461,7 @@ describe("addShortcut — overview-readiness poll + empty-launch-options skip", 
         SetShortcutName: setName,
         SetShortcutExe: vi.fn(),
         SetShortcutStartDir: vi.fn(),
-        SetAppLaunchOptions: vi.fn(),
+        SetShortcutLaunchOptions: vi.fn(),
         RegisterForAppDetails: vi.fn(() => ({ unregister: vi.fn() })),
       },
     });
@@ -446,7 +477,7 @@ describe("addShortcut — overview-readiness poll + empty-launch-options skip", 
     expect(logInfoSpy).toHaveBeenCalledWith(expect.stringContaining("not ready"));
   });
 
-  it("skips SetAppLaunchOptions and the confirm poll for an empty launch_options (uninstalled ROM)", async () => {
+  it("skips SetShortcutLaunchOptions and the confirm poll for an empty launch_options (uninstalled ROM)", async () => {
     const setLaunchOptions = vi.fn();
     const registerForAppDetails = vi.fn(() => ({ unregister: vi.fn() }));
     // Overview ready immediately, so no timers are involved.
@@ -457,7 +488,7 @@ describe("addShortcut — overview-readiness poll + empty-launch-options skip", 
         SetShortcutName: vi.fn(),
         SetShortcutExe: vi.fn(),
         SetShortcutStartDir: vi.fn(),
-        SetAppLaunchOptions: setLaunchOptions,
+        SetShortcutLaunchOptions: setLaunchOptions,
         RegisterForAppDetails: registerForAppDetails,
       },
     });
@@ -486,7 +517,7 @@ describe("addShortcut — overview-readiness poll + empty-launch-options skip", 
         SetShortcutName: vi.fn(),
         SetShortcutExe: vi.fn(),
         SetShortcutStartDir: vi.fn(),
-        SetAppLaunchOptions: setLaunchOptions,
+        SetShortcutLaunchOptions: setLaunchOptions,
         RegisterForAppDetails: registerForAppDetails,
       },
     });
@@ -494,7 +525,7 @@ describe("addShortcut — overview-readiness poll + empty-launch-options skip", 
     const appId = await addShortcut(item(cmd));
 
     expect(appId).toBe(55);
-    // Confirmed-write path unchanged: SetAppLaunchOptions fired AND the read-back
+    // Confirmed-write path unchanged: SetShortcutLaunchOptions fired AND the read-back
     // was polled via RegisterForAppDetails.
     expect(setLaunchOptions).toHaveBeenCalledWith(55, cmd);
     expect(registerForAppDetails).toHaveBeenCalledWith(55, expect.any(Function));

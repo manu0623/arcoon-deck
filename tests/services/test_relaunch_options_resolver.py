@@ -355,3 +355,61 @@ def test_launch_path_never_resolves_the_active_core():
     resolver.launch_path_for_rom(1)
 
     assert active_core.emulator_calls == []
+
+
+def _seed_windows_install(uow: FakeUnitOfWork, rom_id: int, *, file_path: str, shortcut_app_id: int | None) -> None:
+    """Seed a ``win`` ROM + its install — the platform this resolver must not emulate."""
+    install = RomInstall.mark_installed(
+        rom_id=rom_id,
+        file_path=file_path,
+        rom_dir=None,
+        platform_slug="win",
+        system="win",
+        installed_at="2025-01-01T00:00:00",
+    )
+    rom = Rom(
+        rom_id=rom_id,
+        platform_slug="win",
+        name="Need for Speed: Most Wanted",
+        fs_name="Need For Speed Most Wanted 2005",
+        shortcut_app_id=shortcut_app_id,
+        last_synced_at="2025-01-01T00:00:00",
+    )
+    with uow:
+        uow.roms.save(rom)
+        uow.rom_installs.save(install)
+
+
+def test_windows_rom_answers_the_exe_shape_and_no_command():
+    """A PC game's shortcut is its exe: no launch command, and the exe rides along.
+
+    Measured on the reference Deck: this resolver used to bake
+    ``flatpak run net.retrodeck.retrodeck "<exe>"`` for a Windows game, and the
+    startup reconcile wrote it back onto the shortcut before every launch, so
+    Proton started ``speed.exe`` with that text as its arguments and the game
+    exited in seconds.
+    """
+    uow = FakeUnitOfWork()
+    exe = "/roms/win/Need For Speed Most Wanted 2005/Need For Speed Most Wanted 2005/speed.exe"
+    _seed_windows_install(uow, 9, file_path=exe, shortcut_app_id=2169565722)
+    resolver = _make_resolver(uow=uow)
+    assert resolver.installed_relaunch_items() == [
+        {
+            "app_id": 2169565722,
+            "launch_options": "",
+            "exe": exe,
+            "start_dir": "/roms/win/Need For Speed Most Wanted 2005/Need For Speed Most Wanted 2005",
+        }
+    ]
+
+
+def test_windows_rom_whose_row_points_at_a_container_gets_no_target():
+    """A legacy row can name the archive. Say "no command" and leave the target be.
+
+    Retargeting Steam at a file Proton cannot run would turn a wrong shortcut into
+    a differently wrong one; the download path repairs these rows.
+    """
+    uow = FakeUnitOfWork()
+    _seed_windows_install(uow, 11, file_path="/roms/win/Need for Speed - Carbon.zip", shortcut_app_id=55)
+    resolver = _make_resolver(uow=uow)
+    assert resolver.installed_relaunch_items() == [{"app_id": 55, "launch_options": ""}]

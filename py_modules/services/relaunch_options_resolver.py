@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from domain.shortcut_data import build_launch_options, resolve_emulator_invocation
+from domain.windows_launch import is_windows_launch_file, is_windows_platform, shortcut_for_exe
 
 if TYPE_CHECKING:
     from domain.rom import Rom
@@ -91,11 +92,31 @@ class RelaunchOptionsResolver:
         uses — outside any open Unit of Work (``active_core_for_rom`` opens its
         own, and the per-connection write lock is not re-entrant; #1154).
         """
+        bake_path = self._resolve_bake_path(rom, install)
+        # A Windows game's shortcut IS the game: its exe and folder, and no launch
+        # command at all. Steam starts a shortcut under Proton from what its exe is,
+        # and anything left in the command is passed to the game as arguments —
+        # measured on the reference Deck, `speed.exe flatpak run
+        # net.retrodeck.retrodeck "…/speed.exe"`, which exits in seconds.
+        #
+        # This resolver is the supply the startup reconcile (#1043), the Play-button
+        # re-confirm (#1150) and the RetroDECK-home migration all read, so answering
+        # in the console shape here wrote that command back onto every PC game's
+        # shortcut right before each launch — the whole "every game fails" symptom.
+        # `exe`/`start_dir` ride the item so the frontend can repoint a shortcut that
+        # was created while the game was uninstalled.
+        if is_windows_platform(rom.platform_slug):
+            if not is_windows_launch_file(bake_path):
+                # A legacy row can point at a container rather than an exe. Say
+                # nothing rather than retarget Steam at a file Proton cannot run.
+                return {"app_id": rom.shortcut_app_id, "launch_options": ""}
+            exe, start_dir = shortcut_for_exe(bake_path)
+            return {"app_id": rom.shortcut_app_id, "launch_options": "", "exe": exe, "start_dir": start_dir}
         emulator = self._active_core.active_emulator_for_rom(rom.rom_id)
         invocation = resolve_emulator_invocation({"id": rom.rom_id}, emulator)
         return {
             "app_id": rom.shortcut_app_id,
-            "launch_options": build_launch_options(invocation, self._resolve_bake_path(rom, install)),
+            "launch_options": build_launch_options(invocation, bake_path),
         }
 
     def _bound_install(self, rom_id: int) -> tuple[Rom, RomInstall] | None:

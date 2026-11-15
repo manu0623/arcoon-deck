@@ -449,7 +449,15 @@ export const getInstalledRom = callable<[number], InstalledRom | null>("get_inst
 export const evaluateLaunch = callable<[number], LaunchVerdict>("evaluate_launch");
 export const checkLocalDrift = callable<[number], { drifted: boolean; rom_id: number }>("check_local_drift");
 export type RelaunchOptionsResult =
-  | { success: true; app_id: number; launch_options: string; prune_lease_token: string }
+  | {
+      success: true;
+      app_id: number;
+      launch_options: string;
+      /** Set only for a Windows game, whose shortcut is the game's own exe. */
+      exe?: string | null;
+      start_dir?: string | null;
+      prune_lease_token: string;
+    }
   | { success: false; reason: string; message: string }
   | null;
 export const getRomRelaunchOptions = callable<[number], RelaunchOptionsResult>("get_rom_relaunch_options");
@@ -912,6 +920,9 @@ export interface SwitchVersionSuccess {
   target_installed: boolean;
   launch_options: string;
   app_id: number;
+  /** Set only for a Windows game, whose shortcut is the game's own exe. */
+  exe?: string | null;
+  start_dir?: string | null;
   prune_lease_token?: string;
 }
 
@@ -1140,7 +1151,7 @@ export const getAppIdRomIdMap = callable<[], Record<string, number>>("get_app_id
 export type InstalledRelaunchOptionsResult =
   | {
       success: true;
-      items: { app_id: number; launch_options: string }[];
+      items: { app_id: number; launch_options: string; exe?: string | null; start_dir?: string | null }[];
       prune_lease_token: string | null;
     }
   | { success: false; reason: string; message: string };

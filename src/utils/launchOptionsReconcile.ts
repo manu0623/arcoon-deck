@@ -1,6 +1,6 @@
 import { getRomRelaunchOptions, logError } from "../api/backend";
 import type { RelaunchOptionsResult } from "../api/backend";
-import { setLaunchOptionsConfirmed } from "./steamShortcuts";
+import { setLaunchOptionsConfirmed, setShortcutTarget } from "./steamShortcuts";
 import {
   capturePruneLeaseAdmission,
   isPruneLeaseAdmissionCurrent,
@@ -14,6 +14,26 @@ import {
 // reconcile touching many ROMs doesn't serialize worst-case per-shortcut
 // confirm-poll timeouts.
 const CONCURRENCY = 10;
+
+/** A resolved item, plus the exe a Windows game's shortcut must name. */
+export interface LaunchShape {
+  app_id: number;
+  launch_options: string;
+  exe?: string | null;
+  start_dir?: string | null;
+}
+
+/**
+ * Repoint the shortcut first when the backend named an exe.
+ *
+ * A PC game's shortcut IS its executable, and the re-bake that resolves it also
+ * says its launch command is empty — but a shortcut created while the game was
+ * uninstalled (or one that still carries an old emulator command) has to be
+ * pointed at the game before that empty command means anything.
+ */
+function retargetIfExe(item: LaunchShape): void {
+  if (item.exe && item.start_dir != null) setShortcutTarget(item.app_id, item.exe, item.start_dir);
+}
 
 /** Bound on the single-ROM relaunch-options fetch before a launch. */
 const RECONFIRM_FETCH_TIMEOUT_MS = 3000;
@@ -111,7 +131,8 @@ export async function reconfirmLaunchOptions(
       context,
       async (signal) => {
         if (signal.aborted) return;
-        await setLaunchOptionsConfirmed(appId, item.launch_options);
+        retargetIfExe(item);
+        await setLaunchOptionsConfirmed(item.app_id ?? appId, item.launch_options);
       },
       context,
       admission,
@@ -134,7 +155,7 @@ export async function reconfirmLaunchOptions(
  * offending appId; the remaining items are still processed.
  */
 export async function batchConfirmLaunchOptions(
-  items: { app_id: number; launch_options: string }[],
+  items: LaunchShape[],
   context: string,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -145,6 +166,7 @@ export async function batchConfirmLaunchOptions(
       batch.map(async (item) => {
         if (signal?.aborted) return;
         try {
+          retargetIfExe(item);
           const ok = await setLaunchOptionsConfirmed(item.app_id, item.launch_options);
           if (!ok) {
             logError(`${context}: failed to confirm launch options for appId ${item.app_id}`);

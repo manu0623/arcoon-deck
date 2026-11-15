@@ -110,6 +110,31 @@ to its shortcut and comparing the freshly built target against it.**
 - **Compare mtime / counts instead of content.** A cheaper "did anything change" proxy. Rejected on the project's hard
   rule that change detection is content, never mtime or counts; a launch command is content and is compared as a string.
 
+## Amendment — the write has to be on the shortcut, and a PC game has no command (0.48.46)
+
+Two things this decision assumed turned out to be false on the reference Deck.
+
+**The setter was the wrong one.** Every apply wrote the command with
+`SteamClient.Apps.SetAppLaunchOptions`, which belongs to *installed Steam apps* and is a
+**no-op for a non-Steam shortcut** — which is every RomM tile. The recorded state then said
+"applied" while Steam kept whatever it had, so the delta was correct about a write that never
+happened. `SetShortcutLaunchOptions` is the call that lands, and it is what the apply uses now.
+
+**The confirmation could lie.** `setLaunchOptionsConfirmed` treated a read-back with no
+`strLaunchOptions` field as `""`, so a write of any value "matched" whenever Steam's details
+object omitted the field. Absence now reads as empty *only* against an empty value, so clearing a
+stale command still confirms honestly and a real command cannot confirm against nothing.
+
+**A PC game's item is the exe, not a command.** The relaunch resolver — the single supply for the
+startup reconcile (#1043), the Play-button re-confirm (#1150) and the RetroDECK-home migration —
+answered every installed+bound ROM with the emulator-shaped command. For a Windows game that was
+`flatpak run net.retrodeck.retrodeck "<exe>"`, which Proton then appended to the exe itself
+(measured: `speed.exe flatpak run net.retrodeck.retrodeck "…/speed.exe"`, exiting in seconds).
+The item now carries `launch_options: ""` plus `exe`/`start_dir`, and the frontend repoints the
+shortcut before clearing its command. A legacy row whose `file_path` is a container rather than
+an executable answers with no command and **no** target: retargeting Steam at a file Proton cannot
+run would only be wrong in a different way.
+
 ## See also
 
 - [#1383](https://github.com/danielcopper/decky-romm-sync/issues/1383) (delta-restricted apply) ·
