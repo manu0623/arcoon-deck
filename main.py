@@ -1070,7 +1070,7 @@ class Plugin:
         # directory, so the emulator pipeline would report a clean sync and move
         # nothing. The PC path puts the newest server save back before launch.
         if self._pc_save_sync.handles(rom_id):
-            return await self._loop.run_in_executor(None, self._pc_save_sync.restore, int(rom_id))
+            return await self.loop.run_in_executor(None, self._pc_save_sync.restore, int(rom_id))
         return await self._save_sync_service.pre_launch_sync(rom_id)
 
     @migration_blocked
@@ -1079,7 +1079,7 @@ class Plugin:
         # Same split as pre_launch_sync: a Windows game's saves are one folder in
         # its prefix, zipped and uploaded here after the session.
         if self._pc_save_sync.handles(rom_id):
-            return await self._loop.run_in_executor(None, self._pc_save_sync.capture, int(rom_id))
+            return await self.loop.run_in_executor(None, self._pc_save_sync.capture, int(rom_id))
         return await self._save_sync_service.sync_rom_saves(rom_id)
 
     # ── Windows save folder (ADR-0074) ────────────────────────────────────────
@@ -1090,7 +1090,7 @@ class Plugin:
         ``{"windows": False}`` for every ROM that is not a Windows game — the
         answer for most pages, and not a failure.
         """
-        return await self._loop.run_in_executor(None, self._pc_save_sync.get_save_folder, int(rom_id))
+        return await self.loop.run_in_executor(None, self._pc_save_sync.get_save_folder, int(rom_id))
 
     @migration_blocked
     @prune_active_blocked
@@ -1100,7 +1100,7 @@ class Plugin:
         Only the plugin's own record changes here — nothing is written to the
         game's prefix or to Steam — so this needs no prune lease.
         """
-        return await self._loop.run_in_executor(
+        return await self.loop.run_in_executor(
             None, self._pc_save_sync.set_save_folder, int(rom_id), relative_path
         )
 

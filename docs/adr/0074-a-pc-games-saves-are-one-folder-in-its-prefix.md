@@ -1,6 +1,6 @@
 # 0074 — A PC game's saves are one folder in its Proton prefix
 
-- **Status:** Accepted (0.48.51), prototype scope
+- **Status:** Accepted (0.48.52), prototype scope
 - **Follows:** 0031 (a save is answered by the emulator that writes it), 0073 (a PC game is unpacked and run under Proton)
 
 ## Context
@@ -63,6 +63,12 @@ with the benign `SAVE_SHAPE_UNSUPPORTED_REASON`, which raises no toast.
 - The prefix belongs to the shortcut's appId. Re-creating the shortcut with a new appId orphans the
   save folder until the game is played once more; the stored relative path then fails to resolve
   and a fresh pick is made.
+- **The handlers must actually reach the service (0.48.52).** The first launch after 0.48.51 answered
+  the gate with `pre-launch sync failed: Python Exception` and the Saves row logged `getSaveFolder
+  failed: Python Exception`. Both handlers ran their work through `self._loop`, and the plugin's loop is
+  `self.loop` (`main.py:136`): every PC-path handler raised `AttributeError` before touching a save.
+  In-process checks of the service had passed all along — the wiring between the handler and the
+  service was the untested seam, and the fix is four attribute renames.
 - **The folder is a decision, not only a guess (0.48.50).** The Game Info pane shows the folder
   under **Saves**, beside the existing **Launches** row, and lists the other candidate folders so a
   wrong pick is corrected by hand instead of by playing a game into the void. A hand-picked folder is
