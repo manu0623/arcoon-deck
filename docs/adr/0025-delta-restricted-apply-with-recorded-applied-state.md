@@ -135,6 +135,18 @@ shortcut before clearing its command. A legacy row whose `file_path` is a contai
 an executable answers with no command and **no** target: retargeting Steam at a file Proton cannot
 run would only be wrong in a different way.
 
+**And the path had to be quoted (0.48.47).** Even with the command gone, Steam stored
+`Exe = /…/roms/win/Need For Speed Most Wanted 2005/…/speed.exe` — bare. Steam starts a non-Steam
+shortcut through `/bin/sh -c`, so that path was split at its first space and Proton was handed
+`/home/deck/…/roms/win/Need`. Measured against the same exe added by hand: Steam's own store holds
+it *quoted*, and that shortcut launches on the very same Proton 10.0. `SetShortcutExe` therefore
+gets the path quoted whenever it contains a space; a bare launcher path is left bare, because that
+is what Steam writes and what the ownership check compares against.
+
+What this amendment does **not** support is a Proton-version story. The reference Deck's Proton 10
+runs these 32-bit games fine once the path is quoted; an earlier manual run that crashed with a
+`wow64` assertion was launched with a freshly-rebuilt prefix and is not evidence about Proton 10.
+
 ## See also
 
 - [#1383](https://github.com/danielcopper/decky-romm-sync/issues/1383) (delta-restricted apply) ·

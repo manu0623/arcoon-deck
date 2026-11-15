@@ -1225,6 +1225,11 @@ async function pacedForEach(items, fn, options = {}) {
 
 const ROM_LAUNCHER_SUFFIX = "/bin/rom-launcher";
 const WINDOWS_LAUNCH_RE = /\.(exe|bat|cmd)$/i;
+function shortcutExeValue(exe) {
+    if (exe.includes(" ") && !(exe.startsWith('"') && exe.endsWith('"')))
+        return `"${exe}"`;
+    return exe;
+}
 function isOwnedShortcutExe(exe) {
     if (typeof exe !== "string")
         return false;
@@ -1236,7 +1241,7 @@ function isRomMShortcutDetails(details) {
 }
 function setShortcutTarget(appId, exe, startDir) {
     try {
-        SteamClient.Apps.SetShortcutExe(appId, exe);
+        SteamClient.Apps.SetShortcutExe(appId, shortcutExeValue(exe));
         SteamClient.Apps.SetShortcutStartDir(appId, startDir);
     }
     catch (e) {
@@ -1356,7 +1361,7 @@ async function addShortcut(data) {
             logInfo(`addShortcut: overview for ${appId} not ready within 1000ms; proceeding anyway`);
         }
         SteamClient.Apps.SetShortcutName(appId, data.name);
-        SteamClient.Apps.SetShortcutExe(appId, data.exe);
+        SteamClient.Apps.SetShortcutExe(appId, shortcutExeValue(data.exe));
         SteamClient.Apps.SetShortcutStartDir(appId, data.start_dir);
         if (data.launch_options !== "") {
             await setLaunchOptionsConfirmed(appId, data.launch_options);

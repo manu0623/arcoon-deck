@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as backend from "../api/backend";
 import {
   addShortcut,
+  setShortcutTarget,
+  shortcutExeValue,
   getExistingRomMShortcuts,
   getLiveRomMShortcutAppIds,
   removeShortcutConfirmedOutcome,
@@ -529,5 +531,36 @@ describe("addShortcut — overview-readiness poll + empty-launch-options skip", 
     // was polled via RegisterForAppDetails.
     expect(setLaunchOptions).toHaveBeenCalledWith(55, cmd);
     expect(registerForAppDetails).toHaveBeenCalledWith(55, expect.any(Function));
+  });
+});
+
+describe("shortcutExeValue", () => {
+  it("quotes a path with a space, so Steam's shell wrapper keeps it whole", () => {
+    // Measured: stored unquoted, Steam handed Proton `/home/deck/…/roms/win/Need`.
+    expect(shortcutExeValue("/roms/win/Need For Speed Most Wanted 2005/speed.exe")).toBe(
+      '"/roms/win/Need For Speed Most Wanted 2005/speed.exe"',
+    );
+  });
+
+  it("leaves a path without spaces bare", () => {
+    expect(shortcutExeValue("/romm-tender/bin/rom-launcher")).toBe("/romm-tender/bin/rom-launcher");
+  });
+
+  it("never adds a second pair of quotes", () => {
+    expect(shortcutExeValue('"/roms/win/A B/game.exe"')).toBe('"/roms/win/A B/game.exe"');
+  });
+
+  it("is what actually reaches Steam for a Windows game", () => {
+    const setExe = vi.fn();
+    vi.stubGlobal("SteamClient", { Apps: { SetShortcutExe: setExe, SetShortcutStartDir: vi.fn() } });
+
+    setShortcutTarget(
+      9,
+      "/roms/win/Need For Speed Most Wanted 2005/speed.exe",
+      "/roms/win/Need For Speed Most Wanted 2005",
+    );
+
+    expect(setExe).toHaveBeenCalledWith(9, '"/roms/win/Need For Speed Most Wanted 2005/speed.exe"');
+    vi.unstubAllGlobals();
   });
 });

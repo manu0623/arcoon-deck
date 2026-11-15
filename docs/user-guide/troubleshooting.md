@@ -101,16 +101,21 @@ truncated or corrupt", "the runtime is not installed yet").
 **Symptom**: A PC game in RomM's Windows platform shows as playing for a few seconds and then stops, with no window.
 Every other game on the device still launches.
 
-**What happened**: the shortcut is pointed at the game's `.exe`, which is right — but its **launch options** still held a
-command from an earlier, emulator-shaped install (visible as `flatpak run net.retrodeck.retrodeck "…/game.exe"` in the
-shortcut's properties). Steam passes launch options to the program as arguments, so Proton started the game with that
-text on its command line and it exited immediately. The plugin's own writes were not reaching the shortcut before
-0.48.46, so this could survive a re-download.
+**What happened**: two separate faults in the shortcut, both fixed by updating the plugin and pressing **Play** once.
 
-**Fix**: update the plugin and press **Play** once on the game — the pre-launch re-confirm now repoints the shortcut and
-clears the leftover command before starting it. If Play still exits at once, clear the field by hand: Steam → the game →
-**Properties → Launch Options** → empty it. A game that ships as an installer (an `.msi` or a setup wizard) also exits
-like this until you run the installer once — see **Change** under the game's **Launches** row.
+1. Its **launch options** still held a command from an earlier, emulator-shaped install (visible as
+   `flatpak run net.retrodeck.retrodeck "…/game.exe"` in the shortcut's properties). Steam passes launch options to the
+   program as arguments, so Proton started the game with that text on its command line. Writes to launch options were
+   not landing on non-Steam shortcuts before 0.48.46, so this survived re-downloads.
+2. Its **target** was stored unquoted while the path contains spaces (`…/roms/win/Need For Speed Most Wanted 2005/…`).
+   Steam starts a non-Steam shortcut through a shell, so the path was split at the first space and Proton was handed
+   `/home/deck/…/roms/win/Need`. Fixed in 0.48.47 — the plugin quotes the path, exactly as Steam's own "Add to Steam"
+   does for a game that launches.
+
+**Fix**: update the plugin, press **Play** once (the pre-launch re-confirm repoints the target and clears the command),
+and that is it. If a hand-added duplicate shortcut exists from trying "Add to Steam" by hand, delete it in Steam once the
+plugin's own shortcut plays. A game that ships as an installer (an `.msi` or a setup wizard) still exits like this until
+you run the installer once — see **Change** under the game's **Launches** row.
 
 ### Controller doesn't work in RetroArch menus
 

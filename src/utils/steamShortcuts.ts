@@ -19,6 +19,23 @@ const ROM_LAUNCHER_SUFFIX = "/bin/rom-launcher";
 const WINDOWS_LAUNCH_RE = /\.(exe|bat|cmd)$/i;
 
 /**
+ * The value Steam's shortcut `Exe` field has to hold for *exe*.
+ *
+ * Steam starts a non-Steam shortcut through `/bin/sh -c`, so an unquoted path
+ * with a space in it is split at the first space — measured on the reference
+ * Deck: `…/roms/win/Need For Speed Most Wanted 2005/…/speed.exe` was stored
+ * unquoted and Steam handed Proton `/home/deck/…/roms/win/Need`, which is not a
+ * program; the game never started. The same exe added by hand through "Add to
+ * Steam" is stored quoted and launched on the very same Proton. Paths without
+ * spaces need no quoting (Steam itself writes them bare, and a bare launcher
+ * path is what the ownership check compares against).
+ */
+export function shortcutExeValue(exe: string): string {
+  if (exe.includes(" ") && !(exe.startsWith('"') && exe.endsWith('"'))) return `"${exe}"`;
+  return exe;
+}
+
+/**
  * Whether a shortcut's exe is one this plugin writes — the launcher wrapper, or
  * a Windows game's own executable. Quotes are stripped first: `AddShortcut`
  * stores ours unquoted, a hand-added shortcut can be quoted, and reading one as
@@ -45,7 +62,7 @@ export function isRomMShortcutDetails(details: SteamAppDetails | null): details 
  */
 export function setShortcutTarget(appId: number, exe: string, startDir: string): void {
   try {
-    SteamClient.Apps.SetShortcutExe(appId, exe);
+    SteamClient.Apps.SetShortcutExe(appId, shortcutExeValue(exe));
     SteamClient.Apps.SetShortcutStartDir(appId, startDir);
   } catch (e) {
     logError(`Failed to retarget shortcut ${appId}: ${e}`);
@@ -284,7 +301,7 @@ export async function addShortcut(data: ShortcutSpec): Promise<number | null> {
     }
 
     SteamClient.Apps.SetShortcutName(appId, data.name);
-    SteamClient.Apps.SetShortcutExe(appId, data.exe);
+    SteamClient.Apps.SetShortcutExe(appId, shortcutExeValue(data.exe));
     SteamClient.Apps.SetShortcutStartDir(appId, data.start_dir);
     // A freshly created shortcut's launch options are already empty. For an
     // uninstalled ROM (launch_options ""), there is nothing to write or confirm,
