@@ -243,3 +243,90 @@ class _NeverCalled:
     async def post_exit_sync(self, rom_id: int) -> dict:
         self.calls.append(rom_id)
         return {"delegated": True}
+
+
+class TestTheFolderTheGamePanelShows:
+    """`get_save_folder` / `set_save_folder`: the detected folder, and a hand-picked one."""
+
+    def test_a_non_windows_game_has_no_save_folder_to_show(self, tmp_path):
+        service, _api, _uow = _build(tmp_path, str(tmp_path / "compatdata"), rom=_rom(platform="snes"))
+        assert service.get_save_folder(ROM_ID) == {"windows": False}
+
+    def test_a_game_that_never_ran_says_so_instead_of_answering_nothing(self, tmp_path):
+        service, _api, _uow = _build(tmp_path, str(tmp_path / "missing"))
+
+        state = service.get_save_folder(ROM_ID)
+
+        assert state["windows"] is True
+        assert state["prefix"] is False
+        assert state["folder"] is None
+        assert "prefix" in (state["message"] or "").lower() or "Wine" in (state["message"] or "")
+
+    def test_the_game_folder_is_listed_first_and_reported_as_the_folder(self, compatdata, tmp_path):
+        _save_folder(compatdata)
+        other = _save_folder(compatdata, "Something Else")
+        with open(os.path.join(other, "notes.txt"), "w") as handle:
+            handle.write("x")
+
+        service, _api, uow = _build(tmp_path, compatdata)
+        state = service.get_save_folder(ROM_ID)
+
+        assert state["folder"] == "Documents/NFS Most Wanted"
+        assert [c["path"] for c in state["candidates"]][0] == "Documents/NFS Most Wanted"
+        # A read must not decide where the game saves.
+        assert uow.kv_config.get(f"pc_save_dir:{ROM_ID}") is None
+
+    def test_a_hand_picked_folder_is_recorded_and_marked_manual(self, compatdata, tmp_path):
+        _save_folder(compatdata)
+        other = _save_folder(compatdata, "Something Else")
+        with open(os.path.join(other, "notes.txt"), "w") as handle:
+            handle.write("x")
+
+        service, _api, uow = _build(tmp_path, compatdata)
+        result = service.set_save_folder(ROM_ID, "Documents/Something Else")
+
+        assert result == {"success": True, "folder": "Documents/Something Else", "manual": True}
+        assert uow.kv_config.get(f"pc_save_dir:{ROM_ID}") == "Documents/Something Else"
+        assert service.get_save_folder(ROM_ID)["manual"] is True
+
+    def test_handing_the_choice_back_re_detects_and_clears_the_flag(self, compatdata, tmp_path):
+        game_folder = _save_folder(compatdata)
+        with open(os.path.join(game_folder, "save"), "wb") as handle:
+            handle.write(b"p")
+        other = _save_folder(compatdata, "Something Else")
+        with open(os.path.join(other, "notes.txt"), "w") as handle:
+            handle.write("x")
+
+        service, _api, uow = _build(tmp_path, compatdata)
+        service.set_save_folder(ROM_ID, "Documents/Something Else")
+        result = service.set_save_folder(ROM_ID, "")
+
+        assert result == {"success": True, "folder": "Documents/NFS Most Wanted", "manual": False}
+        assert uow.kv_config.get(f"pc_save_dir_manual:{ROM_ID}") is None
+
+    def test_a_folder_outside_the_prefix_is_refused(self, compatdata, tmp_path):
+        _save_folder(compatdata)
+        service, _api, uow = _build(tmp_path, compatdata)
+
+        result = service.set_save_folder(ROM_ID, "../../../elsewhere")
+
+        assert result["success"] is False
+        assert uow.kv_config.get(f"pc_save_dir:{ROM_ID}") is None
+
+    def test_a_manual_choice_beats_a_newer_folder_on_capture(self, compatdata, tmp_path):
+        chosen = _save_folder(compatdata, "Something Else")
+        newer = _save_folder(compatdata)
+        with open(os.path.join(chosen, "profile"), "wb") as handle:
+            handle.write(b"mine")
+        with open(os.path.join(newer, "other"), "wb") as handle:
+            handle.write(b"x")
+        os.utime(os.path.join(newer, "other"), (9_999_999_999, 9_999_999_999))
+
+        service, api, _uow = _build(tmp_path, compatdata)
+        service.set_save_folder(ROM_ID, "Documents/Something Else")
+        service.capture(ROM_ID)
+
+        uploaded = tmp_path / "uploaded.zip"
+        uploaded.write_bytes(api.uploads[0]["body"])
+        with zipfile.ZipFile(uploaded) as archive:
+            assert archive.namelist() == ["profile"]

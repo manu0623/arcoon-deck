@@ -99,6 +99,8 @@ function FaWindows (props) {
   return GenIcon({"attr":{"viewBox":"0 0 512 512"},"child":[{"tag":"path","attr":{"d":"M12.41 148.02l232.94 105.67c6.8 3.09 14.49 3.09 21.29 0l232.94-105.67c16.55-7.51 16.55-32.52 0-40.03L266.65 2.31a25.607 25.607 0 0 0-21.29 0L12.41 107.98c-16.55 7.51-16.55 32.53 0 40.04zm487.18 88.28l-58.09-26.33-161.64 73.27c-7.56 3.43-15.59 5.17-23.86 5.17s-16.29-1.74-23.86-5.17L70.51 209.97l-58.1 26.33c-16.55 7.5-16.55 32.5 0 40l232.94 105.59c6.8 3.08 14.49 3.08 21.29 0L499.59 276.3c16.55-7.5 16.55-32.5 0-40zm0 127.8l-57.87-26.23-161.86 73.37c-7.56 3.43-15.59 5.17-23.86 5.17s-16.29-1.74-23.86-5.17L70.29 337.87 12.41 364.1c-16.55 7.5-16.55 32.5 0 40l232.94 105.59c6.8 3.08 14.49 3.08 21.29 0L499.59 404.1c16.55-7.5 16.55-32.5 0-40z"},"child":[]}]})(props);
 }function FaGamepad (props) {
   return GenIcon({"attr":{"viewBox":"0 0 640 512"},"child":[{"tag":"path","attr":{"d":"M480.07 96H160a160 160 0 1 0 114.24 272h91.52A160 160 0 1 0 480.07 96zM248 268a12 12 0 0 1-12 12h-52v52a12 12 0 0 1-12 12h-24a12 12 0 0 1-12-12v-52H84a12 12 0 0 1-12-12v-24a12 12 0 0 1 12-12h52v-52a12 12 0 0 1 12-12h24a12 12 0 0 1 12 12v52h52a12 12 0 0 1 12 12zm216 76a40 40 0 1 1 40-40 40 40 0 0 1-40 40zm64-96a40 40 0 1 1 40-40 40 40 0 0 1-40 40z"},"child":[]}]})(props);
+}function FaFolderOpen (props) {
+  return GenIcon({"attr":{"viewBox":"0 0 576 512"},"child":[{"tag":"path","attr":{"d":"M572.694 292.093L500.27 416.248A63.997 63.997 0 0 1 444.989 448H45.025c-18.523 0-30.064-20.093-20.731-36.093l72.424-124.155A64 64 0 0 1 152 256h399.964c18.523 0 30.064 20.093 20.73 36.093zM152 224h328v-48c0-26.51-21.49-48-48-48H272l-64-64H48C21.49 64 0 85.49 0 112v278.046l69.077-118.418C86.214 242.25 117.989 224 152 224z"},"child":[]}]})(props);
 }function FaExclamationTriangle (props) {
   return GenIcon({"attr":{"viewBox":"0 0 576 512"},"child":[{"tag":"path","attr":{"d":"M569.517 440.013C587.975 472.007 564.806 512 527.94 512H48.054c-36.937 0-59.999-40.055-41.577-71.987L246.423 23.985c18.467-32.009 64.72-31.951 83.154 0l239.94 416.028zM288 354c-25.405 0-46 20.595-46 46s20.595 46 46 46 46-20.595 46-46-20.595-46-46-46zm-43.673-165.346l7.418 136c.347 6.364 5.609 11.346 11.982 11.346h48.546c6.373 0 11.635-4.982 11.982-11.346l7.418-136c.375-6.874-5.098-12.654-11.982-12.654h-63.383c-6.884 0-12.356 5.78-11.981 12.654z"},"child":[]}]})(props);
 }function FaCompactDisc (props) {
@@ -250,6 +252,8 @@ const getDiscSelection = callable("get_disc_selection");
 const selectDisc = callable("select_disc");
 const getLaunchExe = callable("get_launch_exe");
 const setLaunchExe = callable("set_launch_exe");
+const getSaveFolder = callable("get_save_folder");
+const setSaveFolder = callable("set_save_folder");
 const getVersionList = callable("get_version_list");
 const switchVersion = callable("switch_version");
 const getPrunePreview = callable("get_prune_preview");
@@ -8521,6 +8525,74 @@ const ExePicker = ({ appId, romId, current }) => {
     return (SP_JSX.jsxs("div", { className: "romm-panel-info-row", children: [SP_JSX.jsx("span", { className: "romm-panel-label", children: "Launches" }), SP_JSX.jsxs("span", { style: { display: "inline-flex", alignItems: "center", gap: "8px", color: EXE_GREY }, children: [SP_JSX.jsx(FaWindows, { size: 14 }), SP_JSX.jsx("span", { children: labelFor(selected ?? current) }), SP_JSX.jsx(DFL.DialogButton, { className: "romm-disc-btn", onClick: openMenu, children: SP_JSX.jsxs("span", { style: { display: "inline-flex", alignItems: "center", gap: "4px" }, children: ["Change", SP_JSX.jsx(FaChevronDown, { size: 10, color: "#cfd3d8" })] }) })] })] }));
 };
 
+const SAVE_GREY = "#dcdedf";
+const SAVE_ACCENT = "#59b6ff";
+function isWindowsSlug(slug) {
+    return slug === "windows" || slug === "win";
+}
+function candidateLabel(path, files) {
+    return files === 1 ? `${path}  ·  1 file` : `${path}  ·  ${files} files`;
+}
+const SaveFolderPicker = ({ romId, platformSlug }) => {
+    const [state, setState] = SP_REACT.useState(null);
+    const [busy, setBusy] = SP_REACT.useState(false);
+    SP_REACT.useEffect(() => {
+        if (!isWindowsSlug(platformSlug))
+            return;
+        let cancelled = false;
+        detach((async () => {
+            try {
+                const result = await getSaveFolder(romId);
+                if (!cancelled)
+                    setState(result);
+            }
+            catch (e) {
+                logWarn(`SaveFolderPicker: getSaveFolder failed: ${e}`);
+            }
+        })());
+        return () => {
+            cancelled = true;
+        };
+    }, [romId, platformSlug]);
+    if (!isWindowsSlug(platformSlug) || state === null)
+        return null;
+    const choose = async (path) => {
+        setBusy(true);
+        try {
+            const result = await setSaveFolder(romId, path);
+            if (!result.success) {
+                showToast(result.message || "Couldn't use that folder");
+                return;
+            }
+            setState(await getSaveFolder(romId));
+        }
+        catch (e) {
+            logError(`SaveFolderPicker: setSaveFolder failed: ${e}`);
+            showToast("Couldn't use that folder");
+        }
+        finally {
+            setBusy(false);
+        }
+    };
+    const openMenu = (e) => {
+        const candidates = state.candidates ?? [];
+        if (candidates.length === 0) {
+            showToast("No save folder has appeared in this game's prefix yet");
+            return;
+        }
+        DFL.showContextMenu(SP_JSX.jsxs(DFL.Menu, { label: "Saves", children: [state.manual ? (SP_JSX.jsx(DFL.MenuItem, { onClick: () => detach(choose("")), children: SP_JSX.jsxs("span", { style: { display: "inline-flex", alignItems: "center", gap: "10px" }, children: [SP_JSX.jsx(FaFolderOpen, { size: 14 }), SP_JSX.jsx("span", { children: "Detect automatically" })] }) })) : null, candidates.map((candidate) => {
+                    const active = candidate.path === state.folder;
+                    return (SP_JSX.jsx(DFL.MenuItem, { onClick: () => detach(choose(candidate.path)), children: SP_JSX.jsxs("span", { style: {
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "10px",
+                                color: active ? SAVE_ACCENT : undefined,
+                            }, children: [SP_JSX.jsx(FaFolderOpen, { size: 14 }), SP_JSX.jsx("span", { children: candidateLabel(candidate.path, candidate.files) }), active ? SP_JSX.jsx("span", { style: { marginLeft: "6px", fontWeight: 700 }, children: "\u2713" }) : null] }) }, candidate.path));
+                })] }), getEventTarget(e));
+    };
+    return (SP_JSX.jsxs("div", { className: "romm-panel-info-row", children: [SP_JSX.jsx("span", { className: "romm-panel-label", children: "Saves" }), SP_JSX.jsxs("span", { style: { display: "inline-flex", alignItems: "center", gap: "8px", color: SAVE_GREY }, children: [SP_JSX.jsx(FaFolderOpen, { size: 14 }), state.folder ? (SP_JSX.jsxs("span", { children: [state.folder, state.manual ? SP_JSX.jsx("span", { className: "romm-panel-muted", children: " \u00B7 set by hand" }) : null] })) : (SP_JSX.jsx("span", { className: "romm-panel-muted", children: state.message || "No save folder yet" })), state.folder ? (SP_JSX.jsx(DFL.DialogButton, { className: "romm-disc-btn", onClick: openMenu, disabled: busy, children: SP_JSX.jsxs("span", { style: { display: "inline-flex", alignItems: "center", gap: "4px" }, children: ["Change", SP_JSX.jsx(FaChevronDown, { size: 10, color: "#cfd3d8" })] }) })) : null] })] }));
+};
+
 function formatReleaseDate(timestamp) {
     if (!timestamp || timestamp <= 0)
         return null;
@@ -8591,7 +8663,8 @@ function romFileSection(appId, installed, installedRom) {
             : `Downloaded, but nothing here is a format ${installedRom.system} can launch — no launch ` +
                 `command was set. The files are on disk; install them in the emulator to play.` }, "no-launch-target"));
     const exePicker = isWindowsInstall(installedRom) ? (SP_JSX.jsx(ExePicker, { appId: appId, romId: installedRom.rom_id, current: installedRom.file_name }, "exe-picker")) : null;
-    return section("rom-file", "ROM File", infoRow$1("filename", "Filename", installedRom.file_name), exePicker, noLaunchTargetNote);
+    const saveFolderPicker = isWindowsInstall(installedRom) ? (SP_JSX.jsx(SaveFolderPicker, { romId: installedRom.rom_id, platformSlug: installedRom.platform_slug }, "save-folder")) : null;
+    return section("rom-file", "ROM File", infoRow$1("filename", "Filename", installedRom.file_name), exePicker, saveFolderPicker, noLaunchTargetNote);
 }
 const GameInfoTab = (props) => {
     const rows = gameInfoRows(props);

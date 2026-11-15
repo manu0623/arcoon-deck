@@ -853,6 +853,43 @@ export const getLaunchExe = callable<[number], LaunchExeSelection>("get_launch_e
 export const setLaunchExe = callable<[number, string], SetLaunchExeResult>("set_launch_exe");
 
 /**
+ * Where a Windows game's saves live (ADR-0074). `windows` is false for every ROM
+ * that is not an installed Windows game; `prefix` is false when the game's Wine
+ * prefix does not exist yet (it has never been launched), which is the state that
+ * explains a missing folder rather than a failed read. `folder` is relative to
+ * the prefix — the game's own `Documents/…` path — and `manual` says whether a
+ * person chose it; `candidates` is ranked by the same rule as the automatic pick.
+ */
+export interface SaveFolderCandidate {
+  path: string;
+  files: number;
+  modified_at: number;
+}
+
+export interface SaveFolderSelection {
+  windows: boolean;
+  prefix?: boolean;
+  folder?: string | null;
+  manual?: boolean;
+  candidates?: SaveFolderCandidate[];
+  message?: string | null;
+}
+
+/** Outcome of `set_save_folder`; `folder` is the folder now in effect (null = none). */
+export interface SetSaveFolderResult {
+  success: boolean;
+  message?: string;
+  folder?: string | null;
+  manual?: boolean;
+}
+
+// A Windows game's save folder: `get_save_folder` reports the folder and the ones
+// it could be; `set_save_folder` records a hand-picked one, and an empty path
+// hands the choice back to the automatic rule.
+export const getSaveFolder = callable<[number], SaveFolderSelection>("get_save_folder");
+export const setSaveFolder = callable<[number, string], SetSaveFolderResult>("set_save_folder");
+
+/**
  * One version (RomM sibling) of a game in the version picker (#1297, ADR-0021).
  * `label` is the fs_name_no_ext-derived display text; the dimensions are the
  * version's own region/language/revision/tag attributes. `synced` is false for a

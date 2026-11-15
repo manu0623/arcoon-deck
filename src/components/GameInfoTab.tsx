@@ -13,6 +13,7 @@
 import { FC, type ReactElement } from "react";
 import type { InstalledRom, RomMetadata } from "../types";
 import { ExePicker } from "./ExePicker";
+import { SaveFolderPicker } from "./SaveFolderPicker";
 import { infoRow, section } from "./panelSection";
 
 interface GameInfoTabProps {
@@ -165,11 +166,18 @@ function romFileSection(appId: number, installed: boolean, installedRom: Install
     <ExePicker key="exe-picker" appId={appId} romId={installedRom.rom_id} current={installedRom.file_name} />
   ) : null;
 
+  // Where the same game's saves go: one folder inside its own Wine prefix, which
+  // the plugin guesses and this row lets the user correct (ADR-0074).
+  const saveFolderPicker = isWindowsInstall(installedRom) ? (
+    <SaveFolderPicker key="save-folder" romId={installedRom.rom_id} platformSlug={installedRom.platform_slug} />
+  ) : null;
+
   return section(
     "rom-file",
     "ROM File",
     infoRow("filename", "Filename", installedRom.file_name),
     exePicker,
+    saveFolderPicker,
     noLaunchTargetNote,
   );
 }

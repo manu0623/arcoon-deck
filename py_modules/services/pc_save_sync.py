@@ -33,6 +33,7 @@ from domain.iso_time import parse_iso_to_epoch
 from domain.pc_saves import (
     SAVE_ROOTS,
     SaveCandidate,
+    name_score,
     pick_save_dir,
     prefix_user_dir,
     relative_to_prefix,
@@ -62,6 +63,10 @@ PC_SAVE_SLOT = "default"
 
 #: ``kv_config`` key prefix for the remembered folder, per ROM.
 _KV_PREFIX = "pc_save_dir:"
+
+#: Set to ``"1"`` when the remembered folder was chosen by hand, so a recomputed
+#: guess never overwrites a person's decision.
+_MANUAL_PREFIX = "pc_save_dir_manual:"
 
 #: How deep under a save root a candidate may sit (``AppData/Roaming/<game>``).
 _MAX_DEPTH = 2
@@ -162,6 +167,95 @@ class PcSaveSync:
         self._logger.info(f"PC save uploaded for rom {rom_id}: {target} ({size} bytes)")
         return {"success": True, "uploaded": 1, "message": f"Uploaded {size} bytes"}
 
+    # -- what the game panel shows ---------------------------------------------
+
+    def get_save_folder(self, rom_id: int) -> dict[str, Any]:
+        """The folder this game's saves live in, and the ones it could be instead.
+
+        ``{"windows": False}`` for anything that is not a Windows game — the
+        answer for most pages, and not a failure. A read never guesses and
+        stores: the folder is chosen on the first capture or restore, so opening
+        a game page cannot quietly decide where a game saves.
+        """
+        rom = self._rom(rom_id)
+        if rom is None or not is_windows_platform(rom.platform_slug):
+            return {"windows": False}
+        prefix_user = self._prefix_user(rom)
+        if prefix_user is None:
+            return {
+                "windows": True,
+                "prefix": False,
+                "folder": None,
+                "manual": False,
+                "candidates": [],
+                "message": "This game's Wine prefix does not exist yet — launch it once, then reopen this page.",
+            }
+        candidates = self._ranked_candidates(rom, prefix_user)
+        stored = self._stored_relative(rom_id)
+        manual = self._is_manual(rom_id)
+        resolved = resolve_relative(prefix_user, stored) if stored else None
+        chosen = stored if resolved is not None and os.path.isdir(resolved) else None
+        if chosen is None and candidates:
+            chosen = candidates[0]["path"]
+            manual = False
+        return {
+            "windows": True,
+            "prefix": True,
+            "folder": chosen,
+            "manual": manual and chosen is not None,
+            "candidates": candidates,
+            "message": None if candidates else "No folder in this game's prefix looks like a save yet.",
+        }
+
+    def set_save_folder(self, rom_id: int, relative_path: str | None) -> dict[str, Any]:
+        """Choose this game's save folder by hand, or hand the choice back.
+
+        *relative_path* must be inside the game's own prefix; an empty value
+        forgets the choice so the next capture picks again. The folder is stored
+        relative to the prefix, the same shape the automatic pick uses, so a
+        manually chosen folder and a guessed one behave identically afterwards.
+        """
+        rom = self._rom(rom_id)
+        if rom is None or not is_windows_platform(rom.platform_slug):
+            return {"success": False, "message": "Not a Windows game"}
+        prefix_user = self._prefix_user(rom)
+        if prefix_user is None:
+            return {"success": False, "message": "This game's Wine prefix does not exist yet"}
+        if not relative_path:
+            self._forget_folder(rom_id)
+            picked = pick_save_dir(self._candidates(prefix_user), rom.name)
+            chosen = relative_to_prefix(prefix_user, picked.path) if picked is not None else None
+            if chosen is not None:
+                self._store_relative(rom_id, chosen)
+            return {"success": True, "folder": chosen, "manual": False}
+        target = resolve_relative(prefix_user, relative_path)
+        if target is None or not os.path.isdir(target):
+            return {"success": False, "message": "That folder is not inside this game's Wine prefix"}
+        relative = relative_to_prefix(prefix_user, target)
+        if relative is None:
+            return {"success": False, "message": "That folder is not inside this game's Wine prefix"}
+        self._store_relative(rom_id, relative)
+        self._mark_manual(rom_id)
+        self._logger.info(f"PC save folder for rom {rom_id} set by hand: {relative}")
+        return {"success": True, "folder": relative, "manual": True}
+
+    def _ranked_candidates(self, rom: Rom, prefix_user: str) -> list[dict[str, Any]]:
+        """Every candidate folder, likeliest first — the same rule as the automatic pick."""
+        candidates = self._candidates(prefix_user)
+        ranked = sorted(
+            candidates,
+            key=lambda c: (-name_score(rom.name, c.name), -c.mtime, c.name),
+        )
+        return [
+            {
+                "path": relative_to_prefix(prefix_user, c.path),
+                "files": c.file_count,
+                "modified_at": c.mtime,
+            }
+            for c in ranked
+            if relative_to_prefix(prefix_user, c.path) is not None
+        ]
+
     # -- rows and paths --------------------------------------------------------
 
     def _rom(self, rom_id: int) -> Rom | None:
@@ -252,6 +346,19 @@ class PcSaveSync:
     def _stored_relative(self, rom_id: int) -> str | None:
         with self._uow_factory() as uow:
             return uow.kv_config.get(f"{_KV_PREFIX}{int(rom_id)}")
+
+    def _is_manual(self, rom_id: int) -> bool:
+        with self._uow_factory() as uow:
+            return uow.kv_config.get(f"{_MANUAL_PREFIX}{int(rom_id)}") == "1"
+
+    def _mark_manual(self, rom_id: int) -> None:
+        with self._uow_factory() as uow:
+            uow.kv_config.set(f"{_MANUAL_PREFIX}{int(rom_id)}", "1")
+
+    def _forget_folder(self, rom_id: int) -> None:
+        with self._uow_factory() as uow:
+            for key in (f"{_KV_PREFIX}{int(rom_id)}", f"{_MANUAL_PREFIX}{int(rom_id)}"):
+                uow.kv_config.delete(key)
 
     def _store_relative(self, rom_id: int, relative: str) -> None:
         with self._uow_factory() as uow:

@@ -1082,6 +1082,28 @@ class Plugin:
             return await self._loop.run_in_executor(None, self._pc_save_sync.capture, int(rom_id))
         return await self._save_sync_service.sync_rom_saves(rom_id)
 
+    # ── Windows save folder (ADR-0074) ────────────────────────────────────────
+
+    async def get_save_folder(self, rom_id):
+        """Report where a Windows game's saves live, and the folders they could be.
+
+        ``{"windows": False}`` for every ROM that is not a Windows game — the
+        answer for most pages, and not a failure.
+        """
+        return await self._loop.run_in_executor(None, self._pc_save_sync.get_save_folder, int(rom_id))
+
+    @migration_blocked
+    @prune_active_blocked
+    async def set_save_folder(self, rom_id, relative_path):
+        """Choose a Windows game's save folder by hand; empty hands the choice back.
+
+        Only the plugin's own record changes here — nothing is written to the
+        game's prefix or to Steam — so this needs no prune lease.
+        """
+        return await self._loop.run_in_executor(
+            None, self._pc_save_sync.set_save_folder, int(rom_id), relative_path
+        )
+
     @prune_active_blocked
     async def get_save_slots(self, rom_id):
         return await self._save_sync_service.get_save_slots(rom_id)
