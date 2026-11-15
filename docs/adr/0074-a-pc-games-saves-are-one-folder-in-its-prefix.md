@@ -1,6 +1,6 @@
 # 0074 — A PC game's saves are one folder in its Proton prefix
 
-- **Status:** Accepted (0.48.54), prototype scope
+- **Status:** Accepted (0.48.56), prototype scope
 - **Follows:** 0031 (a save is answered by the emulator that writes it), 0073 (a PC game is
   unpacked and run under Proton)
 
@@ -49,6 +49,11 @@ served by a PC path instead of the battery-file pipeline, and that path treats a
   into the game's folder, and the device recorded the folder for its own exit upload. The guess is now only a fallback
   for archives written before the note existed, and a note the plugin will not follow (absolute, drive-qualified, or
   containing `..`) fails the restore rather than quietly writing progress where the game will never read it.
+
+- **A restore can be asked for without launching (0.48.56).** The Game Info pane's Saves row carries
+  **Restore**, which runs the same call the Play button runs. A person who cannot tell whether a launch
+  synced can ask directly and read the answer, and it works before the folder exists — the save states where
+  it belongs, so the row can be the thing that creates it.
 
 Both hooks honour the same three toggles as the emulator path — `save_sync_enabled`, then
 `sync_before_launch` for the restore and `sync_after_exit` for the capture, read through

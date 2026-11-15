@@ -15,8 +15,8 @@
 
 import { FC, useEffect, useState } from "react";
 import { Menu, MenuItem, showContextMenu, DialogButton } from "@decky/ui";
-import { FaFolderOpen, FaChevronDown } from "react-icons/fa";
-import { getSaveFolder, setSaveFolder, logError, logWarn } from "../api/backend";
+import { FaFolderOpen, FaChevronDown, FaCloudDownloadAlt } from "react-icons/fa";
+import { getSaveFolder, setSaveFolder, preLaunchSync, logError, logWarn } from "../api/backend";
 import type { SaveFolderSelection } from "../api/backend";
 import { getEventTarget } from "../utils/events";
 import { detach } from "../utils/detach";
@@ -77,6 +77,25 @@ export const SaveFolderPicker: FC<SaveFolderPickerProps> = ({ romId, platformSlu
     } catch (e) {
       logError(`SaveFolderPicker: setSaveFolder failed: ${e}`);
       showToast("Couldn't use that folder");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // The same restore the Play button runs, on demand: a person who cannot tell
+  // whether a launch synced can ask for it directly and read the answer. It also
+  // covers the folder the game has not created yet, because the save states where
+  // it belongs (ADR-0074).
+  const restore = async (): Promise<void> => {
+    setBusy(true);
+    try {
+      const result = await preLaunchSync(romId);
+      showToast(result.message || (result.success ? "Restored the newest save" : "Couldn't restore the save"));
+      // A restore can create the folder, so re-read rather than guess what it did.
+      setState(await getSaveFolder(romId));
+    } catch (e) {
+      logError(`SaveFolderPicker: preLaunchSync failed: ${e}`);
+      showToast("Couldn't restore the save");
     } finally {
       setBusy(false);
     }
@@ -143,6 +162,12 @@ export const SaveFolderPicker: FC<SaveFolderPickerProps> = ({ romId, platformSlu
             </span>
           </DialogButton>
         ) : null}
+        <DialogButton className="romm-disc-btn" onClick={() => detach(restore())} disabled={busy}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+            <FaCloudDownloadAlt size={12} color="#cfd3d8" />
+            Restore
+          </span>
+        </DialogButton>
       </span>
     </div>
   );
