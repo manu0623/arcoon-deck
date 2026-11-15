@@ -1,7 +1,8 @@
 # 0074 — A PC game's saves are one folder in its Proton prefix
 
 - **Status:** Accepted (0.48.53), prototype scope
-- **Follows:** 0031 (a save is answered by the emulator that writes it), 0073 (a PC game is unpacked and run under Proton)
+- **Follows:** 0031 (a save is answered by the emulator that writes it), 0073 (a PC game is
+  unpacked and run under Proton)
 
 ## Context
 
@@ -78,8 +79,10 @@ with the benign `SAVE_SHAPE_UNSUPPORTED_REASON`, which raises no toast.
   under **Saves**, beside the existing **Launches** row, and lists the other candidate folders so a
   wrong pick is corrected by hand instead of by playing a game into the void. A hand-picked folder is
   marked in `kv_config` (`pc_save_dir_manual:<rom_id>=1`) so a recomputed guess never overwrites it,
-  and "Detect automatically" hands the choice back. The list is the automatic pick's own list — empty folders and
-  Windows housekeeping are not offered, because listing everything scanned made a thirteen-row menu around one real folder. Nothing is written to the prefix or to Steam by
-  that choice — it is the plugin's own record — so it needs no prune lease.
-- This is a prototype for one game. Making it general needs the folder choice to be visible in the
-  UI, and a second slot for games with genuinely separate profiles.
+  and "Detect automatically" hands the choice back. The list is the automatic pick's own list — empty
+  folders and Windows housekeeping are not offered, because listing everything scanned made a
+  thirteen-row menu around one real folder. Nothing is written to the prefix or to Steam by that
+  choice — it is the plugin's own record — so it needs no prune lease.
+- This is a prototype: one folder per game, one slot. Making it general needs a second slot for games
+  with genuinely separate profiles, and a conflict prompt when the server and local copies both moved
+  (the emulator path has one; this path takes the newest upload).
