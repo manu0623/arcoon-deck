@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import io
 import logging
+import os
+import pathlib
+import tempfile
 import zipfile
 
 from domain.plugin_archive import PluginArchive
@@ -41,11 +44,13 @@ class FakeInstaller:
         self.names: list[str] = []
         self.folder = ""
         self.restarts = 0
+        self.allow_equal_version = False
 
-    def install(self, archive_path, folder, *, expected_name, current_version):
+    def install(self, archive_path, folder, *, expected_name, current_version, allow_equal_version=False):
         with zipfile.ZipFile(archive_path) as archive:
             self.names = archive.namelist()
         self.folder = folder
+        self.allow_equal_version = allow_equal_version
         return PluginArchive(folder=folder, version="0.48.55", entries=tuple(self.names))
 
     def schedule_loader_restart(self) -> None:
@@ -153,7 +158,7 @@ def test_a_zip_with_no_single_top_folder_is_passed_through_to_be_refused():
 
 def test_a_non_zip_payload_is_reported_as_a_failure_not_a_crash():
     class ExplodingInstaller(FakeInstaller):
-        def install(self, archive_path, folder, *, expected_name, current_version):
+        def install(self, archive_path, folder, *, expected_name, current_version, allow_equal_version=False):
             raise zipfile.BadZipFile("File is not a zip file")
 
     service = PluginUpdateService(
@@ -169,3 +174,46 @@ def test_a_non_zip_payload_is_reported_as_a_failure_not_a_crash():
 
     assert result["success"] is False
     assert "zip" in result["message"].lower()
+
+
+def _service_with_running_build(payload: bytes, *, running_dist: bytes | None, version: str = "0.48.55"):
+    """A service whose "installed" panel is a real directory with a real dist file."""
+    installer = FakeInstaller()
+    plugin_dir = ""
+    if running_dist is not None:
+        plugin_dir = tempfile.mkdtemp(prefix="running-plugin-")
+        os.makedirs(os.path.join(plugin_dir, "dist"))
+        pathlib.Path(plugin_dir, "dist", "index.js").write_bytes(running_dist)
+    service = PluginUpdateService(
+        installer=installer,
+        folder="romm-tender",
+        plugin_name="Arcoon Deck",
+        current_version=version,
+        logger=logging.getLogger("test"),
+        fetcher=lambda url: payload,
+        plugin_dir=plugin_dir or None,
+    )
+    return service, installer
+
+
+def test_the_build_you_are_already_running_is_reported_as_current_not_refused():
+    panel = b"// panel"
+    service, installer = _service_with_running_build(_release_zip(), running_dist=panel)
+
+    result = service.update_from_url("")
+
+    assert result["success"] is True
+    assert result["up_to_date"] is True
+    assert "Already on the newest build" in result["message"]
+    assert installer.names == [] and installer.restarts == 0
+
+
+def test_a_rebuild_under_the_same_version_still_installs():
+    service, installer = _service_with_running_build(_release_zip(), running_dist=b"// older panel")
+
+    result = service.update_from_url("")
+
+    assert result["success"] is True
+    assert not result.get("up_to_date")
+    assert installer.allow_equal_version is True
+    assert installer.restarts == 1

@@ -12,7 +12,9 @@ and the download is capped: an endpoint that streams forever must not fill the D
 
 from __future__ import annotations
 
+import hashlib
 import io
+import json
 import os
 import tempfile
 import urllib.error
@@ -70,6 +72,7 @@ class PluginUpdateService:
         current_version: str,
         logger: logging.Logger,
         fetcher: Callable[[str], bytes] | None = None,
+        plugin_dir: str | None = None,
     ) -> None:
         self._installer = installer
         self._folder = folder
@@ -77,6 +80,10 @@ class PluginUpdateService:
         self._current_version = current_version
         self._logger = logger
         self._fetcher = fetcher or _download
+        #: Where the running build sits, so a download can be compared with it. The
+        #: version alone cannot answer "is this the build I am running": the package
+        #: version is bumped by hand, and a fix can be pushed without one.
+        self._plugin_dir = plugin_dir
 
     def update_from_url(self, url: str | None) -> dict[str, Any]:
         """Install the build at *url*, or this fork's newest build when it is blank.
@@ -97,6 +104,20 @@ class PluginUpdateService:
             self._logger.warning(f"Plugin update download failed from {target}: {exc}")
             return {"success": False, "message": f"Could not download the update: {exc}"}
 
+        # Already running exactly this build? Say so plainly instead of refusing:
+        # "not newer" is the wrong sentence for "you are current", and a rebuild
+        # pushed under the same version is still worth installing.
+        if _archive_version(payload, self._folder) == self._current_version and _same_build(
+            payload, self._folder, self._plugin_dir
+        ):
+            self._logger.info(f"Plugin update: already on {self._current_version}, nothing to install")
+            return {
+                "success": True,
+                "up_to_date": True,
+                "version": self._current_version,
+                "message": f"Already on the newest build ({self._current_version}).",
+            }
+
         archive_path = ""
         try:
             with tempfile.NamedTemporaryFile(prefix="arcoon-update-", suffix=".zip", delete=False) as handle:
@@ -107,6 +128,9 @@ class PluginUpdateService:
                 self._folder,
                 expected_name=self._plugin_name,
                 current_version=self._current_version,
+                # The build was compared with the running one above and differs, so
+                # an equal version must not stop it. A downgrade is still refused.
+                allow_equal_version=True,
             )
         except (UpdateRefused, OSError, zipfile.BadZipFile) as exc:
             self._logger.warning(f"Plugin update refused: {exc}")
@@ -123,6 +147,40 @@ class PluginUpdateService:
             "version": installed.version,
             "message": f"Updated to {installed.version}. Decky restarts in a few seconds.",
         }
+
+
+def _archive_version(payload: bytes, folder: str) -> str | None:
+    """The version the downloaded build states, or ``None`` when it states none."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload)) as source:
+            manifest = json.loads(source.read(f"{folder}/plugin.json").decode("utf-8"))
+    except (KeyError, zipfile.BadZipFile, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    version = manifest.get("version") if isinstance(manifest, dict) else None
+    return version if isinstance(version, str) else None
+
+
+def _same_build(payload: bytes, folder: str, plugin_dir: str | None) -> bool:
+    """Whether the downloaded build is byte-for-byte the panel that is running.
+
+    Compared on ``dist/index.js``: the built panel is the file that changes when the
+    code changes, and it is what the shipped archive always carries. An unknown
+    answer on either side is treated as "different", because reinstalling is
+    recoverable and wrongly claiming to be current is not.
+    """
+    if not plugin_dir:
+        return False
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload)) as source:
+            incoming = hashlib.sha256(source.read(f"{folder}/dist/index.js")).hexdigest()
+    except (KeyError, zipfile.BadZipFile):
+        return False
+    try:
+        with open(os.path.join(plugin_dir, "dist", "index.js"), "rb") as handle:
+            running = hashlib.sha256(handle.read()).hexdigest()
+    except OSError:
+        return False
+    return incoming == running
 
 
 def _reparent(payload: bytes, *, folder: str) -> bytes:

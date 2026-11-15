@@ -128,8 +128,9 @@ one is given, which is how a build from anywhere else is installed.
 
 What it will refuse, and why each refusal exists:
 
-- **A build that is not newer.** `plugin.json`'s version is compared against the running one, so re-installing the
-  same build is not an update.
+- **An older build.** The download is compared with what is running, not only its version number: the same build
+  answers "already on the newest build"; a build carrying the same version but different code still installs, so a
+  fix can be pushed without a version bump; an older build is refused.
 - **A zip for another plugin, or one that unpacks into a different folder.** Decky derives this plugin's settings,
   data and logs from the folder name, so a differently named folder looks like a fresh plugin and loses the
   library.

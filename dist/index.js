@@ -11482,7 +11482,7 @@ const AdvancedSection = ({ logLevel, onLogLevelChange }) => {
         try {
             const result = await updatePlugin(target);
             toaster.toast({
-                title: result.success ? "Updating Arcoon Deck" : "Update refused",
+                title: result.up_to_date ? "Already up to date" : result.success ? "Updating Arcoon Deck" : "Update refused",
                 body: result.message,
             });
         }

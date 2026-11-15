@@ -27,13 +27,14 @@ def _manifest(**overrides: object) -> bytes:
     return json.dumps(payload).encode()
 
 
-def _inspect(names=_ENTRIES, manifest=None, current="0.33.0"):
+def _inspect(names=_ENTRIES, manifest=None, current="0.33.0", allow_equal=False):
     return inspect_archive(
         list(names),
         _manifest() if manifest is None else manifest,
         expected_folder=_FOLDER,
         expected_name="Arcoon Deck",
         current_version=current,
+        allow_equal_version=allow_equal,
     )
 
 
@@ -103,3 +104,18 @@ class TestVersionOrdering:
 
     def test_suffixes_do_not_change_the_order(self) -> None:
         assert version_key("0.34.0-beta.2") == version_key("0.34.0")
+
+
+class TestAnEqualVersion:
+    """A rebuild pushed without a version bump is still a different build."""
+
+    def test_it_is_refused_by_default(self) -> None:
+        with pytest.raises(UpdateRefused):
+            _inspect(current="0.34.0")
+
+    def test_it_installs_when_the_caller_allows_it(self) -> None:
+        assert _inspect(current="0.34.0", allow_equal=True).version == "0.34.0"
+
+    def test_an_older_build_is_refused_even_then(self) -> None:
+        with pytest.raises(UpdateRefused, match="older than"):
+            _inspect(current="0.35.0", allow_equal=True)

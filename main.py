@@ -163,6 +163,7 @@ class Plugin:
             plugin_name=_read_plugin_manifest(plugin_dir).get("name", ""),
             current_version=_read_plugin_manifest(plugin_dir).get("version", "0"),
             logger=decky.logger,
+            plugin_dir=plugin_dir,
         )
         # RetroDECK path resolver — held directly so the get_retrodeck_status
         # callable can read the resolution health without routing through a

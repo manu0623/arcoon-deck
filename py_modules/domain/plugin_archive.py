@@ -80,6 +80,7 @@ def inspect_archive(
     expected_folder: str,
     expected_name: str,
     current_version: str,
+    allow_equal_version: bool = False,
 ) -> PluginArchive:
     """Validate an update and say what will be installed, or raise :class:`UpdateRefused`."""
     if not names:
@@ -106,7 +107,15 @@ def inspect_archive(
     version = manifest.get("version")
     if not isinstance(version, str) or not version.strip():
         raise UpdateRefused("The archive's plugin.json carries no version.")
-    if version_key(version) <= version_key(current_version):
+    if allow_equal_version:
+        # A build pushed under the same version is still a different build (the
+        # package version is bumped by hand here, and a fix can land without one),
+        # so an equal version is installable — a downgrade is not.
+        if version_key(version) < version_key(current_version):
+            raise UpdateRefused(
+                f"The archive is version {version}, which is older than {current_version}."
+            )
+    elif version_key(version) <= version_key(current_version):
         raise UpdateRefused(f"The archive is version {version}, which is not newer than {current_version}.")
 
     present = set(names)

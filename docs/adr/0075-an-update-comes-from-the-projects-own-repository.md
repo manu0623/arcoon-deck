@@ -29,8 +29,12 @@ files, docs and CI never reach the Deck.
 ## Consequences
 
 - Everything the installer refuses still applies unchanged: the folder name, the plugin
-  name, a strictly newer version, and the entries without which a build cannot start.
-  The default source is not a way around validation, only a way to skip the address.
+  name, and the entries without which a build cannot start. The default source is not a
+  way around validation, only a way to skip the address.
+- The download is compared with the running build as well as its version (0.48.57): the
+  same build reports itself as current instead of being refused, a rebuild under an equal
+  version installs, and an older build is still refused. Version numbers in this fork are
+  bumped by hand, so a version alone cannot say whether a push changed anything.
 - The repository has to be publicly readable, because the download carries no
   credentials. A private fork makes this path answer 404 and leaves the paste field as
   the working route.

@@ -40,6 +40,7 @@ class PluginInstaller:
         *,
         expected_name: str,
         current_version: str,
+        allow_equal_version: bool = False,
     ) -> PluginArchive:
         """Install *archive_path* over *folder* and return what was installed."""
         with zipfile.ZipFile(archive_path, "r") as archive:
@@ -57,6 +58,7 @@ class PluginInstaller:
                 expected_folder=folder,
                 expected_name=expected_name,
                 current_version=current_version,
+                allow_equal_version=allow_equal_version,
             )
 
             staging = self._fresh_dir(f".{folder}.staging")

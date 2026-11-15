@@ -129,6 +129,26 @@ describe("AdvancedSection", () => {
     expect(toaster.toast).toHaveBeenCalledWith({ title: "Updating Arcoon Deck", body: "Installed 0.48.43" });
   });
 
+  it("says an unchanged device is current rather than refused", async () => {
+    const user = userEvent.setup();
+    vi.mocked(updatePlugin).mockResolvedValue({
+      success: true,
+      up_to_date: true,
+      version: "0.48.56",
+      message: "Already on the newest build (0.48.56).",
+    });
+    render(<AdvancedSection logLevel="info" onLogLevelChange={vi.fn()} />);
+
+    await user.click(updateButton());
+
+    await waitFor(() =>
+      expect(toaster.toast).toHaveBeenCalledWith({
+        title: "Already up to date",
+        body: "Already on the newest build (0.48.56).",
+      }),
+    );
+  });
+
   it("says an update was refused instead of claiming it started", async () => {
     const user = userEvent.setup();
     vi.mocked(updatePlugin).mockResolvedValue({ success: false, message: "Not a plugin zip" });

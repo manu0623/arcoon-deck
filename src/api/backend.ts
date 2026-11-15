@@ -1540,6 +1540,7 @@ export const getAchievementProgress = callable<[number], AchievementProgress>("g
 // Self-update: install a newer build of this plugin from a URL and let Decky
 // restart the loader. The panel runs with the loader's privileges, so this needs
 // no password and no terminal — the reason it exists at all on a Deck in Game Mode.
-export const updatePlugin = callable<[string], { success: boolean; version?: string; message: string }>(
-  "update_plugin",
-);
+export const updatePlugin = callable<
+  [string],
+  { success: boolean; version?: string; message: string; up_to_date?: boolean }
+>("update_plugin");

@@ -35,7 +35,9 @@ export const AdvancedSection: FC<AdvancedSectionProps> = ({ logLevel, onLogLevel
     try {
       const result = await updatePlugin(target);
       toaster.toast({
-        title: result.success ? "Updating Arcoon Deck" : "Update refused",
+        // Three outcomes, not two: being current is not a refusal, and a person who
+        // pressed Update on an unchanged device should read that as an answer.
+        title: result.up_to_date ? "Already up to date" : result.success ? "Updating Arcoon Deck" : "Update refused",
         body: result.message,
       });
     } catch (error) {
